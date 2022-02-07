@@ -1,0 +1,21 @@
+{
+  "llvm-target": "aarch64-pc-windows-msvc",
+  "data-layout": "e-m:e-i64:64-f80:128-n8:16:32:64-S128",
+  "linker": "rust-lld",
+  "linker-flavor": "lld-link",
+  "target-endian": "little",
+  "target-pointer-width": "64",
+  "target-c-int-width": "64",
+  "arch": "aarch64",
+  "os": "uefi",
+  "panic-strategy": "abort",
+  "vendor": "unknown",
+  "pre-link-args": {
+    "lld-link": [
+      "/entry:efi_main",
+      "/subsystem:EFI_Application"
+    ]
+  },
+  "is-like-windows": true,
+  "executables": true
+}
