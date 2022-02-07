@@ -1,8 +1,14 @@
-#![feature(asm)]
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
 #![no_std]
 
 pub mod acpi;
 pub mod cpu;
+pub mod paging;
 pub mod serial_port;
 
 use crate::serial_port::SerialPortInfo;
@@ -24,6 +30,7 @@ pub const PAGE_SIZE: usize = 0x1000;
 pub const PAGE_SHIFT: usize = 12;
 pub const STAGE_2_PAGE_SIZE: usize = 0x1000;
 pub const STAGE_2_PAGE_SHIFT: usize = 12;
+pub const STAGE_2_PAGE_MASK: usize = !0xFFF;
 /// 各CPUに割り当てるスタックのページ数
 /// STACK_SIZE = STACK_PAGES << PAGE_SHIFT = STACK_PAGES * PAGE_SIZE
 pub const STACK_PAGES: usize = 16;
@@ -37,9 +44,16 @@ macro_rules! bitmask {
     };
 }
 
+pub struct EcamInfo {
+    pub address: usize,
+    pub start_bus: u8,
+    pub end_bus: u8,
+}
+
 /// For communicating about system registers between hypervisor_bootloader and hypervisor_kernel
 pub struct SystemInformation {
     pub vbar_el2: u64,
     pub memory_pool: &'static ([MaybeUninit<usize>; ALLOC_SIZE / PAGE_SIZE], usize),
     pub serial_port: Option<SerialPortInfo>,
+    pub ecam_info: Option<EcamInfo>,
 }

@@ -1,3 +1,9 @@
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
 //!
 //! Power State Coordination Interface
 //!
@@ -108,10 +114,10 @@ impl TryFrom<i32> for PsciReturnCode {
 }
 
 pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut StoredRegisters) {
-    println!("PSCI Function Call: {:?}", function_id);
+    pr_debug!("PSCI Function Call: {:?}", function_id);
 
     if function_id == PsciFunctionId::CpuOn {
-        println!("CPU ON: MPIDR: {:#X}", stored_registers.x1);
+        pr_debug!("CPU ON: MPIDR: {:#X}", stored_registers.x1);
         setup_new_cpu(stored_registers);
     } else {
         secure_monitor_call(
@@ -134,12 +140,6 @@ pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut Stor
             &mut stored_registers.x16,
             &mut stored_registers.x17,
         );
-
-        if let Ok(error) = PsciReturnCode::try_from(stored_registers.x0 as i32) {
-            if error != PsciReturnCode::Success {
-                print!("Failed to Exec the PSCI function: {:?}", error);
-            }
-        }
     }
 }
 

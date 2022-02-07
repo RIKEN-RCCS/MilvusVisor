@@ -1,12 +1,16 @@
-#![feature(asm)]
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
+#![no_std]
+#![no_main]
 #![feature(asm_sym)]
-#![feature(const_size_of_val)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
-#![no_std]
-#![no_main]
 
 #[macro_use]
 mod console;
@@ -14,9 +18,10 @@ mod dtb;
 mod elf;
 mod paging;
 mod panic;
+mod pci;
 mod serial_port;
 
-use common::cpu::{local_irq_fiq_restore, local_irq_fiq_save, InterruptFlag};
+use common::cpu::*;
 use common::{
     HypervisorKernelMainType, SystemInformation, ALLOC_SIZE, HYPERVISOR_PATH,
     HYPERVISOR_SERIAL_BASE_ADDRESS, HYPERVISOR_VIRTUAL_BASE_ADDRESS, MAX_PHYSICAL_ADDRESS,
@@ -28,6 +33,7 @@ use uefi::{
     EfiSystemTable, EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
 };
 
+use core::arch::asm;
 use core::mem::{transmute, MaybeUninit};
 
 static mut ORIGINAL_PAGE_TABLE: usize = 0;
@@ -42,88 +48,6 @@ static mut IMAGE_HANDLE: EfiHandle = 0;
 static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
 static mut ACPI_20_TABLE_ADDRESS: Option<usize> = None;
 static mut DTB_ADDRESS: Option<usize> = None;
-
-/* CNTHCTL_EL2 Register */
-const CNTHCTL_EL2_EL1PTEN: u64 = 1 << 11;
-const CNTHCTL_EL2_EL1PCTEN: u64 = 1 << 10;
-const CNTHCTL_EL2_EL0PTEN: u64 = 1 << 9;
-const CNTHCTL_EL2_EL0PCTEN: u64 = 1 << 8;
-
-/* CPACR_EL1 Register */
-const CPACR_EL1_TTA_BIT_OFFSET: u64 = 28;
-//const CPACR_EL1_TTA: u64 = 1 << CPACR_EL1_TTA_BIT_OFFSET;
-const CPACR_EL1_FPEN_BITS_OFFSET: u64 = 20;
-//const CPACR_EL1_FPEN: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
-const CPACR_EL1_ZEN_BITS_OFFSET: u64 = 16;
-//const CPACR_EL1_ZEN: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
-
-/* CPTR_EL2 Register */
-const CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H: u64 = 28;
-const CPTR_EL2_TTA_WITH_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H;
-const CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H: u64 = 20;
-const CPTR_EL2_TTA_WITHOUT_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H;
-const CPTR_EL2_FPEN_BITS_OFFSET: u64 = 20;
-const CPTR_EL2_FPEN: u64 = 0b11 << CPTR_EL2_FPEN_BITS_OFFSET;
-const CPTR_EL2_FPEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_FPEN_BITS_OFFSET;
-const CPTR_EL2_ZEN_BITS_OFFSET: u64 = 16;
-const CPTR_EL2_ZEN: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
-const CPTR_EL2_ZEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
-//const CPTR_EL2_RES1: u64 = 0b11111111 | (1 << 9) | (0b11 << 12);
-
-/* TCR_EL2 Register */
-const TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H: u64 = 32;
-const TCR_EL2_DS_WITHOUT_E2H: u64 = 1 << TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_TCMA_BIT_OFFSET_WITHOUT_E2H: u64 = 30;
-const TCR_EL2_TCMA_WITHOUT_E2H: u64 = 1 << TCR_EL2_TCMA_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_TBID_BIT_OFFSET_WITHOUT_E2H: u64 = 29;
-const TCR_EL2_TBID_WITHOUT_E2H: u64 = 1 << TCR_EL2_TBID_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_HWU_BITS_OFFSET_WITHOUT_E2H: u64 = 25;
-const TCR_EL2_HWU_WITHOUT_E2H: u64 = 0b1111 << TCR_EL2_HWU_BITS_OFFSET_WITHOUT_E2H;
-const TCR_EL2_HPD_BIT_OFFSET_WITHOUT_E2H: u64 = 24;
-const TCR_EL2_HPD_WITHOUT_E2H: u64 = 1 << TCR_EL2_HPD_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_HD_BIT_OFFSET_WITHOUT_E2H: u64 = 22;
-const TCR_EL2_HD_WITHOUT_E2H: u64 = 1 << TCR_EL2_HD_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_HA_BIT_OFFSET_WITHOUT_E2H: u64 = 21;
-const TCR_EL2_HA_WITHOUT_E2H: u64 = 1 << TCR_EL2_HA_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_TBI_BIT_OFFSET_WITHOUT_E2H: u64 = 20;
-const TCR_EL2_TBI_WITHOUT_E2H: u64 = 1 << TCR_EL2_TBI_BIT_OFFSET_WITHOUT_E2H;
-const TCR_EL2_PS_BITS_OFFSET_WITHOUT_E2H: u64 = 16;
-const TCR_EL2_PS_WITHOUT_E2H: u64 = 0b111 << TCR_EL2_PS_BITS_OFFSET_WITHOUT_E2H;
-const TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H: u64 = 14;
-const TCR_EL2_TG0_WITHOUT_E2H: u64 = 0b11 << TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H;
-const TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H: u64 = 0;
-const TCR_EL2_T0SZ_WITHOUT_E2H: u64 = 0b111111 << TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H;
-
-/* TCR_EL1 Register */
-const TCR_EL1_DS_BIT_OFFSET: u64 = 59;
-//const TCR_EL1_DS: u64 = 1 << TCR_EL1_DS_BIT_OFFSET;
-const TCR_EL1_TCMA0_BIT_OFFSET: u64 = 57;
-//const TCR_EL1_TCMA0: u64 = 1 << TCR_EL1_TCMA0_BIT_OFFSET;
-const TCR_EL1_TBID0_BIT_OFFSET: u64 = 51;
-//const TCR_EL1_TBID0: u64 = 1 << TCR_EL1_TBID0_BIT_OFFSET;
-const TCR_EL1_HWU_BITS_OFFSET: u64 = 43;
-//const TCR_EL1_HWU: u64 = 0b11111111 << TCR_EL1_HWU_BITS_OFFSET;
-const TCR_EL1_HPD0_BIT_OFFSET: u64 = 41;
-//const TCR_EL1_HPD0: u64 = 1 << TCR_EL1_HPD0_BIT_OFFSET;
-const TCR_EL1_HD_BIT_OFFSET: u64 = 40;
-//const TCR_EL1_HD: u64 = 1 << TCR_EL1_HD_BIT_OFFSET;
-const TCR_EL1_HA_BIT_OFFSET: u64 = 39;
-//const TCR_EL1_HA: u64 = 1 << TCR_EL1_HA_BIT_OFFSET;
-const TCR_EL1_TBI0_BIT_OFFSET: u64 = 37;
-//const TCR_EL1_TBI0: u64 = 1 << TCR_EL1_TBI0_BIT_OFFSET;
-const TCR_EL1_IPS_BITS_OFFSET: u64 = 32;
-//const TCR_EL1_IPS: u64 = 0b111 << TCR_EL1_IPS_BITS_OFFSET;
-const TCR_EL1_EPD1: u64 = 1 << 23;
-
-/* HCR_EL2 Register */
-const HCR_EL2_FIEN: u64 = 1 << 47;
-const HCR_EL2_API: u64 = 1 << 41;
-const HCR_EL2_APK: u64 = 1 << 40;
-const HCR_EL2_TEA: u64 = 1 << 37;
-const HCR_EL2_E2H: u64 = 1 << 34;
-const HCR_EL2_RW: u64 = 1 << 31;
-const HCR_EL2_TSC: u64 = 1 << 19;
-const HCR_EL2_VM: u64 = 1 << 0;
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) {
@@ -154,7 +78,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     paging::dump_page_table();
 
     paging::setup_stage_2_translation().expect("Failed to setup Stage2 Paging");
-    map_memory_pool(efi_boot_services);
+    map_memory_pool();
 
     detect_acpi_and_dtb(system_table);
 
@@ -162,7 +86,6 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     if let Some(s) = &mut serial {
         let aligned_address = s.physical_address & PAGE_MASK;
         paging::map_address(
-            efi_boot_services,
             aligned_address,
             HYPERVISOR_SERIAL_BASE_ADDRESS,
             PAGE_SIZE,
@@ -175,6 +98,12 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         s.virtual_address = HYPERVISOR_SERIAL_BASE_ADDRESS + (s.physical_address - aligned_address);
     }
 
+    let ecam_info = if let Some(rsdp) = unsafe { ACPI_20_TABLE_ADDRESS } {
+        pci::detect_pci_space(rsdp)
+    } else {
+        None
+    };
+
     let stack_address = allocate_memory(STACK_PAGES).expect("Failed to alloc stack");
     println!(
         "Stack for BSP: {:#X}",
@@ -186,6 +115,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         vbar_el2: 0,
         memory_pool: unsafe { &MEMORY_POOL },
         serial_port: serial,
+        ecam_info,
     };
     unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
     println!("Returned from the hypervisor");
@@ -262,10 +192,9 @@ fn init_memory_pool(b_s: *const EfiBootServices) {
 /// アクセスできるようにする。
 ///
 /// また該当領域をVTTBR_EL2でダミーのページへのアクセスするように設定する。
-fn map_memory_pool(b_s: *const EfiBootServices) {
+fn map_memory_pool() {
     let allocated_memory = unsafe { MEMORY_POOL.0[0].assume_init() };
     paging::map_address(
-        b_s,
         allocated_memory,
         allocated_memory,
         ALLOC_SIZE,
@@ -278,7 +207,7 @@ fn map_memory_pool(b_s: *const EfiBootServices) {
     /*paging::unmap_address_from_vttbr_el2(b_s, allocated_memory, ALLOC_SIZE)
     .expect("Failed to unmap allocated address.");*/
     let dummy_page = allocate_memory(1).expect("Failed to alloc dummy page");
-    paging::map_dummy_page_into_vttbr_el2(b_s, allocated_memory, ALLOC_SIZE, dummy_page)
+    paging::map_dummy_page_into_vttbr_el2(allocated_memory, ALLOC_SIZE, dummy_page)
         .expect("Failed to map dummy page");
 }
 
@@ -360,11 +289,12 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
     }
 
     /* Switch PageTable */
-    let cloned_page_table = paging::copy_page_table(b_s);
+    let cloned_page_table = paging::copy_page_table();
     unsafe {
-        ORIGINAL_PAGE_TABLE = paging::set_ttbr0_el2(cloned_page_table);
-        asm!("mrs {:x}, tcr_el2",out(reg) ORIGINAL_TCR_EL2)
+        ORIGINAL_PAGE_TABLE = get_ttbr0_el2() as usize;
+        ORIGINAL_TCR_EL2 = get_tcr_el2();
     };
+    set_ttbr0_el2(cloned_page_table as u64);
     println!(
         "Switched TTBR0_EL2 from {:#X} to {:#X}",
         unsafe { ORIGINAL_PAGE_TABLE },
@@ -419,7 +349,6 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
                 );
             }
             paging::map_address(
-                b_s,
                 physical_base_address,
                 info.virtual_base_address,
                 pages << PAGE_SHIFT,
@@ -537,7 +466,7 @@ fn set_up_el1() {
     };
 
     /* TTBR0_EL1 */
-    paging::set_ttbr0_el1(unsafe { ORIGINAL_PAGE_TABLE });
+    set_ttbr0_el1(unsafe { ORIGINAL_PAGE_TABLE } as u64);
 
     /* TCR_EL1 */
     if is_e2h_enabled {
@@ -583,12 +512,8 @@ fn set_up_el1() {
     }
 
     /* HCR_EL2 */
-    let hcr_el2: u64 = HCR_EL2_FIEN
-        | HCR_EL2_API
-        | HCR_EL2_APK
-        | HCR_EL2_RW
-        | HCR_EL2_TSC
-        | HCR_EL2_VM;
+    let hcr_el2: u64 =
+        HCR_EL2_FIEN | HCR_EL2_API | HCR_EL2_APK | HCR_EL2_RW | HCR_EL2_TSC | HCR_EL2_VM;
     unsafe {
         asm!("msr hcr_el2, {:x}",in(reg) hcr_el2);
         asm!("isb");

@@ -1,3 +1,9 @@
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
 const FDT_BEGIN_NODE: u32 = 0x00000001u32.to_be();
 const FDT_END_NODE: u32 = 0x00000002u32.to_be();
 const FDT_PROP: u32 = 0x00000003u32.to_be();

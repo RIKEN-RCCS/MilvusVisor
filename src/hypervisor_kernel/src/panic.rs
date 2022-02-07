@@ -1,8 +1,16 @@
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
 //!
 //! Panic Handler
 //!
 
 use crate::serial_port::DEFAULT_SERIAL_PORT;
+
+use common::cpu::halt_loop;
 
 use core::panic;
 
@@ -26,7 +34,5 @@ pub fn panic(info: &panic::PanicInfo) -> ! {
     );
 
     println!("===== Dump complete =====");
-    loop {
-        unsafe { asm!("wfi") }
-    }
+    halt_loop()
 }

@@ -8,21 +8,12 @@
 //! Paging
 //!
 
-use super::{
-    allocate_memory, TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
-    TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_TG0_WITHOUT_E2H,
-};
-use crate::{
-    TCR_EL2_PS_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_PS_WITHOUT_E2H,
-    TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H,
-};
+use super::allocate_memory;
 
 use common::cpu::{
-    flush_tlb_el2, get_id_aa64mmfr0_el1, get_mair_el2, get_tcr_el2, get_ttbr0_el2, get_vtcr_el2,
-    get_vttbr_el2, set_tcr_el2, set_vtcr_el2, set_vttbr_el2, VTCR_EL2_HWU_BITS_OFFSET,
-    VTCR_EL2_IRG0_BITS_OFFSET, VTCR_EL2_ORG0_BITS_OFFSET, VTCR_EL2_PS_BITS_OFFSET, VTCR_EL2_RES1,
-    VTCR_EL2_SH0_BITS_OFFSET, VTCR_EL2_SL0, VTCR_EL2_SL0_BITS_OFFSET, VTCR_EL2_T0SZ,
-    VTCR_EL2_T0SZ_BITS_OFFSET, VTCR_EL2_TG0_BITS_OFFSET,
+    flush_tlb_el2, flush_tlb_vmalls12e1, get_tcr_el2, get_ttbr0_el2, get_vtcr_el2, get_vttbr_el2,
+    set_tcr_el2, TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H, VTCR_EL2_SL0,
+    VTCR_EL2_SL0_BITS_OFFSET, VTCR_EL2_T0SZ, VTCR_EL2_T0SZ_BITS_OFFSET,
 };
 use common::paging::{
     calculate_number_of_concatenated_page_tables, create_attributes_for_stage_1,
@@ -35,42 +26,6 @@ use common::paging::{
     PAGE_TABLE_SIZE, TTBR,
 };
 use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
-
-fn _copy_page_table(table_address: usize, current_level: i8) -> usize {
-    let cloned_table_address = allocate_memory(1).expect("Failed to allocate page table");
-
-    let cloned_table = unsafe {
-        &mut *(cloned_table_address as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
-    };
-    unsafe {
-        *cloned_table =
-            *(table_address as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
-    };
-    if current_level == 3 {
-        return cloned_table_address;
-    }
-    for e in cloned_table {
-        if is_descriptor_table_or_level_3_descriptor(*e) {
-            let next_level_table_address = extract_output_address(*e, PAGE_SHIFT);
-            *e = ((*e) & !(next_level_table_address as u64))
-                | (_copy_page_table(next_level_table_address, current_level + 1) as u64);
-        }
-    }
-    return cloned_table_address;
-}
-
-/// Copy TTBR0_EL2 for Hypervisor
-///
-/// ハイパーバイザー向けのページテーブルを複製する。
-///
-/// # Return Value
-/// Cloned Page Table Address
-pub fn copy_page_table() -> usize {
-    let page_table_address = TTBR::new(get_ttbr0_el2()).get_base_address();
-    let tcr_el2 = get_tcr_el2();
-    let first_table_level = get_initial_page_table_level_and_bits_to_shift(tcr_el2).0;
-    return _copy_page_table(page_table_address, first_table_level);
-}
 
 /// Map physical Address Recursively
 ///
@@ -112,10 +67,11 @@ fn map_address_recursive(
     };
 
     while *num_of_remaining_pages != 0 {
-        #[cfg(debug_assertions)]
-        println!(
+        pr_debug!(
             "{:#X}: Level{}'s Table Index: {:#X}",
-            *virtual_address, table_level, table_index
+            *virtual_address,
+            table_level,
+            table_index
         );
         if table_index >= 512 {
             break;
@@ -127,12 +83,14 @@ fn map_address_recursive(
             && (*virtual_address & ((1usize << shift_level) - 1)) == 0
             && *num_of_remaining_pages >= 512usize.pow((3 - table_level) as u32)
         {
-            println!(
+            pr_debug!(
                 "Creating BlockEntry: VA: {:#X}, PA: {:#X}, TableLevel: {}",
-                *virtual_address, *physical_address, table_level
+                *virtual_address,
+                *physical_address,
+                table_level
             );
             if is_descriptor_table_or_level_3_descriptor(*target_descriptor) {
-                println!(
+                pr_debug!(
                     "PageTable:({:#X}) will be deleted.",
                     extract_output_address(*target_descriptor, PAGE_SHIFT)
                 );
@@ -151,8 +109,7 @@ fn map_address_recursive(
                     allocate_page_table_for_stage_1(table_level, t0sz, false)?;
 
                 if is_block_descriptor(*target_descriptor) {
-                    #[cfg(debug_assertions)]
-                    println!(
+                    pr_debug!(
                         "Convert the block descriptor({:#b}) to table descriptor",
                         *target_descriptor
                     );
@@ -187,7 +144,7 @@ fn map_address_recursive(
 
                 /* TODO: 52bit OA support */
                 created_entry = Some(allocated_table_address as u64 | 0b11);
-                println!("Allocated: {:#X}", allocated_table_address);
+                pr_debug!("Allocated: {:#X}", allocated_table_address);
             }
             map_address_recursive(
                 physical_address,
@@ -233,16 +190,14 @@ pub fn map_address(
     let mut tcr_el2_t0sz =
         ((tcr_el2 & TCR_EL2_T0SZ_WITHOUT_E2H) >> TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H) as u32;
 
-    let (table_level, shift_level) = get_initial_page_table_level_and_bits_to_shift(tcr_el2);
-    println!(
-        "Initial Page Table Level: {}, Initial Shift Bits: {}",
-        table_level, shift_level
-    );
+    let (table_level, _) = get_initial_page_table_level_and_bits_to_shift(tcr_el2);
+    pr_debug!("Initial Page Table Level: {}", table_level);
     let min_t0sz = (virtual_address + size).leading_zeros();
     if min_t0sz < tcr_el2_t0sz {
-        println!(
+        pr_debug!(
             "TCR_EL2::T0SZ will be changed to {} from {}, this may cause panic.",
-            min_t0sz, tcr_el2_t0sz
+            min_t0sz,
+            tcr_el2_t0sz
         );
         let new_tcr_el2 = (tcr_el2 ^ tcr_el2_t0sz as u64) | min_t0sz as u64;
         let (new_table_level, _) = get_initial_page_table_level_and_bits_to_shift(new_tcr_el2);
@@ -279,7 +234,7 @@ pub fn map_address(
         return Err(());
     }
     flush_tlb_el2();
-    println!(
+    pr_debug!(
         "Mapped {:#X} Bytes({} Pages)",
         aligned_size,
         aligned_size >> PAGE_SHIFT
@@ -355,10 +310,11 @@ fn map_address_recursive_stage2(
     };
 
     while *num_of_remaining_pages != 0 {
-        #[cfg(debug_assertions)]
-        println!(
+        pr_debug!(
             "{:#X}: Level{}'s Table Index: {:#X}",
-            *virtual_address, table_level, table_index
+            *virtual_address,
+            table_level,
+            table_index
         );
         if table_index >= (512 * concatenated_tables as usize) {
             break;
@@ -370,12 +326,14 @@ fn map_address_recursive_stage2(
             && (*virtual_address & ((1usize << shift_level) - 1)) == 0
             && *num_of_remaining_pages >= 512usize.pow((3 - table_level) as u32)
         {
-            println!(
+            pr_debug!(
                 "Creating BlockEntry: VA: {:#X}, PA: {:#X}, TableLevel: {}(Stage 2)",
-                *virtual_address, *physical_address, table_level
+                *virtual_address,
+                *physical_address,
+                table_level
             );
             if is_descriptor_table_or_level_3_descriptor(*target_descriptor) {
-                println!(
+                pr_debug!(
                     "PageTable:({:#X}) will be deleted.",
                     extract_output_address(*target_descriptor, STAGE_2_PAGE_SHIFT)
                 );
@@ -397,8 +355,7 @@ fn map_address_recursive_stage2(
                     allocate_page_table_for_stage_2(table_level, t0sz, false, 1)?;
 
                 if *target_descriptor & 0b11 == 0b01 {
-                    #[cfg(debug_assertions)]
-                    println!(
+                    pr_debug!(
                         "Convert the block descriptor({:#b}) to table descriptor",
                         *target_descriptor
                     );
@@ -433,7 +390,7 @@ fn map_address_recursive_stage2(
 
                 /* TODO: 52bit OA support */
                 created_entry = Some(allocated_table_address as u64 | 0b11);
-                println!("Allocated: {:#X}", allocated_table_address);
+                pr_debug!("Allocated: {:#X}", allocated_table_address);
             }
             map_address_recursive_stage2(
                 physical_address,
@@ -456,9 +413,11 @@ fn map_address_recursive_stage2(
         }
         table_index += 1;
     }
+    flush_tlb_vmalls12e1();
     return Ok(());
 }
 
+#[allow(dead_code)]
 pub fn map_dummy_page_into_vttbr_el2(
     mut virtual_address: usize,
     size: usize,
@@ -501,253 +460,95 @@ pub fn map_dummy_page_into_vttbr_el2(
     return Ok(());
 }
 
-pub fn setup_stage_2_translation() -> Result<(), ()> {
-    const FIRST_LEVEL: i8 = 1;
-    let top_shift_level: u8 = 12 + 9 * (3 - FIRST_LEVEL) as u8;
-    let ps: u8 = 0b010; /* 40bit 1TiB */
-    let sl0: u8 = 0b01; /* Starting Level 1 */
-    let t0sz: u8 = 24; /* 2^(64 - 24) = 1TiB */
-    let number_of_tables = calculate_number_of_concatenated_page_tables(t0sz, FIRST_LEVEL) as usize;
-
-    let id_aa64mmfr0_el1 = get_id_aa64mmfr0_el1();
-    assert!((id_aa64mmfr0_el1 & 0b1111) as u8 >= ps);
-
-    let mut physical_address = 0;
-    let table_address =
-        allocate_page_table_for_stage_2(FIRST_LEVEL, t0sz, true, number_of_tables as u8)?;
-    let top_level_page_table = unsafe {
-        core::slice::from_raw_parts_mut(
-            table_address as *mut u64,
-            (PAGE_TABLE_SIZE * number_of_tables) / core::mem::size_of::<u64>(),
-        )
-    };
-
-    for e in top_level_page_table {
-        let second_table_address =
-            allocate_page_table_for_stage_2(FIRST_LEVEL + 1, t0sz, false, 1)?;
-        let second_level_page_table = unsafe {
-            &mut *(second_table_address
-                as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
-        };
-        let attribute = create_attributes_for_stage_2(
-            (1 << MEMORY_PERMISSION_EXECUTABLE_BIT)
-                | (1 << MEMORY_PERMISSION_WRITABLE_BIT)
-                | (1 << MEMORY_PERMISSION_READABLE_BIT),
-            false,
-            false,
-            true,
-        );
-        for e2 in second_level_page_table {
-            *e2 = physical_address | attribute;
-            physical_address += 1 << (top_shift_level - 9);
-        }
-        *e = (second_table_address as u64) | 0b11;
+/// VTTBR_EL2の該当アドレス範囲をトラップできるようにする。
+/// 現在はInitial Table Levelは0までのみの対応
+pub fn add_memory_access_trap(
+    mut address: usize,
+    size: usize,
+    allow_read_access: bool,
+    allow_write_access: bool,
+) -> Result<(), ()> {
+    if (size & ((1usize << STAGE_2_PAGE_SHIFT) - 1)) != 0 {
+        println!("Size({:#X}) is not aligned.", size);
+        return Err(());
     }
-
-    /* Setup VTCR_EL2 */
-    /* D13.2.148 VTCR_EL2, Virtualization Translation Control Register */
-    let vtcr_el2: u64 = VTCR_EL2_RES1 |
-        (0b1111 << VTCR_EL2_HWU_BITS_OFFSET)  |
-        ((ps as u64) << VTCR_EL2_PS_BITS_OFFSET) |
-        (0 << VTCR_EL2_TG0_BITS_OFFSET) /* 4KiB */ |
-        (0b11 <<VTCR_EL2_SH0_BITS_OFFSET) /* Inner Sharable */ |
-        (0b01 <<VTCR_EL2_ORG0_BITS_OFFSET) /* Outer Write-Back Read-Allocate Write-Allocate Cacheable */ |
-        (0b01 << VTCR_EL2_IRG0_BITS_OFFSET) /* Inner Write-Back Read-Allocate Write-Allocate Cacheable */ |
-        ((sl0 as u64) << VTCR_EL2_SL0_BITS_OFFSET) |
-        ((t0sz as u64) << VTCR_EL2_T0SZ_BITS_OFFSET);
-
-    set_vtcr_el2(vtcr_el2);
-    set_vttbr_el2(table_address as u64);
-
-    return Ok(());
-}
-
-pub fn dump_page_table_recursive(
-    table_address: usize,
-    virtual_base_address: &mut usize,
-    level: u8,
-    space_count: u8,
-    granule: usize,
-) {
-    let print_indent = |c: u8| {
-        for _ in 0..c {
-            print!(" ");
-        }
-    };
-    let mut processing_descriptor_address = table_address;
-
-    if level == 1 {
-        for _ in 0..512 {
-            let level3_descriptor = unsafe { *(processing_descriptor_address as *const u64) };
-            print_indent(space_count);
-            if (level3_descriptor & 0b1) == 0 {
-                println!(
-                    "{:#X} ~ {:#X}: Invalid",
-                    virtual_base_address,
-                    *virtual_base_address + granule
-                );
-            } else if (level3_descriptor & 0b10) == 0 {
-                println!(
-                    "{:#X} ~ {:#X}: Reserved",
-                    virtual_base_address,
-                    *virtual_base_address + granule
-                );
-            } else {
-                println!(
-                    "{:#X} ~ {:#X}: {:#b}(OA: {:#X}, MemAttr: {})",
-                    virtual_base_address,
-                    *virtual_base_address + granule,
-                    level3_descriptor,
-                    extract_output_address(level3_descriptor, PAGE_SHIFT),
-                    (level3_descriptor >> 2) & 0b111
-                );
-            }
-            *virtual_base_address += granule;
-            processing_descriptor_address += core::mem::size_of::<u64>();
-        }
-    } else {
-        for _ in 0..512 {
-            let descriptor = unsafe { *(processing_descriptor_address as *const u64) };
-            print_indent(space_count);
-            if (descriptor & 0b1) == 0 {
-                println!(
-                    "{:#X} ~ {:#X}: Invalid",
-                    virtual_base_address,
-                    *virtual_base_address + granule
-                );
-                *virtual_base_address += granule;
-            } else if (descriptor & 0b10) == 0 {
-                // Block Descriptor
-                println!(
-                    "{:#X} ~ {:#X}: Block: {:#b} (OA: {:#X}, MemAttr: {})",
-                    virtual_base_address,
-                    *virtual_base_address + granule,
-                    descriptor,
-                    extract_output_address(descriptor, PAGE_SHIFT),
-                    (descriptor >> 2) & 0b111
-                );
-                *virtual_base_address += granule;
-            } else {
-                let next_level_table = extract_output_address(descriptor, PAGE_SHIFT);
-                println!(
-                    "{:#X} ~ {:#X}: Table: {:#b} (OA: {:#X})",
-                    virtual_base_address,
-                    *virtual_base_address + granule,
-                    descriptor,
-                    extract_output_address(descriptor, PAGE_SHIFT)
-                );
-                dump_page_table_recursive(
-                    next_level_table,
-                    virtual_base_address,
-                    level - 1,
-                    space_count + 2,
-                    granule >> 9,
-                );
-            }
-            processing_descriptor_address += core::mem::size_of::<u64>();
-        }
+    if allow_write_access && allow_read_access {
+        println!("Invalid access control.");
+        return Err(());
     }
-}
-
-#[allow(dead_code)]
-pub fn dump_page_table() {
-    let tcr_el2 = get_tcr_el2();
-    let tcr_el2_ds =
-        ((tcr_el2 & TCR_EL2_DS_WITHOUT_E2H) >> TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H) as u8;
-    let tcr_el2_tg0 =
-        ((tcr_el2 & TCR_EL2_TG0_WITHOUT_E2H) >> TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H) as u8;
-    let tcr_el2_t0sz =
-        ((tcr_el2 & TCR_EL2_T0SZ_WITHOUT_E2H) >> TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H) as u8;
-    let tcr_el2_ps =
-        ((tcr_el2 & TCR_EL2_PS_WITHOUT_E2H) >> TCR_EL2_PS_BITS_OFFSET_WITHOUT_E2H) as u8;
-    let page_shift = 12 + (tcr_el2_tg0 << 1);
-    let output_address_size = match tcr_el2_ps {
-        0b000 => 32,
-        0b001 => 36,
-        0b010 => 40,
-        0b011 => 42,
-        0b100 => 44,
-        0b101 => 48,
-        0b110 => 52,
+    let mut num_of_needed_pages = size >> STAGE_2_PAGE_SHIFT;
+    let vtcr_el2 = get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
+        0b00 => 2,
+        0b01 => 1,
+        0b10 => 0,
+        0b11 => 3,
         _ => unreachable!(),
     };
 
-    println!(
-        "TCR_EL2: {:#b}\n   DS: {}, TG0: {:#b}({} KiB), T0SZ: {}, PS: {:#b}({} bits)",
-        tcr_el2,
-        tcr_el2_ds,
-        tcr_el2_tg0,
-        (1 << page_shift) >> 10,
-        tcr_el2_t0sz,
-        tcr_el2_ps,
-        output_address_size,
-    );
+    assert!(address < (1 << (64 - vtcr_el2_t0sz)));
 
-    if page_shift == 16 {
-        println!("64KiB Paging is not supported.");
-        return;
+    let mut physical_address = address;
+    map_address_recursive_stage2(
+        &mut physical_address,
+        &mut address,
+        &mut num_of_needed_pages,
+        TTBR::new(get_vttbr_el2()).get_base_address(),
+        initial_look_up_level,
+        false,
+        ((allow_read_access as u8) << MEMORY_PERMISSION_READABLE_BIT)
+            | ((allow_write_access as u8) << MEMORY_PERMISSION_WRITABLE_BIT),
+        calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level),
+        vtcr_el2_t0sz,
+        false,
+    )?;
+    assert_eq!(num_of_needed_pages, 0);
+    assert_eq!(physical_address, address);
+    pr_debug!("Unmapped {:#X} Bytes({} Pages)", size, size >> PAGE_SHIFT);
+    return Ok(());
+}
+
+/// VTTBR_EL2の該当アドレス範囲をトラップできないようにする。
+/// 現在はInitial Table Levelは0までのみの対応
+pub fn remove_memory_access_trap(mut address: usize, size: usize) -> Result<(), ()> {
+    if (size & ((1usize << STAGE_2_PAGE_SHIFT) - 1)) != 0 {
+        println!("Size({:#X}) is not aligned.", size);
+        return Err(());
     }
-
-    /*
-    let level_0_granule: usize = if page_shift == 12 {
-        if tcr_el2_ds != 0 {
-            512 << 30
-        } else {
-            1 << 30
-        }
-    } else if page_shift == 14 {
-        if tcr_el2_ds != 0 {
-            64 << 30
-        } else {
-            32 << 20
-        }
-    } else {
-        unreachable!()
+    let mut num_of_needed_pages = size >> STAGE_2_PAGE_SHIFT;
+    let vtcr_el2 = get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
+        0b00 => 2,
+        0b01 => 1,
+        0b10 => 0,
+        0b11 => 3,
+        _ => unreachable!(),
     };
-    */
 
-    let paging_level = 4 - get_initial_page_table_level_and_bits_to_shift(tcr_el2).0;
-    println!("Lookup: {} Level", paging_level);
-    let mut base_address: usize = 1 << page_shift;
-    let mut current_level = 3i8;
-    println!(
-        "  {} KiB: Level {} Descriptor",
-        base_address >> 10,
-        current_level
-    );
-    for _ in 0..(paging_level - 1) {
-        base_address <<= 9; /*512Entry*/
-        current_level -= 1;
-        if (base_address >> 10) < 1024 {
-            print!("  {} KiB", base_address >> 10)
-        } else if (base_address >> 20) < 1024 {
-            print!("  {} MiB", base_address >> 20);
-        } else {
-            print!("  {} GiB", base_address >> 30);
-        }
-        println!(": Level {} Descriptor", current_level);
-    }
-    drop(current_level);
+    assert!(address < (1 << (64 - vtcr_el2_t0sz)));
+    let mut physical_address = address;
 
-    let mair_el2 = get_mair_el2();
-
-    println!(
-        "MAIR: {:#X}(Using MemAttr: {})",
-        mair_el2,
-        get_suitable_memory_attribute_index_from_mair_el2(false)
-    );
-
-    let page_table_address = TTBR::new(get_ttbr0_el2()).get_base_address();
-
-    println!("PageTable: {:#X}", page_table_address);
-
-    dump_page_table_recursive(
-        page_table_address,
-        &mut 0,
-        paging_level as u8,
-        0,
-        base_address,
-    );
+    map_address_recursive_stage2(
+        &mut physical_address,
+        &mut address,
+        &mut num_of_needed_pages,
+        TTBR::new(get_vttbr_el2()).get_base_address(),
+        initial_look_up_level,
+        false,
+        (1 << MEMORY_PERMISSION_READABLE_BIT)
+            | (1 << MEMORY_PERMISSION_WRITABLE_BIT)
+            | (1 << MEMORY_PERMISSION_EXECUTABLE_BIT),
+        calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level),
+        vtcr_el2_t0sz,
+        false,
+    )?;
+    assert_eq!(num_of_needed_pages, 0);
+    pr_debug!("Unmapped {:#X} Bytes({} Pages)", size, size >> PAGE_SHIFT);
+    return Ok(());
 }
 
 /// Allocate page table for stage 1 with suitable address alignment
@@ -766,9 +567,10 @@ fn allocate_page_table_for_stage_1(
         match allocate_memory(1) {
             Ok(address) => {
                 if (address & ((1 << table_address_alignment) - 1)) != 0 {
-                    println!(
+                    pr_debug!(
                         "The table address is not alignment with {}, {:#X} will be wasted.",
-                        table_address_alignment, address
+                        table_address_alignment,
+                        address
                     );
                     /* TODO: アライメントを指定してメモリを確保できるようにし、無駄をなくす。 */
                 } else {
@@ -803,9 +605,10 @@ fn allocate_page_table_for_stage_2(
         match allocate_memory(number_of_tables as usize) {
             Ok(address) => {
                 if (address & ((1 << table_address_alignment) - 1)) != 0 {
-                    println!(
+                    pr_debug!(
                         "The table address is not alignment with {}, {:#X} will be wasted.",
-                        table_address_alignment, address
+                        table_address_alignment,
+                        address
                     );
                     /* TODO: アライメントを指定してメモリを確保できるようにし、無駄をなくす。 */
                     if number_of_tables != 1 {

@@ -1,3 +1,9 @@
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
 mod arm_pl011;
 mod arm_sbsa_generic_uart;
 mod meson_gx_uart;
@@ -152,5 +158,19 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println {
     ($fmt:expr) => (print!(concat!($fmt,"\n")));
-    ($fmt:expr, $($arg:tt)*) => (print!(concat!($fmt, "\n"),$($arg)*))
+    ($fmt:expr, $($arg:tt)*) => (print!(concat!($fmt, "\n"),$($arg)*));
+}
+
+#[cfg(debug_assertions)]
+#[macro_export]
+macro_rules! pr_debug {
+    ($fmt:expr) => (print!(concat!($fmt,"\n")));
+    ($fmt:expr, $($arg:tt)*) => (print!(concat!($fmt, "\n"),$($arg)*));
+}
+
+#[cfg(not(debug_assertions))]
+#[macro_export]
+macro_rules! pr_debug {
+    ($fmt:expr) => {};
+    ($fmt:expr, $($arg:tt)*) => {};
 }

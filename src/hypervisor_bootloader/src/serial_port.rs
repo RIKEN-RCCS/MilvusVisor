@@ -1,3 +1,9 @@
+// Copyright (c) 2022 RIKEN
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
 use crate::{dtb, ACPI_20_TABLE_ADDRESS, DTB_ADDRESS};
 
 use common::acpi::{get_acpi_table, GeneralAddressStructure};
