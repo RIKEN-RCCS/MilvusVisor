@@ -12,4 +12,3 @@ RUN rustup update
 RUN apt-get update && apt-get install -y \
   build-essential make \
   && rm -rf /var/lib/apt/lists/*
-RUN cargo install cargo-xbuild

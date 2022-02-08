@@ -286,7 +286,7 @@ fn map_address_recursive_stage2(
                 && (end_index - index) >= 16
             {
                 println!(
-                    "Enable CONTIGUOUS_BIT(index: {:#X}, end_index: {:#X}",
+                    "Enable CONTIGUOUS_BIT(index: {:#X}, end_index: {:#X})",
                     index, end_index
                 );
                 current_table[index] =

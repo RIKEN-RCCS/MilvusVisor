@@ -8,40 +8,39 @@ MAKE = make -C
 COMMON_MODULE = common
 UEFI_MODULE = uefi
 BOOTLOADER = hypervisor_bootloader
-BOOTLOADER_ARCH = aarch64-uefi
 KERNEL = hypervisor_kernel
-KERNEL_ARCH = aarch64-none
 CP = cp
 MKDIR = mkdir -p
 QEMU = qemu-system-aarch64
 RM = rm -rf
+CARGO = cargo
+CARGO_BUILD_OPTION = --release
 MOUNT = mount
 UMOUNT = umount
+CD = cd
 QEMU_EFI ?= QEMU_EFI.fd
 
 all:  bootloader kernel
 	$(MKDIR) bin/EFI/BOOT/
-	$(CP) $(BOOTLOADER)/target/$(BOOTLOADER_ARCH)/release/$(BOOTLOADER) bin/EFI/BOOT/BOOTAA64.EFI
-	$(CP) $(KERNEL)/target/$(KERNEL_ARCH)/release/$(KERNEL) bin/EFI/BOOT/$(KERNEL)
+	$(CP) $(BOOTLOADER)/target/*/release/$(BOOTLOADER).efi bin/EFI/BOOT/BOOTAA64.EFI
+	$(CP) $(KERNEL)/target/*/release/$(KERNEL) bin/EFI/BOOT/$(KERNEL)
 
 bootloader: .FORCE
-	$(MAKE) $(BOOTLOADER)
+	$(CD) $(BOOTLOADER) && $(CARGO) build $(CARGO_BUILD_OPTION)
 
 kernel: .FORCE
-	$(MAKE) $(KERNEL)
+	$(CD) $(KERNEL) && $(CARGO) build $(CARGO_BUILD_OPTION)
 
 clean:
 	$(RM) bin
-	$(MAKE) $(COMMON_MODULE) clean
-	$(MAKE) $(UEFI_MODULE) clean
-	$(MAKE) $(BOOTLOADER) clean
-	$(MAKE) $(KERNEL) clean
+	$(CD) $(BOOTLOADER) && $(CARGO) clean
+	$(CD) $(KERNEL) && $(CARGO) clean
 
 fmt:
-	$(MAKE) $(COMMON_MODULE) fmt
-	$(MAKE) $(UEFI_MODULE) fmt
-	$(MAKE) $(BOOTLOADER) fmt
-	$(MAKE) $(KERNEL) fmt
+	$(CD) $(COMMON_MODULE) && $(CARGO) fmt
+	$(CD) $(UEFI_MODULE) && $(CARGO) fmt
+	$(CD) $(BOOTLOADER) && $(CARGO) fmt
+	$(CD) $(KERNEL) && $(CARGO) fmt
 
 run:  all
 	$(QEMU) -m 1G -cpu cortex-a53 -machine virt-2.12,virtualization=on -smp 4 -nographic -bios $(QEMU_EFI) -drive file=fat:rw:bin/,format=raw,media=disk

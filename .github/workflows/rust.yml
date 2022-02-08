@@ -17,30 +17,26 @@ jobs:
 
     - name: Install tools
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential make
         rustup default nightly
         rustup component add rust-src
-        rustup update
-        cargo install cargo-xbuild
         mkdir bin
 
     - name: Build bootloader
       run: |
         cd src
         make bootloader
-        mv   hypervisor_bootloader/target/aarch64-uefi/release/hypervisor_bootloader ../bin/BOOTAA64.EFI
+        mv   hypervisor_bootloader/target/*/release/hypervisor_bootloader.efi ../bin/BOOTAA64.EFI
 
     - name: Build kernel
       run: |
         cd src
         make kernel
-        mv   hypervisor_kernel/target/aarch64-none/release/hypervisor_kernel ../bin/hypervisor_kernel
+        mv   hypervisor_kernel/target/*/release/hypervisor_kernel ../bin/hypervisor_kernel
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v2
       with:
-        name: Thin Hypervisor
+        name: MilvusVisor
         path: bin/
 
     

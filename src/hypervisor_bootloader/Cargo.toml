@@ -7,3 +7,6 @@ edition = "2021"
 [dependencies]
 common = { path = "../common" }
 uefi = { path = "../uefi" }
+
+[profile.release]
+strip = "symbols"

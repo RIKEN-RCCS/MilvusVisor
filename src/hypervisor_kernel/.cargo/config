@@ -1,0 +1,10 @@
+[build]
+target = "aarch64-unknown-none"
+
+[unstable]
+build-std = ["core", "compiler_builtins"]
+
+[target.aarch64-unknown-none]
+rustflags = [
+  "-C", "link-arg=-Tconfig/linkerscript.ld",
+]
