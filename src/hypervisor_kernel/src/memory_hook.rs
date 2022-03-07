@@ -4,9 +4,10 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-///
-/// Memory Hook Handler
-///
+//!
+//! Memory Hook Handler
+//!
+
 use crate::StoredRegisters;
 
 #[allow(dead_code)]

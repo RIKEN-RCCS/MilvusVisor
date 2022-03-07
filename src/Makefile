@@ -43,10 +43,10 @@ fmt:
 	$(CD) $(KERNEL) && $(CARGO) fmt
 
 run:  all
-	$(QEMU) -m 1G -cpu cortex-a53 -machine virt-2.12,virtualization=on -smp 4 -nographic -bios $(QEMU_EFI) -drive file=fat:rw:bin/,format=raw,media=disk
+	$(QEMU) -m 1G -cpu a64fx -machine virt,virtualization=on,iommu=smmuv3 -smp 4 -nographic -bios $(QEMU_EFI) -drive file=fat:rw:bin/,format=raw,media=disk
 
 debug:  all
-	$(QEMU) -m 1G -cpu cortex-a53 -machine virt-2.12,virtualization=on -smp 4 -monitor stdio -bios $(QEMU_EFI) -drive file=fat:rw:bin/,format=raw,media=disk
+	$(QEMU) -m 1G -cpu a64fx -machine virt,virtualization=on,iommu=smmuv3 -smp 4 -monitor stdio -bios $(QEMU_EFI) -drive file=fat:rw:bin/,format=raw,media=disk
 
 write:
 	$(MOUNT) $(DEVICE) /mnt

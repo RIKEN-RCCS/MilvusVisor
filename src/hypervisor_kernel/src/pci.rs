@@ -4,9 +4,10 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-///
-/// PCI
-///
+//!
+//! PCI
+//!
+
 use crate::drivers;
 
 pub fn init_pci(ecam_address: usize, start_bus_number: u8, end_bus_number: u8) {

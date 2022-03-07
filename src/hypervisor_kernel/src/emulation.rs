@@ -4,9 +4,10 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-///
-/// A64 Instructions' Emulator
-///
+//!
+//! A64 Instructions' Emulator
+//!
+
 mod load;
 mod store;
 

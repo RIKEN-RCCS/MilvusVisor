@@ -10,6 +10,7 @@ pub mod acpi;
 pub mod cpu;
 pub mod paging;
 pub mod serial_port;
+pub mod smmu;
 
 use crate::serial_port::SerialPortInfo;
 
@@ -53,7 +54,9 @@ pub struct EcamInfo {
 /// For communicating about system registers between hypervisor_bootloader and hypervisor_kernel
 pub struct SystemInformation {
     pub vbar_el2: u64,
+    pub acpi_rsdp_address: Option<usize>,
     pub memory_pool: &'static ([MaybeUninit<usize>; ALLOC_SIZE / PAGE_SIZE], usize),
     pub serial_port: Option<SerialPortInfo>,
     pub ecam_info: Option<EcamInfo>,
+    pub smmu_v3_base_address: Option<usize>,
 }

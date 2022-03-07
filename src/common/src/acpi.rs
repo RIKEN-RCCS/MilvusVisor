@@ -9,6 +9,7 @@
 //!
 //! Supported ACPI Version 6.4
 
+pub mod iort;
 pub mod madt;
 
 const RSDP_SIGNATURE: [u8; 8] = *b"RSD PTR ";

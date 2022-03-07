@@ -4,11 +4,12 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-///
-/// A64 Store Instructions' Emulator
-///
-/// Supported: str, stp (except Atomic, SIMD)
-///
+//!
+//! A64 Store Instructions' Emulator
+//!
+//! Supported: str, stp (except Atomic, SIMD)
+//!
+
 use super::{
     advance_elr_el2, faulting_virtual_address_to_intermediate_physical_address,
     get_register_reference_mut, write_back_index_register_imm7, write_back_index_register_imm9,

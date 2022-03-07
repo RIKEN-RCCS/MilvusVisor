@@ -20,6 +20,7 @@ mod paging;
 mod panic;
 mod pci;
 mod serial_port;
+mod smmu;
 
 use common::cpu::*;
 use common::{
@@ -104,6 +105,12 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         None
     };
 
+    let smmu_v3_base_address = if let Some(acpi_address) = unsafe { ACPI_20_TABLE_ADDRESS } {
+        smmu::detect_smmu(acpi_address)
+    } else {
+        None
+    };
+
     let stack_address = allocate_memory(STACK_PAGES).expect("Failed to alloc stack");
     println!(
         "Stack for BSP: {:#X}",
@@ -112,10 +119,12 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
     let mut system_info = SystemInformation {
+        acpi_rsdp_address: unsafe { ACPI_20_TABLE_ADDRESS },
         vbar_el2: 0,
         memory_pool: unsafe { &MEMORY_POOL },
         serial_port: serial,
         ecam_info,
+        smmu_v3_base_address,
     };
     unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
     println!("Returned from the hypervisor");
@@ -555,7 +564,6 @@ extern "C" fn el2_to_el1(stack_pointer: usize) {
             mov x8, sp
             msr sp_el1, x8
             mov sp, x0 // x0 contains stack_pointer
-            mov x0, xzr
             mov x0, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
             msr spsr_el2, x0
             isb

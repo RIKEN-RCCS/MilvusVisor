@@ -39,6 +39,13 @@ const STAGE_2_PAGE_ENTRY_ATTRIBUTE: u64 =
         0b11 << 8 /* SH bits (Inner sharable) */|
         0b1111 << 2 /* MemAttr(Write-back) */;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub enum Shareability {
+    NonShareable,
+    OuterShareable,
+    InterShareable,
+}
+
 #[derive(Copy, Clone)]
 pub struct TTBR(u64); /* Translation Table Base Register */
 

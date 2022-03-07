@@ -24,11 +24,12 @@ mod paging;
 mod panic;
 mod pci;
 mod psci;
+mod smmu;
 
-use crate::pci::init_pci;
 use crate::psci::{handle_psci_call, PsciFunctionId};
 use crate::serial_port::DEFAULT_SERIAL_PORT;
 
+use common::acpi;
 use common::cpu::secure_monitor_call;
 use common::{SystemInformation, ALLOC_SIZE, PAGE_SIZE};
 
@@ -97,9 +98,17 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
 
     println!("Hello,world from Hypervisor Kernel!!");
     if let Some(ecam_info) = &system_information.ecam_info {
-        init_pci(ecam_info.address, ecam_info.start_bus, ecam_info.end_bus);
+        pci::init_pci(ecam_info.address, ecam_info.start_bus, ecam_info.end_bus);
     }
-    unsafe { asm!("adr {:x}, vector_table_el2", out(reg)system_information.vbar_el2 ) };
+    if let Some(smmu_base_address) = system_information.smmu_v3_base_address {
+        smmu::init_smmu(
+            smmu_base_address,
+            system_information
+                .acpi_rsdp_address
+                .and_then(|rsdp| acpi::get_acpi_table(rsdp, &acpi::iort::IORT::SIGNATURE).ok()),
+        );
+    }
+    unsafe { asm!("adr {:x}, vector_table_el2", out(reg) system_information.vbar_el2 ) };
     return;
 }
 

@@ -105,6 +105,7 @@ pub const HCR_EL2_VM: u64 = 1 << 0;
 pub const VTCR_EL2_RES1: u64 = 1 << 31;
 pub const VTCR_EL2_HWU_BITS_OFFSET: u64 = 25;
 pub const VTCR_EL2_PS_BITS_OFFSET: u64 = 16;
+pub const VTCR_EL2_PS: u64 = 0b111 << VTCR_EL2_PS_BITS_OFFSET;
 pub const VTCR_EL2_TG0_BITS_OFFSET: u64 = 14;
 pub const VTCR_EL2_SH0_BITS_OFFSET: u64 = 12;
 pub const VTCR_EL2_ORG0_BITS_OFFSET: u64 = 10;
