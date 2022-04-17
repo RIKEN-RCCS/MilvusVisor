@@ -7,7 +7,7 @@
 #![no_std]
 #![no_main]
 #![feature(asm_sym)]
-#![feature(maybe_uninit_array_assume_init)]
+#![feature(const_maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
