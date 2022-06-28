@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -10,26 +11,102 @@
 
 use super::allocate_memory;
 
-use common::cpu::{
-    flush_tlb_el2, flush_tlb_vmalls12e1, get_tcr_el2, get_ttbr0_el2, get_vtcr_el2, get_vttbr_el2,
-    set_tcr_el2, TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H, VTCR_EL2_SL0,
-    VTCR_EL2_SL0_BITS_OFFSET, VTCR_EL2_T0SZ, VTCR_EL2_T0SZ_BITS_OFFSET,
-};
-use common::paging::{
-    calculate_number_of_concatenated_page_tables, create_attributes_for_stage_1,
-    create_attributes_for_stage_2, extract_output_address,
-    get_initial_page_table_level_and_bits_to_shift,
-    get_suitable_memory_attribute_index_from_mair_el2, is_block_descriptor,
-    is_descriptor_table_or_level_3_descriptor, table_level_to_table_shift,
-    MEMORY_PERMISSION_EXECUTABLE_BIT, MEMORY_PERMISSION_READABLE_BIT,
-    MEMORY_PERMISSION_WRITABLE_BIT, PAGE_DESCRIPTORS_CONTIGUOUS, PAGE_DESCRIPTORS_NT,
-    PAGE_TABLE_SIZE, TTBR,
-};
+use common::cpu::*;
+use common::paging::*;
 use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
 
-/// Map physical Address Recursively
+fn remake_page_table_recursive(
+    table_address: usize,
+    physical_address: &mut usize,
+    table_level: i8,
+    number_of_tables: usize,
+    vtcr_el2_t0sz: u8,
+) -> Result<(), ()> {
+    let page_table = unsafe {
+        core::slice::from_raw_parts_mut(
+            table_address as *mut u64,
+            (PAGE_TABLE_SIZE * number_of_tables) / core::mem::size_of::<u64>(),
+        )
+    };
+    let shift_level = table_level_to_table_shift(STAGE_2_PAGE_SHIFT, table_level);
+    if table_level >= 1 {
+        for e in page_table {
+            let attribute = create_attributes_for_stage_2(
+                (1 << MEMORY_PERMISSION_EXECUTABLE_BIT)
+                    | (1 << MEMORY_PERMISSION_WRITABLE_BIT)
+                    | (1 << MEMORY_PERMISSION_READABLE_BIT),
+                false,
+                false,
+                true,
+            );
+            *e = (*physical_address as u64) | attribute;
+            *physical_address += 1 << shift_level;
+        }
+    } else {
+        for e in page_table {
+            let next_table_address =
+                allocate_page_table_for_stage_2(table_level + 1, vtcr_el2_t0sz, false, 1)?;
+            remake_page_table_recursive(
+                next_table_address,
+                physical_address,
+                table_level + 1,
+                1,
+                vtcr_el2_t0sz,
+            )?;
+            *e = (next_table_address as u64) | 0b11;
+        }
+    }
+    return Ok(());
+}
+
+pub fn remake_page_table() -> Result<usize, ()> {
+    let vtcr_el2 = get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_sl2 = ((vtcr_el2 & VTCR_EL2_SL2) >> VTCR_EL2_SL2_BIT_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match (vtcr_el2_sl0, vtcr_el2_sl2) {
+        (0b01u8, 0b0u8) => 1,
+        (0b10u8, 0b0u8) => 0,
+        (0b00u8, 0b1u8) => -1,
+        _ => unreachable!(),
+    };
+    let number_of_tables =
+        calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level) as usize;
+
+    let mut physical_address = 0;
+    let table_address = allocate_page_table_for_stage_2(
+        initial_look_up_level,
+        vtcr_el2_t0sz,
+        true,
+        number_of_tables as u8,
+    )?;
+
+    remake_page_table_recursive(
+        table_address,
+        &mut physical_address,
+        initial_look_up_level,
+        number_of_tables,
+        vtcr_el2_t0sz,
+    )?;
+
+    return Ok(table_address);
+}
+
+/// Map physical address recursively
 ///
-/// permission: Bit0:Readable, Bit1: Writable, Bit2: Executable
+/// This will map memory area upto `num_of_remaining_pages`.
+/// This will call itself recursively, and map address until `num_of_remaining_pages` == 0 or reached the end of table.
+/// When all page is mapped successfully, `num_of_remaining_pages` has been 0.
+/// # Arguments
+///
+/// * `physical_address` - The address to map
+/// * `virtual_address` - The address to associate with `physical_address`
+/// * `num_of_remaining_pages` - The number of page entries to be mapped, this value will be changed
+/// * `table_address` - The table address to set up in this function
+/// * `table_level` -  The tree level of `table_address`, the max value is 3
+/// * `permission` - The attribute for memory, Bit0: is_readable, Bit1: is_writable, Bit2: is_executable
+/// * `memory_attribute` - The index of MAIR_EL2 to apply the mapping area
+/// * `t0sz` - The value of TCR_EL2::T0SZ
 fn map_address_recursive(
     physical_address: &mut usize,
     virtual_address: &mut usize,
@@ -37,7 +114,7 @@ fn map_address_recursive(
     table_address: usize,
     table_level: i8,
     permission: u8,
-    memory_attribute: u8, /* MemAttr */
+    memory_attribute: u8,
     t0sz: u8,
 ) -> Result<(), ()> {
     let shift_level = table_level_to_table_shift(PAGE_SHIFT, table_level);
@@ -68,9 +145,8 @@ fn map_address_recursive(
 
     while *num_of_remaining_pages != 0 {
         pr_debug!(
-            "{:#X}: Level{}'s Table Index: {:#X}",
+            "{:#X}: Level{table_level}'s Table Index: {:#X}",
             *virtual_address,
-            table_level,
             table_index
         );
         if table_index >= 512 {
@@ -127,6 +203,7 @@ fn map_address_recursive(
                         descriptor_attribute |= 0b11;
                         descriptor_attribute &= !PAGE_DESCRIPTORS_NT;
                     }
+                    descriptor_attribute &= !PAGE_DESCRIPTORS_CONTIGUOUS; /* Currently, needless */
 
                     for e in next_level_page {
                         *e = (block_physical_address as u64) | descriptor_attribute;
@@ -159,6 +236,7 @@ fn map_address_recursive(
 
             if let Some(new_descriptor) = created_entry {
                 *target_descriptor = new_descriptor;
+                flush_tlb_el2();
             }
         }
         table_index += 1;
@@ -176,7 +254,7 @@ pub fn map_address(
     is_device: bool,
 ) -> Result<(), ()> {
     if (physical_address & ((1usize << PAGE_SHIFT) - 1)) != 0 {
-        println!("Physical Address is not aligned.");
+        println!("Physical Address({:#X}) is not aligned.", physical_address);
         return Err(());
     }
     let aligned_size = if (size & ((1usize << PAGE_SHIFT) - 1)) != 0 {
@@ -191,21 +269,14 @@ pub fn map_address(
         ((tcr_el2 & TCR_EL2_T0SZ_WITHOUT_E2H) >> TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H) as u32;
 
     let (table_level, _) = get_initial_page_table_level_and_bits_to_shift(tcr_el2);
-    pr_debug!("Initial Page Table Level: {}", table_level);
+    pr_debug!("Initial Page Table Level: {table_level}");
     let min_t0sz = (virtual_address + size).leading_zeros();
     if min_t0sz < tcr_el2_t0sz {
-        pr_debug!(
-            "TCR_EL2::T0SZ will be changed to {} from {}, this may cause panic.",
-            min_t0sz,
-            tcr_el2_t0sz
-        );
+        pr_debug!("T0SZ will be changed to {min_t0sz} from {tcr_el2_t0sz}, this may cause panic.");
         let new_tcr_el2 = (tcr_el2 ^ tcr_el2_t0sz as u64) | min_t0sz as u64;
         let (new_table_level, _) = get_initial_page_table_level_and_bits_to_shift(new_tcr_el2);
         if new_table_level != table_level {
-            panic!(
-                "Paging Table Level is to be changed. {} => {}",
-                table_level, new_table_level
-            );
+            panic!("Paging Table Level is to be changed. {table_level} => {new_table_level}");
             /* TODO: adjust process */
         } else {
             set_tcr_el2(new_tcr_el2);
@@ -227,18 +298,15 @@ pub fn map_address(
     )?;
 
     if num_of_needed_pages != 0 {
-        println!(
-            "Failed to map address(remaining_pages:{} != 0",
-            num_of_needed_pages
-        );
+        println!("Failed to map address(remaining_pages: {num_of_needed_pages} != 0");
         return Err(());
     }
-    flush_tlb_el2();
     pr_debug!(
         "Mapped {:#X} Bytes({} Pages)",
         aligned_size,
         aligned_size >> PAGE_SHIFT
     );
+    flush_tlb_el2();
     return Ok(());
 }
 
@@ -284,11 +352,10 @@ fn map_address_recursive_stage2(
                 && (index & 0xF) == 0
                 && !is_dummy_page
                 && (end_index - index) >= 16
+                && (*physical_address & ((16 * STAGE_2_PAGE_SIZE) - 1)) == 0
+                && cfg!(feature = "contiguous_bit")
             {
-                println!(
-                    "Enable CONTIGUOUS_BIT(index: {:#X}, end_index: {:#X})",
-                    index, end_index
-                );
+                pr_debug!("Enable CONTIGUOUS_BIT({:#X} ~ {:#X})", index, end_index);
                 current_table[index] =
                     *physical_address as u64 | attributes | PAGE_DESCRIPTORS_CONTIGUOUS;
             } else {
@@ -297,6 +364,7 @@ fn map_address_recursive_stage2(
             if !is_dummy_page {
                 *physical_address += STAGE_2_PAGE_SIZE;
             }
+            //flush_tlb_ipa_is(*virtual_address as u64);
             *virtual_address += STAGE_2_PAGE_SIZE;
         }
         *num_of_remaining_pages -= num_of_pages;
@@ -311,9 +379,8 @@ fn map_address_recursive_stage2(
 
     while *num_of_remaining_pages != 0 {
         pr_debug!(
-            "{:#X}: Level{}'s Table Index: {:#X}",
+            "{:#X}: Level{table_level}'s Table Index: {:#X}",
             *virtual_address,
-            table_level,
             table_index
         );
         if table_index >= (512 * concatenated_tables as usize) {
@@ -345,6 +412,9 @@ fn map_address_recursive_stage2(
             *target_descriptor = *physical_address as u64 | attributes;
 
             *physical_address += 1 << shift_level;
+            /*for i in 0..(1 << (shift_level - STAGE_2_PAGE_SHIFT)) {
+                flush_tlb_ipa_is((*virtual_address + (i << STAGE_2_PAGE_SHIFT)) as u64);
+            }*/
             *virtual_address += 1 << shift_level;
             *num_of_remaining_pages -= 512usize.pow((3 - table_level) as u32);
         } else {
@@ -373,6 +443,7 @@ fn map_address_recursive_stage2(
                         descriptor_attribute |= 0b11;
                         descriptor_attribute &= !PAGE_DESCRIPTORS_NT; /* Clear nT Bit */
                     }
+                    descriptor_attribute &= !PAGE_DESCRIPTORS_CONTIGUOUS; /* Currently, needless */
 
                     for e in next_level_page {
                         *e = (block_physical_address as u64) | descriptor_attribute;
@@ -413,7 +484,6 @@ fn map_address_recursive_stage2(
         }
         table_index += 1;
     }
-    flush_tlb_vmalls12e1();
     return Ok(());
 }
 
@@ -430,12 +500,12 @@ pub fn map_dummy_page_into_vttbr_el2(
     let mut num_of_needed_pages = size >> STAGE_2_PAGE_SHIFT;
     let vtcr_el2 = get_vtcr_el2();
     let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_sl2 = ((vtcr_el2 & VTCR_EL2_SL2) >> VTCR_EL2_SL2_BIT_OFFSET) as u8;
     let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
-    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
-        0b00 => 2,
-        0b01 => 1,
-        0b10 => 0,
-        0b11 => 3,
+    let initial_look_up_level: i8 = match (vtcr_el2_sl0, vtcr_el2_sl2) {
+        (0b01u8, 0b0u8) => 1,
+        (0b10u8, 0b0u8) => 0,
+        (0b00u8, 0b1u8) => -1,
         _ => unreachable!(),
     };
 
@@ -457,6 +527,7 @@ pub fn map_dummy_page_into_vttbr_el2(
 
     assert_eq!(num_of_needed_pages, 0);
     assert_eq!(original_dummy_page, dummy_page);
+    flush_tlb_el1();
     return Ok(());
 }
 
@@ -507,6 +578,7 @@ pub fn add_memory_access_trap(
     assert_eq!(num_of_needed_pages, 0);
     assert_eq!(physical_address, address);
     pr_debug!("Unmapped {:#X} Bytes({} Pages)", size, size >> PAGE_SHIFT);
+    flush_tlb_el1();
     return Ok(());
 }
 
@@ -548,6 +620,7 @@ pub fn remove_memory_access_trap(mut address: usize, size: usize) -> Result<(), 
     )?;
     assert_eq!(num_of_needed_pages, 0);
     pr_debug!("Unmapped {:#X} Bytes({} Pages)", size, size >> PAGE_SHIFT);
+    flush_tlb_el1();
     return Ok(());
 }
 
@@ -578,8 +651,11 @@ fn allocate_page_table_for_stage_1(
                 }
             }
             Err(e) => {
-                println!("Failed to allocate memory for the paging table: {:?}", e);
-                return Err(e);
+                println!(
+                    "Failed to allocate memory for the stage 1 page table: {:?}",
+                    e
+                );
+                return Err(());
             }
         };
     }
@@ -619,7 +695,10 @@ fn allocate_page_table_for_stage_2(
                 }
             }
             Err(e) => {
-                println!("Failed to allocate memory for the paging table: {:?}", e);
+                println!(
+                    "Failed to allocate memory for the stage 2 page table: {:?}",
+                    e
+                );
                 return Err(());
             }
         };

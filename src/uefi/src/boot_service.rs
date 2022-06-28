@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -61,7 +62,7 @@ pub struct EfiBootServices {
         exit_data: *const u16,
     ) -> EfiStatus,
     unload_image: usize,
-    exit_boot_services: usize,
+    pub exit_boot_services: extern "C" fn(image_handler: EfiHandle, map_key: usize) -> EfiStatus,
     get_next_monotonic_count: usize,
     stall: usize,
     set_watchdog_timer: usize,

@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -11,12 +12,12 @@
 //!
 
 use super::{
-    advance_elr_el2, faulting_virtual_address_to_intermediate_physical_address,
-    get_register_reference_mut, write_back_index_register_imm7, write_back_index_register_imm9,
+    advance_elr_el2, faulting_va_to_ipa_load, get_register_reference_mut,
+    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
 };
+use crate::memory_hook::{memory_load_hook_handler, LoadHookResult};
 use crate::StoredRegisters;
 
-use crate::memory_hook::{memory_load_hook_handler, LoadHookResult};
 use common::cpu::convert_virtual_address_to_physical_address_el2_read;
 use common::{bitmask, STAGE_2_PAGE_SHIFT};
 
@@ -27,8 +28,7 @@ pub fn emulate_load_register(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_load_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
     //let op2 = ((target_instruction & bitmask!(24, 23)) >> 23) as u8;
     //let op3 = ((target_instruction & bitmask!(21, 16)) >> 16) as u8;
     let op4 = ((target_instruction & bitmask!(11, 10)) >> 10) as u8;
@@ -87,8 +87,7 @@ pub fn emulate_unsigned_immediate_load_register(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_load_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
 
     /* sf is usable only if sse is true */
     let sf = (target_instruction & (1 << 22)) == 0;
@@ -119,8 +118,7 @@ pub fn emulate_load_register_register_offset(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_load_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
 
     /* sf is usable only if sse is true */
     let sf = (target_instruction & (1 << 22)) == 0;
@@ -151,8 +149,7 @@ pub fn emulate_literal_load_register(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_load_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
 
     let opc = (target_instruction >> 30) as u8;
     /* sf is usable only if sse is true */
@@ -188,8 +185,7 @@ pub fn emulate_load_pair(
     let sf = (opc & (1 << 1)) != 0;
     let sse = (opc & 1) != 0;
     let is_pre_or_post_indexed = (op2 & 1) != 0;
-    let intermediate_physical_load_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
     let target_register_1 = (target_instruction & bitmask!(4, 0)) as u8;
     let target_register_2 = ((target_instruction & bitmask!(14, 10)) >> 10) as u8;
 
@@ -286,11 +282,12 @@ fn load_from_address_and_store_into_register(
             if sse {
                 unimplemented!();
             } else {
+                use core::ptr::read_volatile;
                 match size {
-                    0b00 => unsafe { *(physical_load_address as *const u8) as u64 },
-                    0b01 => unsafe { *(physical_load_address as *const u16) as u64 },
-                    0b10 => unsafe { *(physical_load_address as *const u32) as u64 },
-                    0b11 => unsafe { *(physical_load_address as *const u64) },
+                    0b00 => unsafe { read_volatile(physical_load_address as *const u8) as u64 },
+                    0b01 => unsafe { read_volatile(physical_load_address as *const u16) as u64 },
+                    0b10 => unsafe { read_volatile(physical_load_address as *const u32) as u64 },
+                    0b11 => unsafe { read_volatile(physical_load_address as *const u64) },
                     _ => unreachable!(),
                 }
             }
@@ -299,7 +296,8 @@ fn load_from_address_and_store_into_register(
     };
 
     pr_debug!("Data: {:#X}", data);
-    *get_register_reference_mut(s_r, target_register) = data;
-
+    if target_register != REGISTER_NUMBER_XZR {
+        *get_register_reference_mut(s_r, target_register) = data;
+    }
     return Ok(());
 }

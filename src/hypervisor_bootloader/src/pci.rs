@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -17,18 +18,18 @@ pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
     }
     let mcfg = mcfg.unwrap();
     /* Currently, supporting only one ECAM Address */
-    let pcie_ecam_address = unsafe { *((mcfg + 44) as *const u64) } as usize;
-    let start_bus_number = unsafe { *((mcfg + 54) as *const u8) };
-    let end_bus_number = unsafe { *((mcfg + 55) as *const u8) };
+    let ecam_address = unsafe { *((mcfg + 44) as *const u64) } as usize;
+    let start_bus = unsafe { *((mcfg + 54) as *const u8) };
+    let end_bus = unsafe { *((mcfg + 55) as *const u8) };
     println!(
-        "ECAM Address: {:#X}, Start: {:#X}, End: {:#X}",
-        pcie_ecam_address, start_bus_number, end_bus_number
+        "ECAM: BaseAddress: {:#X}, Bus: {:#X} ~ {:#X}",
+        ecam_address, start_bus, end_bus
     );
-    assert_eq!(pcie_ecam_address & (8 * 1024 * 1024 - 1), 0);
+    assert_eq!(ecam_address & (8 * 1024 * 1024 - 1), 0);
     map_address(
-        pcie_ecam_address,
-        pcie_ecam_address,
-        ((1 + end_bus_number as usize) << 20) - 1,
+        ecam_address,
+        ecam_address,
+        ((1 + (end_bus - start_bus) as usize) << 20) - 1,
         true,
         true,
         false,
@@ -36,8 +37,8 @@ pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
     )
     .expect("Failed to map ECAM Space");
     return Some(EcamInfo {
-        address: pcie_ecam_address,
-        start_bus: start_bus_number,
-        end_bus: end_bus_number,
+        address: ecam_address,
+        start_bus,
+        end_bus,
     });
 }

@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -20,10 +21,8 @@ pub const DAIF_IRQ_BIT: u64 = 7;
 pub const DAIF_FIQ_BIT: u64 = 6;
 
 /* CNTHCTL_EL2 Register */
-pub const CNTHCTL_EL2_EL1PTEN: u64 = 1 << 11;
-pub const CNTHCTL_EL2_EL1PCTEN: u64 = 1 << 10;
-pub const CNTHCTL_EL2_EL0PTEN: u64 = 1 << 9;
-pub const CNTHCTL_EL2_EL0PCTEN: u64 = 1 << 8;
+pub const CNTHCTL_EL2_EL1PCEN: u64 = 1 << 1;
+pub const CNTHCTL_EL2_EL1PCTEN: u64 = 1 << 0;
 
 /* CPACR_EL1 Register */
 pub const CPACR_EL1_TTA_BIT_OFFSET: u64 = 28;
@@ -102,6 +101,8 @@ pub const HCR_EL2_TSC: u64 = 1 << 19;
 pub const HCR_EL2_VM: u64 = 1 << 0;
 
 /* VTCR_EL2 Register */
+pub const VTCR_EL2_SL2_BIT_OFFSET: u64 = 33;
+pub const VTCR_EL2_SL2: u64 = 1 << VTCR_EL2_SL2_BIT_OFFSET;
 pub const VTCR_EL2_RES1: u64 = 1 << 31;
 pub const VTCR_EL2_HWU_BITS_OFFSET: u64 = 25;
 pub const VTCR_EL2_PS_BITS_OFFSET: u64 = 16;
@@ -114,6 +115,16 @@ pub const VTCR_EL2_SL0_BITS_OFFSET: u64 = 6;
 pub const VTCR_EL2_SL0: u64 = 0b11 << VTCR_EL2_SL0_BITS_OFFSET;
 pub const VTCR_EL2_T0SZ_BITS_OFFSET: u64 = 0;
 pub const VTCR_EL2_T0SZ: u64 = 0b111111 << VTCR_EL2_T0SZ_BITS_OFFSET;
+
+/* ID_AA64PFR0_EL1 */
+pub const ID_AA64PFR0_EL1_SVE: u64 = 0b1111 << 32;
+pub const ID_AA64PFR0_EL1_GIC: u64 = 0b1111 << 24;
+
+/* ID_AA64MMFR0_EL1 */
+pub const ID_AA64MMFR0_EL1_PARANGE: u64 = 0b1111;
+
+/* ZCR_EL2 */
+pub const MAX_ZCR_EL2_LEN: u64 = 0x1ff;
 
 /// SMC Calling Convention 1.2に沿ったSMCを発行
 ///
@@ -177,6 +188,13 @@ pub fn set_ttbr0_el2(ttbr0_el2: u64) {
 }
 
 #[inline(always)]
+pub fn get_ttbr0_el1() -> u64 {
+    let ttbr0_el1: u64;
+    unsafe { asm!("mrs {:x}, ttbr0_el1", out(reg) ttbr0_el1) };
+    return ttbr0_el1;
+}
+
+#[inline(always)]
 pub fn set_ttbr0_el1(ttbr0_el1: u64) {
     unsafe { asm!("msr ttbr0_el1, {:x}", in(reg) ttbr0_el1) };
 }
@@ -191,6 +209,18 @@ pub fn get_tcr_el2() -> u64 {
 #[inline(always)]
 pub fn set_tcr_el2(tcr_el2: u64) {
     unsafe { asm!("msr tcr_el2, {:x}", in(reg) tcr_el2) };
+}
+
+#[inline(always)]
+pub fn get_tcr_el1() -> u64 {
+    let tcr_el1: u64;
+    unsafe { asm!("mrs {:x}, tcr_el1", out(reg) tcr_el1) };
+    return tcr_el1;
+}
+
+#[inline(always)]
+pub fn set_tcr_el1(tcr_el1: u64) {
+    unsafe { asm!("msr tcr_el1, {:x}", in(reg) tcr_el1) };
 }
 
 #[inline(always)]
@@ -219,17 +249,183 @@ pub fn set_vtcr_el2(vtcr_el2: u64) {
 }
 
 #[inline(always)]
+pub fn set_icc_sgi1r_el1(icc_sgi1r_el1: u64) {
+    unsafe { asm!("msr icc_sgi1r_el1, {:x}", in(reg) icc_sgi1r_el1) };
+}
+
+#[inline(always)]
+pub fn set_icc_sgi0r_el1(icc_sgi0r_el1: u64) {
+    unsafe { asm!("msr icc_sgi0r_el1, {:x}", in(reg) icc_sgi0r_el1) };
+}
+
+#[inline(always)]
+pub fn set_cntp_ctl_el0(cntp_ctl_el0: u64) {
+    unsafe { asm!("msr cntp_ctl_el0, {:x}", in(reg) cntp_ctl_el0) };
+}
+
+#[inline(always)]
+pub fn get_icc_pmr_el1() -> u64 {
+    let icc_pmr_el1: u64;
+    unsafe { asm!("mrs {:x}, icc_pmr_el1", out(reg) icc_pmr_el1) };
+    return icc_pmr_el1;
+}
+
+#[inline(always)]
+pub fn set_icc_pmr_el1(icc_pmr_el1: u64) {
+    unsafe { asm!("msr icc_pmr_el1, {:x}", in(reg) icc_pmr_el1) };
+}
+
+#[inline(always)]
+pub fn get_icc_bpr0_el1() -> u64 {
+    let icc_bpr0_el1: u64;
+    unsafe { asm!("mrs {:x}, icc_bpr0_el1", out(reg) icc_bpr0_el1) };
+    return icc_bpr0_el1;
+}
+
+#[inline(always)]
+pub fn set_icc_bpr0_el1(icc_bpr0_el1: u64) {
+    unsafe { asm!("msr icc_bpr0_el1, {:x}", in(reg) icc_bpr0_el1) };
+}
+
+#[inline(always)]
+pub fn get_icc_bpr1_el1() -> u64 {
+    let icc_bpr1_el1: u64;
+    unsafe { asm!("mrs {:x}, icc_bpr1_el1", out(reg) icc_bpr1_el1) };
+    return icc_bpr1_el1;
+}
+
+#[inline(always)]
+pub fn set_icc_bpr1_el1(icc_bpr1_el1: u64) {
+    unsafe { asm!("msr icc_bpr1_el1, {:x}", in(reg) icc_bpr1_el1) };
+}
+
+#[inline(always)]
+pub fn get_icc_igrpen0_el1() -> u64 {
+    let icc_igrpen0_el1: u64;
+    unsafe { asm!("mrs {:x}, icc_igrpen0_el1", out(reg) icc_igrpen0_el1) };
+    return icc_igrpen0_el1;
+}
+
+#[inline(always)]
+pub fn set_icc_igrpen0_el1(icc_igrpen0_el1: u64) {
+    unsafe { asm!("msr icc_igrpen0_el1, {:x}", in(reg) icc_igrpen0_el1) };
+}
+
+#[inline(always)]
+pub fn get_icc_igrpen1_el1() -> u64 {
+    let icc_igrpen1_el1: u64;
+    unsafe { asm!("mrs {:x}, icc_igrpen1_el1", out(reg) icc_igrpen1_el1) };
+    return icc_igrpen1_el1;
+}
+
+#[inline(always)]
+pub fn set_icc_igrpen1_el1(icc_igrpen1_el1: u64) {
+    unsafe { asm!("msr icc_igrpen1_el1, {:x}", in(reg) icc_igrpen1_el1) };
+}
+
+#[inline(always)]
 pub fn get_mair_el2() -> u64 {
     let mair_el2: u64;
-    unsafe { asm!("mrs {:x}, mair_el2",out(reg) mair_el2) };
+    unsafe { asm!("mrs {:x}, mair_el2", out(reg) mair_el2) };
     return mair_el2;
+}
+
+#[inline(always)]
+pub fn get_mair_el1() -> u64 {
+    let mair_el1: u64;
+    unsafe { asm!("mrs {:x}, mair_el1", out(reg) mair_el1) };
+    return mair_el1;
+}
+
+#[inline(always)]
+pub fn set_mair_el1(mair_el1: u64) {
+    unsafe { asm!("msr mair_el1, {:x}", in(reg) mair_el1) };
+}
+
+#[inline(always)]
+pub fn get_cpacr_el1() -> u64 {
+    let cpacr_el1: u64;
+    unsafe { asm!("mrs {:x}, cpacr_el1", out(reg) cpacr_el1) };
+    return cpacr_el1;
+}
+
+#[inline(always)]
+pub fn set_cpacr_el1(cpacr_el1: u64) {
+    unsafe { asm!("msr cpacr_el1, {:x}", in(reg) cpacr_el1) };
+}
+
+#[inline(always)]
+pub fn get_sctlr_el1() -> u64 {
+    let sctlr_el1: u64;
+    unsafe { asm!("mrs {:x}, sctlr_el1", out(reg) sctlr_el1) };
+    return sctlr_el1;
+}
+
+#[inline(always)]
+pub fn set_sctlr_el1(sctlr_el1: u64) {
+    unsafe { asm!("msr sctlr_el1, {:x}", in(reg) sctlr_el1) };
+}
+
+#[inline(always)]
+pub fn get_vbar_el1() -> u64 {
+    let vbar_el1: u64;
+    unsafe { asm!("mrs {:x}, vbar_el1", out(reg) vbar_el1) };
+    return vbar_el1;
+}
+
+#[inline(always)]
+pub fn set_vbar_el1(vbar_el1: u64) {
+    unsafe { asm!("msr vbar_el1, {:x}", in(reg) vbar_el1) };
+}
+
+#[inline(always)]
+pub fn get_spsr_el2() -> u64 {
+    let spsr_el2: u64;
+    unsafe { asm!("mrs {:x}, spsr_el2", out(reg) spsr_el2) };
+    return spsr_el2;
+}
+
+#[inline(always)]
+pub fn set_spsr_el2(spsr_el2: u64) {
+    unsafe { asm!("msr spsr_el2, {:x}", in(reg) spsr_el2) };
+}
+
+#[inline(always)]
+pub fn get_elr_el2() -> u64 {
+    let elr_el2: u64;
+    unsafe { asm!("mrs {:x}, elr_el2", out(reg) elr_el2) };
+    return elr_el2;
+}
+
+#[inline(always)]
+pub fn set_elr_el2(elr_el2: u64) {
+    unsafe { asm!("msr elr_el2, {:x}", in(reg) elr_el2) };
+}
+
+#[inline(always)]
+pub fn get_sp_el1() -> u64 {
+    let sp_el1: u64;
+    unsafe { asm!("mrs {:x}, sp_el1", out(reg) sp_el1) };
+    return sp_el1;
+}
+
+#[inline(always)]
+pub fn set_sp_el1(sp_el1: u64) {
+    unsafe { asm!("msr sp_el1, {:x}", in(reg) sp_el1) };
 }
 
 #[inline(always)]
 pub fn get_id_aa64mmfr0_el1() -> u64 {
     let id_aa64mmfr0_el1: u64;
-    unsafe { asm!("mrs {:x}, id_aa64mmfr0_el1",out(reg) id_aa64mmfr0_el1) };
+    unsafe { asm!("mrs {:x}, id_aa64mmfr0_el1", out(reg) id_aa64mmfr0_el1) };
     return id_aa64mmfr0_el1;
+}
+
+#[inline(always)]
+pub fn get_mpidr_el1() -> u64 {
+    let mpidr_el1: u64;
+    unsafe { asm!("mrs {:x}, mpidr_el1", out(reg) mpidr_el1) };
+    return mpidr_el1;
 }
 
 #[inline(always)]
@@ -237,7 +433,8 @@ pub fn flush_tlb_el2() {
     unsafe {
         asm!(
             "
-             tlbi  alle2
+             dsb   ishst
+             tlbi  alle2is
              dsb   sy
              isb"
         )
@@ -250,7 +447,7 @@ pub fn flush_tlb_el1() {
         asm!(
             "
             dsb ishst
-            tlbi alle1
+            tlbi alle1is
             dsb ish
             isb"
         )
@@ -258,8 +455,23 @@ pub fn flush_tlb_el1() {
 }
 
 #[inline(always)]
-pub fn flush_tlb_vmalls12e1() {
-    unsafe { asm!("TLBI VMALLS12E1") };
+pub fn flush_tlb_ipa_is(address: u64) {
+    unsafe { asm!("TLBI IPAS2E1IS, {:x}", in(reg) address) };
+}
+
+#[inline(always)]
+pub fn clear_instruction_cache_all() {
+    unsafe { asm!("IC IALLUIS") };
+}
+
+#[inline(always)]
+pub fn invalidate_data_cache(virtual_address: usize) {
+    unsafe { asm!("DC IVAC, {:x}", in(reg) virtual_address) };
+}
+
+#[inline(always)]
+pub fn send_event_all() {
+    unsafe { asm!("SEV") };
 }
 
 /// 現時点の割り込み状況を保存し、IRQ/FIQを禁止
@@ -268,7 +480,7 @@ pub fn flush_tlb_vmalls12e1() {
 /// 保存された割り込み状況、 [`local_irq_fiq_restore`]の引数として使用
 pub fn local_irq_fiq_save() -> InterruptFlag {
     let mut daif: u64;
-    unsafe { asm!("mrs {:x}, DAIF",out(reg) daif) };
+    unsafe { asm!("mrs {:x}, DAIF", out(reg) daif) };
     let flag = InterruptFlag(daif);
     daif |= (1 << DAIF_IRQ_BIT) | (1 << DAIF_FIQ_BIT);
     unsafe {

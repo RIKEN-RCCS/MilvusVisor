@@ -2,9 +2,14 @@ name: Rust
 
 on:
   push:
-    branches: [ main ]
+    branches: 
+      - main
+      - develop
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
   schedule:
     - cron: '15 4 */1 * *'
 

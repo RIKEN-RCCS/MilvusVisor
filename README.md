@@ -16,26 +16,33 @@ We are currently developing MilvusVisor as a research activity to achieve HPC en
 Currently, MilvusVisor provides the following function.
 
 - Protecting non-volatile data in devices from guest OS (e.g. Firmware, MAC address)
-  - Supported device: Intel I210
+  - Supported device: Intel I210, Mellanox Technologies MT27800
 - Protecting MilvusVisor itself against DMA attack
   - Using SMMUv3 Stage 2 Page Translation to protect from DMA attack
+- Fast restore: Fast restoring the guest environments without reboot the machine
+  - Taking a snapshot just before the first boot of the guest OS
+  - Restoring it on rebooting/shutting down the guest OS
+- Protecting ACPI Tables from write accesses
+  - For the Fast Restore
 
 ## Tested machines
 
 We have tested MilvusVisor on the following machines.
 
-- FX700
+- FIJITSU FX700
+- GIGABYTE E252-P30
 - AML-S805X-AC
 - QEMU
 
 The following table shows which feature worked on which machines.
 
-| Test items \\ Machine                            | FX700 | AML | QEMU |
-|:-------------------------------------------------|:-----:|:---:|:----:|
-| Booting Linux on MilvusVisor (Multi-core)        | o     | o   | o    |
-| Protecting non-volatile data of Intel I210       | o     | -   | -    |
-| Protecting MilvusVisor itself against DMA attack | o     | -   | -    |
-
+| Test items \\ Machine                                       | FX700 | E252-P30 | AML | QEMU |
+|:------------------------------------------------------------|:-----:|:--------:|:---:|:----:|
+| Booting Linux on MilvusVisor (Multi-core)                   | o     | o        | o   | o    |
+| Protecting non-volatile data of Intel I210                  | o     | -        | -   | -    |
+| Protecting firmware update of Mellanox Technologies MT27800 | o     | -        | -   | -    |
+| Protecting MilvusVisor itself against DMA attack            | o     | -        | -   | -    |
+| Fast Restore                                                | o     | -        | -   | -    |
 
 ## How to build the hypervisor
 
@@ -45,10 +52,19 @@ The following table shows which feature worked on which machines.
 - `rustup` command-line tool (you can install from https://rustup.rs/)
 
 #### Steps (commands list)
-```
+```bash
 rustup component add rust-src
 cd path/to/repo-root/src
 make
+```
+
+If you want to enable/disable specific features, please execute `make custom_all FEATURES=(comma separated features)`.
+Please see `src/hypervisor_kernel/Cargo.toml` to know what features are available.
+
+For example, if you want to build the hypervisor only with the device protection features, you should run the below command instead of `make`
+
+```bash
+make custom_all FEATURES=i210,mt27800
 ```
 
 Next (How to run the hypervisor)[＃How to run the hypervisor]

@@ -1,10 +1,11 @@
 # Copyright (c) 2022 RIKEN
+# Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 # All rights reserved.
 #
 # This software is released under the MIT License.
 # http://opensource.org/licenses/mit-license.php
 
-MAKE = make -C
+MAKE = make
 COMMON_MODULE = common
 UEFI_MODULE = uefi
 BOOTLOADER = hypervisor_bootloader
@@ -24,6 +25,12 @@ all:  bootloader kernel
 	$(MKDIR) bin/EFI/BOOT/
 	$(CP) $(BOOTLOADER)/target/*/release/$(BOOTLOADER).efi bin/EFI/BOOT/BOOTAA64.EFI
 	$(CP) $(KERNEL)/target/*/release/$(KERNEL) bin/EFI/BOOT/$(KERNEL)
+
+minimum_all: export CARGO_BUILD_OPTION :=--no-default-features $(CARGO_BUILD_OPTION)
+minimum_all: all
+
+custom_all: export CARGO_BUILD_OPTION :=--no-default-features --features $(FEATURES) $(CARGO_BUILD_OPTION)
+custom_all: all
 
 bootloader: .FORCE
 	$(CD) $(BOOTLOADER) && $(CARGO) build $(CARGO_BUILD_OPTION)

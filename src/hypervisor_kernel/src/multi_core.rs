@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -12,7 +13,7 @@ use crate::{allocate_memory, handler_panic, StoredRegisters};
 
 use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
 
-use common::cpu::convert_virtual_address_to_physical_address_el2_read;
+use common::cpu::{convert_virtual_address_to_physical_address_el2_read, MAX_ZCR_EL2_LEN};
 use common::STACK_PAGES;
 
 use core::arch::asm;
@@ -147,7 +148,39 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
 extern "C" fn cpu_boot() {
     unsafe {
         asm!(
-            "
+            "       // MIDR_EL1 & MPIDR_EL1
+                    mrs x15, midr_el1
+                    msr vpidr_el2, x15
+                    mrs x16, mpidr_el1
+                    msr vmpidr_el2, x16
+
+                    // SVE
+	                mrs	x17, id_aa64pfr0_el1
+                    ubfx x18, x17, 32, 4
+                    cbz x18, 1f
+                    mov x15, {MAX_ZCR_EL2_LEN}
+                    msr S3_4_C1_C2_0, x15 // ZCR_EL2
+
+1:
+                    // GICv3~
+                    /*ubfx x18, x17, 24, 4
+                    cbz  x18, 2f
+                    mrs  x15, icc_sre_el2
+                    orr  x15, x15, 1 << 0
+                    orr  x15, x15, 1 << 3
+                    msr  icc_sre_el2, x15
+                    isb
+                    mrs  x15, icc_sre_el2
+                    tbz  x15, 0, 2f
+                    msr  ich_hcr_el2, xzr*/
+
+2:
+                    // A64FX
+                    mov x15, {A64FX}
+                    cbz x15, 3f
+                    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
+3:
+
                     ldp x1,   x2, [x0, 16 * 0]
                     ldp x3,   x4, [x0, 16 * 1]
                     ldp x5,   x6, [x0, 16 * 2]
@@ -160,6 +193,7 @@ extern "C" fn cpu_boot() {
 
                     mov sp, x1         
                     msr cnthctl_el2, x2
+                    msr cntvoff_el2, xzr
                     msr cptr_el2, x3
                     msr mair_el2, x7
                     msr tcr_el2, x8
@@ -176,8 +210,7 @@ extern "C" fn cpu_boot() {
                     str x14, [x14]
                     isb
                     eret
-                    ",
-            options(noreturn)
-        )
+                    ",  MAX_ZCR_EL2_LEN = const MAX_ZCR_EL2_LEN, A64FX = const cfg!(feature = "a64fx") as u64,
+                        options(noreturn))
     }
 }

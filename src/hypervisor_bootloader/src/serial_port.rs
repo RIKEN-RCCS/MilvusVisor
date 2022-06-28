@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -17,10 +18,9 @@ fn try_to_get_serial_info_from_acpi(rsdp_address: usize) -> Option<SerialPortInf
     }
     let table_address = spcr.unwrap();
     let serial_port_type = unsafe { *((table_address + 36) as *const u8) };
-    println!("SerialType: {:#X}", serial_port_type);
     let address =
         GeneralAddressStructure::new(unsafe { &*((table_address + 40) as *const [u8; 12]) });
-    println!("SerialPortAddress: {:#X?}", address);
+    println!("SerialPort: {:#X?}(Type: {:#X})", address, serial_port_type);
     if address.get_address_type() != GeneralAddressStructure::SPACE_ID_SYSTEM_MEMORY {
         println!("Invalid Address Type");
         return None;
@@ -88,7 +88,6 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
 
 pub fn detect_serial_port() -> Option<SerialPortInfo> {
     if let Some(acpi_table) = unsafe { &ACPI_20_TABLE_ADDRESS } {
-        println!("Detect ACPI 2.0");
         let result = try_to_get_serial_info_from_acpi(*acpi_table);
 
         if result.is_some() {
@@ -96,7 +95,6 @@ pub fn detect_serial_port() -> Option<SerialPortInfo> {
         }
     }
     if let Some(dtb_address) = unsafe { &DTB_ADDRESS } {
-        println!("Detect DTB");
         let result = try_to_get_serial_info_from_dtb(*dtb_address);
 
         if result.is_some() {

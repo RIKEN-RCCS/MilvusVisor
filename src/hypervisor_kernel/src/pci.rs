@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -25,7 +26,13 @@ pub fn init_pci(ecam_address: usize, start_bus_number: u8, end_bus_number: u8) {
             );
             /* TODO: 動的にハンドラ呼び出し */
             if vendor_id == drivers::i210::VENDOR_ID && device_id == drivers::i210::DEVICE_ID {
+                #[cfg(feature = "i210")]
                 drivers::i210::setup_device(ecam_address, bus, device, 0);
+            } else if vendor_id == drivers::mt27800::VENDOR_ID
+                && device_id == drivers::mt27800::DEVICE_ID
+            {
+                #[cfg(feature = "mt27800")]
+                drivers::mt27800::setup_device(ecam_address, bus, device, 0);
             }
             for function in 1..8 {
                 let vendor_id =

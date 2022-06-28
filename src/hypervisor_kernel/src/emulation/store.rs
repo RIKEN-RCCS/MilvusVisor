@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -11,13 +12,13 @@
 //!
 
 use super::{
-    advance_elr_el2, faulting_virtual_address_to_intermediate_physical_address,
-    get_register_reference_mut, write_back_index_register_imm7, write_back_index_register_imm9,
+    advance_elr_el2, faulting_va_to_ipa_store, get_register_reference_mut,
+    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
 };
+use crate::memory_hook::{memory_store_hook_handler, StoreHookResult};
 use crate::{handler_panic, StoredRegisters};
 
-use crate::memory_hook::{memory_store_hook_handler, StoreHookResult};
-use common::cpu::convert_virtual_address_to_physical_address_el2_write;
+use common::cpu::{convert_virtual_address_to_physical_address_el2_write, invalidate_data_cache};
 use common::{bitmask, STAGE_2_PAGE_SHIFT};
 
 pub fn emulate_store_register(
@@ -27,8 +28,7 @@ pub fn emulate_store_register(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_store_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     //let op2 = ((target_instruction & bitmask!(24, 23)) >> 23) as u8;
     //let op3 = ((target_instruction & bitmask!(21, 16)) >> 16) as u8;
     let op4 = ((target_instruction & bitmask!(11, 10)) >> 10) as u8;
@@ -81,8 +81,7 @@ pub fn emulate_unsigned_immediate_store_register(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_store_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     let size = (target_instruction >> 30) as u8;
     store_register_into_address(
         s_r,
@@ -101,8 +100,7 @@ pub fn emulate_store_register_register_offset(
     _hpfar: u64,
 ) -> Result<(), ()> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
-    let intermediate_physical_store_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     let size = (target_instruction >> 30) as u8;
     store_register_into_address(
         s_r,
@@ -125,8 +123,7 @@ pub fn emulate_store_pair(
     let sf = (opc & (1 << 1)) != 0;
     let sse = (opc & 1) != 0;
     let is_pre_or_post_indexed = (op2 & 1) != 0;
-    let intermediate_physical_store_address =
-        faulting_virtual_address_to_intermediate_physical_address(far)?;
+    let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     let target_register_1 = (target_instruction & bitmask!(4, 0)) as u8;
     let target_register_2 = ((target_instruction & bitmask!(14, 10)) >> 10) as u8;
 
@@ -206,7 +203,11 @@ fn store_register_into_address(
         }
     );
 
-    let reg_data = *get_register_reference_mut(s_r, target_register);
+    let reg_data = if target_register == REGISTER_NUMBER_XZR {
+        0
+    } else {
+        *get_register_reference_mut(s_r, target_register)
+    };
     let hook_result = memory_store_hook_handler(physical_store_address, s_r, size, reg_data)?;
     let data = match hook_result {
         StoreHookResult::PassThrough => reg_data,
@@ -218,13 +219,14 @@ fn store_register_into_address(
     };
 
     pr_debug!("Data: {:#X}", data);
+    use core::ptr::write_volatile;
     match size {
-        0b00 => unsafe { *(physical_store_address as *mut u8) = data as u8 },
-        0b01 => unsafe { *(physical_store_address as *mut u16) = data as u16 },
-        0b10 => unsafe { *(physical_store_address as *mut u32) = data as u32 },
-        0b11 => unsafe { *(physical_store_address as *mut u64) = data },
+        0b00 => unsafe { write_volatile(physical_store_address as *mut u8, data as u8) },
+        0b01 => unsafe { write_volatile(physical_store_address as *mut u16, data as u16) },
+        0b10 => unsafe { write_volatile(physical_store_address as *mut u32, data as u32) },
+        0b11 => unsafe { write_volatile(physical_store_address as *mut u64, data) },
         _ => unreachable!(),
     };
-
+    invalidate_data_cache(physical_store_address);
     return Ok(());
 }

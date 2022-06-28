@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -9,6 +10,7 @@
 //!
 //! Supported Version: ~2.0
 
+use crate::fast_restore::enter_restore_process;
 use crate::multi_core::setup_new_cpu;
 use crate::StoredRegisters;
 
@@ -22,7 +24,7 @@ use common::cpu::secure_monitor_call;
 pub enum PsciFunctionId {
     Version = 0x8400_0000,
     CpuSuspend = 0xC400_0001,
-    CpuOff = 0xC400_0002,
+    CpuOff = 0x8400_0002,
     CpuOn = 0xC400_0003,
     AffinityInfo = 0xC400_0004,
     Migrate = 0xC400_0005,
@@ -120,6 +122,14 @@ pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut Stor
         pr_debug!("CPU ON: MPIDR: {:#X}", stored_registers.x1);
         setup_new_cpu(stored_registers);
     } else {
+        #[cfg(feature = "fast_restore")]
+        if function_id == PsciFunctionId::SystemOff
+            || function_id == PsciFunctionId::SystemReset
+            || function_id == PsciFunctionId::SystemReset2
+        {
+            println!("Trap power_off/reboot");
+            enter_restore_process();
+        }
         secure_monitor_call(
             &mut stored_registers.x0,
             &mut stored_registers.x1,

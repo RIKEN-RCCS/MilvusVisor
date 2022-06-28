@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -157,15 +158,15 @@ macro_rules! print {
 
 #[macro_export]
 macro_rules! println {
-    ($fmt:expr) => (print!(concat!($fmt,"\n")));
-    ($fmt:expr, $($arg:tt)*) => (print!(concat!($fmt, "\n"),$($arg)*));
+    ($fmt:expr) => ($crate::serial_port::print(format_args_nl!($fmt)));
+    ($fmt:expr, $($arg:tt)*) => ($crate::serial_port::print(format_args_nl!($fmt, $($arg)*)))
 }
 
 #[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! pr_debug {
-    ($fmt:expr) => (print!(concat!($fmt,"\n")));
-    ($fmt:expr, $($arg:tt)*) => (print!(concat!($fmt, "\n"),$($arg)*));
+    ($fmt:expr) => (println!($fmt));
+    ($fmt:expr, $($arg:tt)*) => (println!($fmt, $($arg)*));
 }
 
 #[cfg(not(debug_assertions))]

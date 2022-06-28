@@ -1,6 +1,12 @@
+# Copyright (c) 2022 RIKEN
+# Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
+# All rights reserved.
+#
+# This software is released under the MIT License.
+# http://opensource.org/licenses/mit-license.php
 [package]
 name = "common"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]

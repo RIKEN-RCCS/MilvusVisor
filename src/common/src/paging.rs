@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -10,12 +11,10 @@
 
 use crate::bitmask;
 use crate::cpu::{
-    TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
+    get_mair_el2, TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
     TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H,
     TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_TG0_WITHOUT_E2H,
 };
-
-use core::arch::asm;
 
 pub const PAGE_TABLE_SIZE: usize = 0x1000;
 
@@ -152,9 +151,8 @@ pub const fn get_initial_page_table_level_and_bits_to_shift(tcr_el2: u64) -> (i8
 }
 
 pub fn get_suitable_memory_attribute_index_from_mair_el2(is_device: bool) -> u8 {
-    let mut mair_el2: u64;
+    let mut mair_el2 = get_mair_el2();
     let suitable_attribute: u64 = if is_device { 0x00 } else { 0xff };
-    unsafe { asm!("mrs {:x},mair_el2",out(reg) mair_el2) };
     for index in 0..7 {
         let attribute = mair_el2 & 0xff;
         if attribute == suitable_attribute {

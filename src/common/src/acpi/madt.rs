@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -13,7 +14,8 @@ pub const MADT_SIGNATURE: [u8; 4] = *b"APIC";
 
 const MADT_STRUCT_SIZE: usize = core::mem::size_of::<MADT>();
 
-const STRUCT_TYPE_GICC: u8 = 0xB;
+const STRUCT_TYPE_GICC: u8 = 0x0B;
+const STRUCT_TYPE_GICD: u8 = 0x0C;
 
 const GICC_FLAGS_ENABLED: u32 = 1;
 
@@ -34,7 +36,7 @@ pub struct MADT {
 }
 
 #[repr(C, packed)]
-struct GicCpuInterfaceStructure {
+pub struct GicCpuInterfaceStructure {
     struct_type: u8,
     length: u8,
     reserved_1: [u8; 2],
@@ -48,8 +50,8 @@ struct GicCpuInterfaceStructure {
     gicv: u64,
     gich: u64,
     vgic_maintenance_interrupt: u32,
-    gicr_base_address: u64,
-    mpidr: u64,
+    pub gicr_base_address: u64,
+    pub mpidr: u64,
     processor_power_efficiency_class: u8,
     reserved_2: u8,
     spe_overflow_interrupt: u16,
@@ -60,32 +62,44 @@ struct GicCpuInterfaceStructure {
 /// このIteratorはMADTのInterrupt Controller Structure配列からGicCpuInterfaceStructureを先頭から順に
 /// 取得し、その中にあるMPIDRの値を返します。なお該当MPIDRが有効でない([`GICC_FLAGS_ENABLED`]が立ってない)
 /// 場合はスキップします。
-pub struct ProcessorIdIter {
-    base_address: usize,
+pub struct GicCpuInterfaceStructureList {
     pointer: usize,
-    length: usize,
+    limit: usize,
 }
 
 impl MADT {
-    pub fn get_processor_id_list(&self) -> ProcessorIdIter {
+    pub fn get_gic_list(&self) -> GicCpuInterfaceStructureList {
         let length = self.length as usize - MADT_STRUCT_SIZE;
-        let base_address = self as *const _ as usize + MADT_STRUCT_SIZE;
+        let pointer = self as *const _ as usize + MADT_STRUCT_SIZE;
 
-        ProcessorIdIter {
-            base_address,
-            pointer: 0,
-            length,
+        GicCpuInterfaceStructureList {
+            pointer,
+            limit: pointer + length,
         }
+    }
+
+    pub fn get_gic_distributor_address(&self) -> Option<usize> {
+        let mut base_address = self as *const _ as usize + MADT_STRUCT_SIZE;
+        let limit = base_address + (self.length as usize - MADT_STRUCT_SIZE);
+        while base_address < limit {
+            let record_type = unsafe { *(base_address as *const u8) };
+            let record_length = unsafe { *((base_address + 1) as *const u8) };
+            if record_type == STRUCT_TYPE_GICD {
+                return Some(unsafe { *((base_address + 8) as *const u64) } as usize);
+            }
+            base_address += record_length as usize;
+        }
+        return None;
     }
 }
 
-impl Iterator for ProcessorIdIter {
-    type Item = u64;
+impl Iterator for GicCpuInterfaceStructureList {
+    type Item = &'static GicCpuInterfaceStructure;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pointer >= self.length {
+        if self.pointer >= self.limit {
             return None;
         }
-        let record_base = self.base_address + self.pointer;
+        let record_base = self.pointer;
         let record_type = unsafe { *(record_base as *const u8) };
         let record_length = unsafe { *((record_base + 1) as *const u8) };
 
@@ -95,7 +109,7 @@ impl Iterator for ProcessorIdIter {
                 let gicc_struct = unsafe { &*(record_base as *const GicCpuInterfaceStructure) };
                 if (gicc_struct.flags & GICC_FLAGS_ENABLED) != 0 {
                     /* Enabled */
-                    Some(gicc_struct.mpidr)
+                    Some(gicc_struct)
                 } else {
                     self.next()
                 }

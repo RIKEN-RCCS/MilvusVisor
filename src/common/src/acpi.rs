@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -15,25 +16,25 @@ pub mod madt;
 const RSDP_SIGNATURE: [u8; 8] = *b"RSD PTR ";
 const XSDT_SIGNATURE: [u8; 4] = *b"XSDT";
 
-const XSDT_STRUCT_SIZE: usize = core::mem::size_of::<XSDT>();
+pub const XSDT_STRUCT_SIZE: usize = core::mem::size_of::<XSDT>();
 
 #[repr(C, packed)]
-struct RSDP {
+pub struct RSDP {
     signature: [u8; 8],
     checksum: u8,
     oem_id: [u8; 6],
     revision: u8,
     rsdt_address: u32,
-    length: u32,
-    xsdt_address: u64,
+    pub length: u32,
+    pub xsdt_address: u64,
     ex_checksum: u32,
     reserved: [u8; 3],
 }
 
 #[repr(C, packed)]
-struct XSDT {
+pub struct XSDT {
     signature: [u8; 4],
-    length: u32,
+    pub length: u32,
     revison: u8,
     checksum: u8,
     oem_id: [u8; 6],

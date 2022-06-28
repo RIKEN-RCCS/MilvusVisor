@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -9,14 +10,18 @@
 #![feature(asm_const)]
 #![feature(const_maybe_uninit_uninit_array)]
 #![feature(const_mut_refs)]
+#![feature(core_intrinsics)]
+#![feature(format_args_nl)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 
 #[macro_use]
 mod serial_port;
+mod acpi_protect;
 mod drivers;
 mod emulation;
+mod fast_restore;
 mod memory_hook;
 mod multi_core;
 mod paging;
@@ -25,27 +30,26 @@ mod pci;
 mod psci;
 mod smmu;
 
-use crate::psci::{handle_psci_call, PsciFunctionId};
-use crate::serial_port::DEFAULT_SERIAL_PORT;
-
-use common::acpi;
-use common::cpu::secure_monitor_call;
+use common::cpu::{get_mpidr_el1, secure_monitor_call};
+use common::{acpi, bitmask};
 use common::{SystemInformation, ALLOC_SIZE, PAGE_SIZE};
 
 use core::arch::{asm, global_asm};
 use core::mem::MaybeUninit;
 
-const EC_HVC: u64 = 0b010110;
-const EC_SMC_AA64: u64 = 0b010111;
-const EC_DATA_ABORT: u64 = 0b100100;
+const EC_HVC: u8 = 0b010110;
+const EC_SMC_AA64: u8 = 0b010111;
+const EC_DATA_ABORT: u8 = 0b100100;
 
-const SMC_INSTRUCTION_SIZE: usize = 4;
+const INSTRUCTION_SIZE: usize = 4;
 
 static mut MEMORY_POOL: ([MaybeUninit<usize>; ALLOC_SIZE / PAGE_SIZE], usize) =
     (MaybeUninit::uninit_array(), 0);
+static mut ACPI_RSDP: Option<usize> = None;
+static mut BSP_MPIDR: u64 = 0;
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StoredRegisters {
     x0: u64,
     x1: u64,
@@ -93,12 +97,18 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(s_info) = &system_information.serial_port {
         unsafe { serial_port::init_default_serial_port(s_info.clone()) };
     }
-    unsafe { MEMORY_POOL = system_information.memory_pool.clone() };
+    unsafe {
+        MEMORY_POOL = system_information.memory_pool.clone();
+        ACPI_RSDP = system_information.acpi_rsdp_address;
+    }
 
     println!("Hello,world from Hypervisor Kernel!!");
+    show_features_status();
+
     if let Some(ecam_info) = &system_information.ecam_info {
         pci::init_pci(ecam_info.address, ecam_info.start_bus, ecam_info.end_bus);
     }
+    #[cfg(feature = "smmu")]
     if let Some(smmu_base_address) = system_information.smmu_v3_base_address {
         smmu::init_smmu(
             smmu_base_address,
@@ -107,8 +117,49 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
                 .and_then(|rsdp| acpi::get_acpi_table(rsdp, &acpi::iort::IORT::SIGNATURE).ok()),
         );
     }
-    unsafe { asm!("adr {:x}, vector_table_el2", out(reg) system_information.vbar_el2 ) };
+
+    #[cfg(feature = "acpi_table_protection")]
+    if let Some(rsdp_address) = unsafe { ACPI_RSDP } {
+        acpi_protect::init_table_protection(rsdp_address);
+    }
+
+    #[cfg(feature = "fast_restore")]
+    {
+        /* Fast Restore Initialization */
+        fast_restore::add_memory_save_list(system_information.memory_save_list);
+        fast_restore::add_trap_to_exit_boot_service(system_information.exit_boot_service_address);
+        fast_restore::create_memory_trap_for_save_memory();
+    }
+
+    unsafe {
+        BSP_MPIDR = get_mpidr_el1();
+        asm!("adr {:x}, vector_table_el2", out(reg) system_information.vbar_el2 );
+    }
     return;
+}
+
+fn show_features_status() {
+    macro_rules! print_is_feature_enabled {
+        ($feature:expr) => {
+            println!(
+                "Feature({}): {}",
+                $feature,
+                if cfg!(feature = $feature) {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            )
+        };
+    }
+
+    print_is_feature_enabled!("smmu");
+    print_is_feature_enabled!("i210");
+    print_is_feature_enabled!("mt27800");
+    print_is_feature_enabled!("fast_restore");
+    print_is_feature_enabled!("acpi_table_protection");
+    print_is_feature_enabled!("contiguous_bit");
+    print_is_feature_enabled!("a64fx");
 }
 
 pub fn allocate_memory(pages: usize) -> Result<usize, ()> {
@@ -138,24 +189,44 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
     pr_debug!("MPIDR_EL1: {:#X}", mpidr_el1);
     pr_debug!("Registers: {:#X?}", regs);
 
-    match (esr_el2 >> 26) & ((1 << 6) - 1) {
-        EC_HVC => {
-            let hvc_number = esr_el2 & ((1 << 16) - 1);
-            println!("Hypervisor Call: {:#X}", hvc_number);
+    let ec = ((esr_el2 >> 26) & bitmask!(5, 0)) as u8;
+
+    /* FastRestore Hook */
+    #[cfg(feature = "fast_restore")]
+    {
+        fast_restore::perform_restore_if_needed();
+        if fast_restore::check_memory_access_for_memory_save_list(ec, far_el2) {
+            return;
         }
+    }
+
+    match ec {
+        EC_HVC => match (esr_el2 & bitmask!(15, 0)) as u16 {
+            fast_restore::HVC_EXIT_BOOT_SERVICE_TRAP => {
+                #[cfg(feature = "fast_restore")]
+                fast_restore::exit_boot_service_trap_main(regs, elr_el2);
+            }
+            fast_restore::HVC_AFTER_EXIT_BOOT_SERVICE_TRAP => {
+                #[cfg(feature = "fast_restore")]
+                fast_restore::after_exit_boot_service_trap_main(regs, elr_el2);
+            }
+            hvc_number => {
+                println!("Hypervisor Call: {:#X}", hvc_number);
+            }
+        },
         EC_SMC_AA64 => {
             /* Adjust return address */
             unsafe {
                 asm!("mrs {t}, ELR_EL2
                            add {t}, {t}, {size}
-                           msr ELR_EL2, {t}", t = out(reg) _, size = const SMC_INSTRUCTION_SIZE )
+                           msr ELR_EL2, {t}", t = out(reg) _, size = const INSTRUCTION_SIZE )
             };
-            let smc_number = esr_el2 & ((1 << 16) - 1);
+            let smc_number = esr_el2 & bitmask!(15, 0);
             pr_debug!("SecureMonitor Call: {:#X}", smc_number);
             pr_debug!("Registers: {:#X?}", regs);
             if smc_number == 0 {
-                if let Ok(psci_function_id) = PsciFunctionId::try_from(regs.x0) {
-                    handle_psci_call(psci_function_id, regs);
+                if let Ok(psci_function_id) = psci::PsciFunctionId::try_from(regs.x0) {
+                    psci::handle_psci_call(psci_function_id, regs);
                 } else {
                     pr_debug!("Unknown Secure Monitor Call: {:#X}", regs.x0);
                     secure_monitor_call(
@@ -180,13 +251,16 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
                     );
                 }
             } else {
-                panic!("SMC {:#X} is not implemented.", smc_number);
+                handler_panic!(regs, "SMC {:#X} is not implemented.", smc_number);
             }
         }
         EC_DATA_ABORT => {
             pr_debug!("Data Abort");
-            emulation::data_abort_handler(regs, esr_el2, elr_el2, far_el2, hpfar_el2)
-                .expect("Failed to emulate the instruction");
+            if let Err(e) =
+                emulation::data_abort_handler(regs, esr_el2, elr_el2, far_el2, hpfar_el2)
+            {
+                handler_panic!(regs, "Failed to emulate the instruction: {:?}", e);
+            }
         }
         ec => {
             handler_panic!(regs, "Unknown EC: {:#X}", ec);
@@ -210,19 +284,22 @@ fn interrupt_handler_panic(s_r: &StoredRegisters, f: core::fmt::Arguments) -> ! 
     let esr_el2: u64;
     let elr_el2: u64;
     let far_el2: u64;
+    let spsr_el2: u64;
     let hpfar_el2: u64;
     let mpidr_el1: u64;
     unsafe { asm!("mrs {:x}, esr_el2", out(reg) esr_el2) };
     unsafe { asm!("mrs {:x}, elr_el2", out(reg) elr_el2) };
     unsafe { asm!("mrs {:x}, far_el2", out(reg) far_el2) };
+    unsafe { asm!("mrs {:x}, spsr_el2", out(reg) spsr_el2) };
     unsafe { asm!("mrs {:x}, hpfar_el2", out(reg) hpfar_el2) };
     unsafe { asm!("mrs {:x}, mpidr_el1", out(reg) mpidr_el1) };
-    if let Some(s) = unsafe { DEFAULT_SERIAL_PORT.as_ref() } {
+    if let Some(s) = unsafe { crate::serial_port::DEFAULT_SERIAL_PORT.as_ref() } {
         unsafe { s.force_release_write_lock() };
     }
     println!("ESR_EL2: {:#X}", esr_el2);
     println!("ELR_EL2: {:#X}", elr_el2);
     println!("FAR_EL2: {:#X}", far_el2);
+    println!("SPSR_EL2: {:#X}", spsr_el2);
     println!("HPFAR_EL2: {:#X}", hpfar_el2);
     println!("MPIDR_EL1: {:#X}", mpidr_el1);
     println!("Registers: {:#X?}", s_r);

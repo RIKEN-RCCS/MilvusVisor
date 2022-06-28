@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST) s
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -56,7 +57,7 @@ pub fn init_smmu(base_address: usize, iort_address: Option<usize>) {
         let aligned_iort_size = (((iort_length + (iort_address - aligned_iort_address)) - 1)
             & STAGE_2_PAGE_MASK)
             + STAGE_2_PAGE_SIZE;
-        add_memory_access_trap(aligned_iort_address, aligned_iort_size, false, true)
+        add_memory_access_trap(aligned_iort_address, aligned_iort_size, false, false)
             .expect("Failed to trap the IORT area.");
         add_memory_load_hook_handler(LoadAccessHandlerEntry::new(
             iort_address,
@@ -64,6 +65,12 @@ pub fn init_smmu(base_address: usize, iort_address: Option<usize>) {
             iort_load_handler,
         ))
         .expect("Failed to add the load handler");
+        add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+            iort_address,
+            iort_length,
+            crate::acpi_protect::acpi_table_store_handler,
+        ))
+        .expect("Failed to add the store handler");
         println!(
             "Delete IORT(Address: {:#X}, Size: {:#X}) from EL1.",
             iort_address, iort_length

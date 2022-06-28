@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -17,23 +18,8 @@ use crate::{
     TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H,
 };
 
-use common::cpu::{
-    flush_tlb_el2, get_id_aa64mmfr0_el1, get_mair_el2, get_tcr_el2, get_ttbr0_el2, get_vtcr_el2,
-    get_vttbr_el2, set_tcr_el2, set_vtcr_el2, set_vttbr_el2, VTCR_EL2_HWU_BITS_OFFSET,
-    VTCR_EL2_IRG0_BITS_OFFSET, VTCR_EL2_ORG0_BITS_OFFSET, VTCR_EL2_PS_BITS_OFFSET, VTCR_EL2_RES1,
-    VTCR_EL2_SH0_BITS_OFFSET, VTCR_EL2_SL0, VTCR_EL2_SL0_BITS_OFFSET, VTCR_EL2_T0SZ,
-    VTCR_EL2_T0SZ_BITS_OFFSET, VTCR_EL2_TG0_BITS_OFFSET,
-};
-use common::paging::{
-    calculate_number_of_concatenated_page_tables, create_attributes_for_stage_1,
-    create_attributes_for_stage_2, extract_output_address,
-    get_initial_page_table_level_and_bits_to_shift,
-    get_suitable_memory_attribute_index_from_mair_el2, is_block_descriptor,
-    is_descriptor_table_or_level_3_descriptor, table_level_to_table_shift,
-    MEMORY_PERMISSION_EXECUTABLE_BIT, MEMORY_PERMISSION_READABLE_BIT,
-    MEMORY_PERMISSION_WRITABLE_BIT, PAGE_DESCRIPTORS_CONTIGUOUS, PAGE_DESCRIPTORS_NT,
-    PAGE_TABLE_SIZE, TTBR,
-};
+use common::cpu::*;
+use common::paging::*;
 use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
 
 fn _copy_page_table(table_address: usize, current_level: i8) -> usize {
@@ -72,9 +58,21 @@ pub fn copy_page_table() -> usize {
     return _copy_page_table(page_table_address, first_table_level);
 }
 
-/// Map physical Address Recursively
+/// Map physical address recursively
 ///
-/// permission: Bit0:Readable, Bit1: Writable, Bit2: Executable
+/// This will map memory area upto `num_of_remaining_pages`.
+/// This will call itself recursively, and map address until `num_of_remaining_pages` == 0 or reached the end of table.
+/// When all page is mapped successfully, `num_of_remaining_pages` has been 0.
+/// # Arguments
+///
+/// * `physical_address` - The address to map
+/// * `virtual_address` - The address to associate with `physical_address`
+/// * `num_of_remaining_pages` - The number of page entries to be mapped, this value will be changed
+/// * `table_address` - The table address to set up in this function
+/// * `table_level` -  The tree level of `table_address`, the max value is 3
+/// * `permission` - The attribute for memory, Bit0: is_readable, Bit1: is_writable, Bit2: is_executable
+/// * `memory_attribute` - The index of MAIR_EL2 to apply the mapping area
+/// * `t0sz` - The value of TCR_EL2::T0SZ
 fn map_address_recursive(
     physical_address: &mut usize,
     virtual_address: &mut usize,
@@ -82,7 +80,7 @@ fn map_address_recursive(
     table_address: usize,
     table_level: i8,
     permission: u8,
-    memory_attribute: u8, /* MemAttr */
+    memory_attribute: u8,
     t0sz: u8,
 ) -> Result<(), ()> {
     let shift_level = table_level_to_table_shift(PAGE_SHIFT, table_level);
@@ -112,10 +110,10 @@ fn map_address_recursive(
     };
 
     while *num_of_remaining_pages != 0 {
-        #[cfg(debug_assertions)]
-        println!(
-            "{:#X}: Level{}'s Table Index: {:#X}",
-            *virtual_address, table_level, table_index
+        pr_debug!(
+            "{:#X}: Level{table_level}'s Table Index: {:#X}",
+            *virtual_address,
+            table_index
         );
         if table_index >= 512 {
             break;
@@ -127,12 +125,14 @@ fn map_address_recursive(
             && (*virtual_address & ((1usize << shift_level) - 1)) == 0
             && *num_of_remaining_pages >= 512usize.pow((3 - table_level) as u32)
         {
-            println!(
+            pr_debug!(
                 "Creating BlockEntry: VA: {:#X}, PA: {:#X}, TableLevel: {}",
-                *virtual_address, *physical_address, table_level
+                *virtual_address,
+                *physical_address,
+                table_level
             );
             if is_descriptor_table_or_level_3_descriptor(*target_descriptor) {
-                println!(
+                pr_debug!(
                     "PageTable:({:#X}) will be deleted.",
                     extract_output_address(*target_descriptor, PAGE_SHIFT)
                 );
@@ -151,8 +151,7 @@ fn map_address_recursive(
                     allocate_page_table_for_stage_1(table_level, t0sz, false)?;
 
                 if is_block_descriptor(*target_descriptor) {
-                    #[cfg(debug_assertions)]
-                    println!(
+                    pr_debug!(
                         "Convert the block descriptor({:#b}) to table descriptor",
                         *target_descriptor
                     );
@@ -170,6 +169,7 @@ fn map_address_recursive(
                         descriptor_attribute |= 0b11;
                         descriptor_attribute &= !PAGE_DESCRIPTORS_NT;
                     }
+                    descriptor_attribute &= !PAGE_DESCRIPTORS_CONTIGUOUS; /* Currently, needless */
 
                     for e in next_level_page {
                         *e = (block_physical_address as u64) | descriptor_attribute;
@@ -187,7 +187,7 @@ fn map_address_recursive(
 
                 /* TODO: 52bit OA support */
                 created_entry = Some(allocated_table_address as u64 | 0b11);
-                println!("Allocated: {:#X}", allocated_table_address);
+                pr_debug!("Allocated: {:#X}", allocated_table_address);
             }
             map_address_recursive(
                 physical_address,
@@ -233,11 +233,9 @@ pub fn map_address(
     let mut tcr_el2_t0sz =
         ((tcr_el2 & TCR_EL2_T0SZ_WITHOUT_E2H) >> TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H) as u32;
 
+    #[allow(unused_variables)]
     let (table_level, shift_level) = get_initial_page_table_level_and_bits_to_shift(tcr_el2);
-    println!(
-        "Initial Page Table Level: {}, Initial Shift Bits: {}",
-        table_level, shift_level
-    );
+    pr_debug!("Initial Page Table Level: {table_level}, Initial Shift Bits: {shift_level}",);
     let min_t0sz = (virtual_address + size).leading_zeros();
     if min_t0sz < tcr_el2_t0sz {
         println!(
@@ -279,7 +277,7 @@ pub fn map_address(
         return Err(());
     }
     flush_tlb_el2();
-    println!(
+    pr_debug!(
         "Mapped {:#X} Bytes({} Pages)",
         aligned_size,
         aligned_size >> PAGE_SHIFT
@@ -329,11 +327,10 @@ fn map_address_recursive_stage2(
                 && (index & 0xF) == 0
                 && !is_dummy_page
                 && (end_index - index) >= 16
+                && (*physical_address & ((16 * STAGE_2_PAGE_SIZE) - 1)) == 0
+                && cfg!(feature = "contiguous_bit")
             {
-                println!(
-                    "Enable CONTIGUOUS_BIT(index: {:#X}, end_index: {:#X})",
-                    index, end_index
-                );
+                pr_debug!("Enable CONTIGUOUS_BIT({:#X} ~ {:#X})", index, end_index);
                 current_table[index] =
                     *physical_address as u64 | attributes | PAGE_DESCRIPTORS_CONTIGUOUS;
             } else {
@@ -355,10 +352,11 @@ fn map_address_recursive_stage2(
     };
 
     while *num_of_remaining_pages != 0 {
-        #[cfg(debug_assertions)]
-        println!(
+        pr_debug!(
             "{:#X}: Level{}'s Table Index: {:#X}",
-            *virtual_address, table_level, table_index
+            *virtual_address,
+            table_level,
+            table_index
         );
         if table_index >= (512 * concatenated_tables as usize) {
             break;
@@ -370,12 +368,14 @@ fn map_address_recursive_stage2(
             && (*virtual_address & ((1usize << shift_level) - 1)) == 0
             && *num_of_remaining_pages >= 512usize.pow((3 - table_level) as u32)
         {
-            println!(
+            pr_debug!(
                 "Creating BlockEntry: VA: {:#X}, PA: {:#X}, TableLevel: {}(Stage 2)",
-                *virtual_address, *physical_address, table_level
+                *virtual_address,
+                *physical_address,
+                table_level
             );
             if is_descriptor_table_or_level_3_descriptor(*target_descriptor) {
-                println!(
+                pr_debug!(
                     "PageTable:({:#X}) will be deleted.",
                     extract_output_address(*target_descriptor, STAGE_2_PAGE_SHIFT)
                 );
@@ -397,8 +397,7 @@ fn map_address_recursive_stage2(
                     allocate_page_table_for_stage_2(table_level, t0sz, false, 1)?;
 
                 if *target_descriptor & 0b11 == 0b01 {
-                    #[cfg(debug_assertions)]
-                    println!(
+                    pr_debug!(
                         "Convert the block descriptor({:#b}) to table descriptor",
                         *target_descriptor
                     );
@@ -416,6 +415,7 @@ fn map_address_recursive_stage2(
                         descriptor_attribute |= 0b11;
                         descriptor_attribute &= !PAGE_DESCRIPTORS_NT; /* Clear nT Bit */
                     }
+                    descriptor_attribute &= !PAGE_DESCRIPTORS_CONTIGUOUS; /* Currently, needless */
 
                     for e in next_level_page {
                         *e = (block_physical_address as u64) | descriptor_attribute;
@@ -433,7 +433,7 @@ fn map_address_recursive_stage2(
 
                 /* TODO: 52bit OA support */
                 created_entry = Some(allocated_table_address as u64 | 0b11);
-                println!("Allocated: {:#X}", allocated_table_address);
+                pr_debug!("Allocated: {:#X}", allocated_table_address);
             }
             map_address_recursive_stage2(
                 physical_address,
@@ -471,12 +471,12 @@ pub fn map_dummy_page_into_vttbr_el2(
     let mut num_of_needed_pages = size >> STAGE_2_PAGE_SHIFT;
     let vtcr_el2 = get_vtcr_el2();
     let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_sl2 = ((vtcr_el2 & VTCR_EL2_SL2) >> VTCR_EL2_SL2_BIT_OFFSET) as u8;
     let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
-    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
-        0b00 => 2,
-        0b01 => 1,
-        0b10 => 0,
-        0b11 => 3,
+    let initial_look_up_level: i8 = match (vtcr_el2_sl0, vtcr_el2_sl2) {
+        (0b01u8, 0b0u8) => 1,
+        (0b10u8, 0b0u8) => 0,
+        (0b00u8, 0b1u8) => -1,
         _ => unreachable!(),
     };
 
@@ -501,52 +501,102 @@ pub fn map_dummy_page_into_vttbr_el2(
     return Ok(());
 }
 
-pub fn setup_stage_2_translation() -> Result<(), ()> {
-    const FIRST_LEVEL: i8 = 1;
-    let top_shift_level: u8 = 12 + 9 * (3 - FIRST_LEVEL) as u8;
-    let ps: u8 = 0b010; /* 40bit 1TiB */
-    let sl0: u8 = 0b01; /* Starting Level 1 */
-    let t0sz: u8 = 24; /* 2^(64 - 24) = 1TiB */
-    let number_of_tables = calculate_number_of_concatenated_page_tables(t0sz, FIRST_LEVEL) as usize;
-
-    let id_aa64mmfr0_el1 = get_id_aa64mmfr0_el1();
-    assert!((id_aa64mmfr0_el1 & 0b1111) as u8 >= ps);
-
-    let mut physical_address = 0;
-    let table_address =
-        allocate_page_table_for_stage_2(FIRST_LEVEL, t0sz, true, number_of_tables as u8)?;
-    let top_level_page_table = unsafe {
+fn setup_stage_2_translation_recursive(
+    table_address: usize,
+    physical_address: &mut usize,
+    table_level: i8,
+    number_of_tables: usize,
+    vtcr_el2_t0sz: u8,
+) -> Result<(), ()> {
+    let page_table = unsafe {
         core::slice::from_raw_parts_mut(
             table_address as *mut u64,
             (PAGE_TABLE_SIZE * number_of_tables) / core::mem::size_of::<u64>(),
         )
     };
-
-    for e in top_level_page_table {
-        let second_table_address =
-            allocate_page_table_for_stage_2(FIRST_LEVEL + 1, t0sz, false, 1)?;
-        let second_level_page_table = unsafe {
-            &mut *(second_table_address
-                as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
-        };
-        let attribute = create_attributes_for_stage_2(
-            (1 << MEMORY_PERMISSION_EXECUTABLE_BIT)
-                | (1 << MEMORY_PERMISSION_WRITABLE_BIT)
-                | (1 << MEMORY_PERMISSION_READABLE_BIT),
-            false,
-            false,
-            true,
-        );
-        for e2 in second_level_page_table {
-            *e2 = physical_address | attribute;
-            physical_address += 1 << (top_shift_level - 9);
+    let shift_level = table_level_to_table_shift(STAGE_2_PAGE_SHIFT, table_level);
+    if table_level >= 1 {
+        for e in page_table {
+            let attribute = create_attributes_for_stage_2(
+                (1 << MEMORY_PERMISSION_EXECUTABLE_BIT)
+                    | (1 << MEMORY_PERMISSION_WRITABLE_BIT)
+                    | (1 << MEMORY_PERMISSION_READABLE_BIT),
+                false,
+                false,
+                true,
+            );
+            *e = (*physical_address as u64) | attribute;
+            *physical_address += 1 << shift_level;
         }
-        *e = (second_table_address as u64) | 0b11;
+    } else {
+        for e in page_table {
+            let next_table_address =
+                allocate_page_table_for_stage_2(table_level + 1, vtcr_el2_t0sz, false, 1)?;
+            setup_stage_2_translation_recursive(
+                next_table_address,
+                physical_address,
+                table_level + 1,
+                1,
+                vtcr_el2_t0sz,
+            )?;
+            *e = (next_table_address as u64) | 0b11;
+        }
     }
+    return Ok(());
+}
+
+pub fn setup_stage_2_translation() -> Result<(), ()> {
+    let pa_range = get_id_aa64mmfr0_el1() & ID_AA64MMFR0_EL1_PARANGE;
+    let ps = pa_range;
+    let (t0sz, first_level) = match ps {
+        0b000 => (32u8, 1i8),
+        0b001 => (28u8, 1i8),
+        0b010 => (24u8, 1i8),
+        0b011 => (22u8, 0i8),
+        0b100 => (20u8, 0i8),
+        0b101 => (16u8, 0i8),
+        0b110 => (12u8, -1i8),
+        _ => {
+            println!("unsupported PARange: {:#X}", pa_range);
+            return Err(());
+        }
+    };
+    let (sl0, sl2) = match first_level {
+        1 => (0b01u8, 0b0u8),
+        0 => (0b10u8, 0b0u8),
+        -1 => (0b00u8, 0b1u8),
+        _ => unreachable!(),
+    };
+
+    if sl2 != 0 {
+        println!("VTCR_EL2::DS must be 1(TODO: support 52Bit OA)");
+        return Err(());
+    }
+
+    let number_of_tables = calculate_number_of_concatenated_page_tables(t0sz, first_level) as usize;
+    pr_debug!(
+        "PARange: {:#b}, FirstLevel: {}, ConcatenatedTables: {}",
+        pa_range,
+        first_level,
+        number_of_tables
+    );
+
+    let mut physical_address = 0;
+    let table_address =
+        allocate_page_table_for_stage_2(first_level, t0sz, true, number_of_tables as u8)?;
+
+    setup_stage_2_translation_recursive(
+        table_address,
+        &mut physical_address,
+        first_level,
+        number_of_tables,
+        t0sz,
+    )?;
 
     /* Setup VTCR_EL2 */
     /* D13.2.148 VTCR_EL2, Virtualization Translation Control Register */
-    let vtcr_el2: u64 = VTCR_EL2_RES1 |
+    let vtcr_el2: u64 = ((sl2 as u64)<< VTCR_EL2_SL2_BIT_OFFSET) |
+        VTCR_EL2_RES1 |
         (0b1111 << VTCR_EL2_HWU_BITS_OFFSET)  |
         ((ps as u64) << VTCR_EL2_PS_BITS_OFFSET) |
         (0 << VTCR_EL2_TG0_BITS_OFFSET) /* 4KiB */ |

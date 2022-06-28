@@ -1,0 +1,471 @@
+// Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
+// All rights reserved.
+//
+// This software is released under the MIT License.
+// http://opensource.org/licenses/mit-license.php
+
+use crate::paging::{
+    add_memory_access_trap, map_address, remake_page_table, remove_memory_access_trap,
+};
+use crate::psci::{call_psci_function, PsciFunctionId};
+use crate::{allocate_memory, StoredRegisters, BSP_MPIDR, INSTRUCTION_SIZE};
+
+use common::acpi::get_acpi_table;
+use common::acpi::madt::MADT;
+use common::cpu::{
+    convert_virtual_address_to_intermediate_physical_address_el1_read,
+    convert_virtual_address_to_intermediate_physical_address_el1_write,
+};
+use common::{
+    cpu, paging, MemorySaveListEntry, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, PAGE_MASK, PAGE_SHIFT,
+    PAGE_SIZE,
+};
+
+use core::arch::asm;
+use core::intrinsics::unlikely;
+use core::mem::MaybeUninit;
+use core::ptr::{copy_nonoverlapping, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static IS_RESTORE_NEEDED: AtomicBool = AtomicBool::new(false);
+static mut MEMORY_SAVE_LIST: MaybeUninit<&'static mut [MemorySaveListEntry]> =
+    MaybeUninit::uninit();
+static mut SAVED_SYSTEM_REGISTERS: MaybeUninit<SavedRegisters> = MaybeUninit::uninit();
+static mut SAVED_REGISTERS: MaybeUninit<StoredRegisters> = MaybeUninit::uninit();
+static mut ORIGINAL_VTTBR_EL2: u64 = 0;
+
+pub const HVC_EXIT_BOOT_SERVICE_TRAP: u16 = 0xFFF0;
+pub const HVC_AFTER_EXIT_BOOT_SERVICE_TRAP: u16 = 0xFFF1;
+
+struct SavedRegisters {
+    cpacr_el1: u64,
+    ttbr0_el1: u64,
+    /*ttbr1_el1: u64,*/
+    tcr_el1: u64,
+    mair_el1: u64,
+    sctlr_el1: u64,
+    vbar_el1: u64,
+    spsr_el2: u64,
+    elr_el2: u64,
+    sp_el1: u64,
+}
+
+pub fn add_memory_save_list(list: *mut [MemorySaveListEntry]) {
+    unsafe { MEMORY_SAVE_LIST.write(&mut *list) };
+}
+
+pub fn create_memory_trap_for_save_memory() {
+    unsafe { ORIGINAL_VTTBR_EL2 = cpu::get_vttbr_el2() };
+    let page_table = remake_page_table().expect("Failed to remake page table.");
+    cpu::set_vttbr_el2(page_table as u64);
+    let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
+    for e in list {
+        if e.num_of_pages == 0 && e.memory_start == 0 {
+            break;
+        }
+        if e.saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG {
+            /* OnDemand Save */
+            add_memory_access_trap(
+                e.memory_start,
+                (e.num_of_pages as usize) << PAGE_SHIFT,
+                true,
+                false,
+            )
+            .expect("Failed to add memory trap");
+        }
+    }
+}
+
+pub fn check_memory_access_for_memory_save_list(ec: u8, far_el2: u64) -> bool {
+    if unlikely(unsafe { ORIGINAL_VTTBR_EL2 != 0 }) {
+        if ec == crate::EC_DATA_ABORT {
+            add_memory_area_to_memory_save_list(far_el2);
+            return true;
+        }
+    }
+    return false;
+}
+
+fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> {
+    for i in 0..list.len() {
+        if (list[i].memory_start == 0 && list[i].num_of_pages == 0)
+            || list[i].saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG
+        {
+            return Some(i);
+        }
+        let start_address = list[i].memory_start;
+        let next_address = start_address + ((list[i].num_of_pages as usize) << PAGE_SHIFT);
+
+        for t in (i + 1)..list.len() {
+            if (list[t].memory_start == 0 && list[t].num_of_pages == 0)
+                || list[t].saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG
+            {
+                return Some(t);
+            }
+            if (list[t].memory_start == next_address)
+                || ((list[t].memory_start + ((list[t].num_of_pages as usize) << PAGE_SHIFT))
+                    == start_address)
+            {
+                if list[i].memory_start > list[t].memory_start {
+                    list[i].memory_start = list[t].memory_start;
+                }
+                list[i].num_of_pages += list[t].num_of_pages;
+                return Some(t);
+            }
+        }
+    }
+    return None;
+}
+
+fn add_memory_area_to_memory_save_list(far_el2: u64) {
+    let fault_address =
+        convert_virtual_address_to_intermediate_physical_address_el1_read(far_el2 as usize)
+            .unwrap_or_else(|_| {
+                convert_virtual_address_to_intermediate_physical_address_el1_write(far_el2 as usize)
+                    .unwrap_or_else(|_| panic!("Failed to convert FAR_EL2({:#X})", far_el2))
+            })
+            & PAGE_MASK;
+
+    pr_debug!("Fault Address: {:#X}", fault_address);
+    let mut available_entry: Option<*mut MemorySaveListEntry> = None;
+    let list_length = unsafe { MEMORY_SAVE_LIST.assume_init_read() }.len();
+
+    for (i, e) in unsafe { MEMORY_SAVE_LIST.assume_init_read() }
+        .iter_mut()
+        .enumerate()
+    {
+        if e.num_of_pages == 0 && e.memory_start == 0 {
+            let new_entry = MemorySaveListEntry {
+                memory_start: fault_address,
+                saved_address: 0,
+                num_of_pages: 1,
+            };
+            if let Some(available_entry) = available_entry {
+                unsafe { *available_entry = new_entry };
+            } else {
+                *e = new_entry;
+                if i + 1 != list_length {
+                    unsafe {
+                        MEMORY_SAVE_LIST.assume_init_read()[i + 1] = MemorySaveListEntry {
+                            memory_start: 0,
+                            saved_address: 0,
+                            num_of_pages: 0,
+                        }
+                    };
+                }
+            }
+            break;
+        }
+        if e.saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG {
+            available_entry = Some(e);
+        } else {
+            if e.memory_start == fault_address + PAGE_SIZE {
+                e.memory_start = fault_address;
+                e.num_of_pages += 1;
+                break;
+            } else if e.memory_start + ((e.num_of_pages as usize) << PAGE_SHIFT) == fault_address {
+                e.num_of_pages += 1;
+                break;
+            }
+        }
+        if i + 1 == list_length {
+            let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
+            if let Some(i) = compress_memory_save_list(list) {
+                list[i] = MemorySaveListEntry {
+                    memory_start: fault_address,
+                    saved_address: 0,
+                    num_of_pages: 1,
+                };
+                break;
+            } else {
+                panic!("There is no available entry");
+            }
+        }
+    }
+    remove_memory_access_trap(fault_address, PAGE_SIZE).expect("Failed to remove memory trap");
+}
+
+fn save_memory(list: &mut [MemorySaveListEntry]) {
+    for e in list {
+        if e.num_of_pages == 0 && e.memory_start == 0 {
+            break;
+        }
+        if e.saved_address != usize::MAX {
+            let allocated_memory =
+                allocate_memory(e.num_of_pages as usize).expect("Failed to allocate memory");
+            unsafe {
+                copy_nonoverlapping(
+                    e.memory_start as *const u8,
+                    allocated_memory as *mut u8,
+                    (e.num_of_pages << PAGE_SHIFT) as usize,
+                )
+            };
+            e.saved_address = allocated_memory;
+        }
+    }
+}
+
+fn restore_memory(list: &[MemorySaveListEntry]) {
+    for e in list {
+        if e.num_of_pages == 0 && e.memory_start == 0 {
+            break;
+        }
+        if e.saved_address != MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG {
+            pr_debug!("Restore {:#X} from {:#X}", e.memory_start, e.saved_address);
+            //if cpu::convert_virtual_address_to_physical_address_el2_write(e.memory_start).is_err() {
+            map_address(
+                e.memory_start,
+                e.memory_start,
+                (e.num_of_pages << PAGE_SHIFT) as usize,
+                true,
+                true,
+                false,
+                false,
+            )
+            .expect("Failed to map memory");
+            //}
+            unsafe {
+                copy_nonoverlapping(
+                    e.saved_address as *const u8,
+                    e.memory_start as *mut u8,
+                    (e.num_of_pages << PAGE_SHIFT) as usize,
+                )
+            };
+        }
+    }
+}
+
+static mut ORIGINAL_INSTRUCTION: u32 = 0;
+pub fn save_original_instruction_and_insert_hvc(address: usize, hvc_number: u16) {
+    if cpu::convert_virtual_address_to_physical_address_el2_write(address & PAGE_MASK).is_err() {
+        map_address(
+            address & PAGE_MASK,
+            address & PAGE_MASK,
+            PAGE_SIZE,
+            true,
+            true,
+            false,
+            false,
+        )
+        .expect("Failed to map memory");
+    }
+    let hvc_instruction = 0b11010100000 << 21 | (hvc_number as u32) << 5 | 0b00010;
+    unsafe {
+        ORIGINAL_INSTRUCTION = *(address as usize as *const u32);
+        *(address as usize as *mut u32) = hvc_instruction;
+    }
+    cpu::flush_tlb_el1();
+    cpu::clear_instruction_cache_all();
+}
+
+pub fn add_trap_to_exit_boot_service(address: usize) {
+    assert_ne!(address, 0);
+    save_original_instruction_and_insert_hvc(address, HVC_EXIT_BOOT_SERVICE_TRAP);
+}
+
+pub fn exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
+    if unsafe { ORIGINAL_INSTRUCTION } == 0 {
+        return;
+    }
+    assert_ne!(elr, 0);
+    let hvc_address = elr as usize - INSTRUCTION_SIZE;
+    unsafe {
+        *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION;
+        asm!("msr elr_el2, {:x}", in(reg) hvc_address);
+    }
+    save_original_instruction_and_insert_hvc(regs.x30 as usize, HVC_AFTER_EXIT_BOOT_SERVICE_TRAP);
+}
+
+pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
+    if unsafe { ORIGINAL_INSTRUCTION } == 0 {
+        return;
+    }
+    assert_ne!(elr, 0);
+    let hvc_address = elr as usize - INSTRUCTION_SIZE;
+    unsafe {
+        *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION;
+        asm!("msr elr_el2, {:x}", in(reg) hvc_address);
+        ORIGINAL_INSTRUCTION = 0;
+    }
+    cpu::flush_tlb_el1();
+    cpu::clear_instruction_cache_all();
+    pr_debug!("ExitBootServiceStatus: {:#X}", regs.x0);
+    if regs.x0 != 0 {
+        panic!("ExitBootService is failed(TODO: reset trap point and continue...)");
+    }
+
+    /* Save current status */
+    save_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
+    /* Store registers */
+    let r = SavedRegisters {
+        cpacr_el1: cpu::get_cpacr_el1(),
+        ttbr0_el1: cpu::get_ttbr0_el1(),
+        tcr_el1: cpu::get_tcr_el1(),
+        mair_el1: cpu::get_mair_el1(),
+        sctlr_el1: cpu::get_sctlr_el1(),
+        vbar_el1: cpu::get_vbar_el1(),
+        spsr_el2: cpu::get_spsr_el2(),
+        elr_el2: cpu::get_elr_el2(),
+        sp_el1: cpu::get_sp_el1(),
+    };
+    unsafe { SAVED_SYSTEM_REGISTERS.write(r) };
+    unsafe { SAVED_REGISTERS.write(regs.clone()) };
+    cpu::set_vttbr_el2(unsafe { ORIGINAL_VTTBR_EL2 }); /* TODO: free old page table */
+    unsafe { ORIGINAL_VTTBR_EL2 = 0 };
+    pr_debug!("Remove page table for memory save");
+    return;
+}
+
+/// 再起動を検知した場合にこの関数を呼ぶ
+pub fn enter_restore_process() -> ! {
+    pr_debug!("Fast Restore is requested.");
+    cpu::local_irq_fiq_save();
+    IS_RESTORE_NEEDED.store(true, Ordering::SeqCst);
+    let stage_2_page_table = paging::TTBR::new(cpu::get_vttbr_el2()).get_base_address();
+    let vtcr_el2 = cpu::get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & cpu::VTCR_EL2_SL0) >> cpu::VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & cpu::VTCR_EL2_T0SZ) >> cpu::VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
+        0b00 => 2,
+        0b01 => 1,
+        0b10 => 0,
+        0b11 => 3,
+        _ => unreachable!(),
+    };
+    let num_of_pages =
+        paging::calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level);
+    for e in unsafe {
+        core::slice::from_raw_parts_mut(
+            stage_2_page_table as *mut u64,
+            (paging::PAGE_TABLE_SIZE / core::mem::size_of::<u64>()) * num_of_pages as usize,
+        )
+    } {
+        *e &= !1;
+    }
+    cpu::flush_tlb_el1();
+    cpu::clear_instruction_cache_all();
+    /* TODO: check if register access is enabled. */
+    cpu::set_icc_sgi1r_el1(1 << 40); /* Broad Cast */
+    cpu::set_icc_sgi0r_el1(1 << 40); /* Broad Cast */
+    cpu::send_event_all();
+    /* TODO: broadcast NMI to wake the processors up from wfi/wfe */
+
+    restore_main()
+}
+
+#[inline(always)]
+pub fn perform_restore_if_needed() {
+    if unlikely(IS_RESTORE_NEEDED.load(Ordering::Relaxed)) {
+        restore_main();
+    }
+}
+
+fn restore_main() -> ! {
+    if unsafe { BSP_MPIDR } != cpu::get_mpidr_el1() {
+        pr_debug!("This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)", cpu::get_mpidr_el1());
+        panic!(
+            "Failed to call CPU_OFF: {}",
+            call_psci_function(PsciFunctionId::CpuOff, 0, 0, 0) as i32
+        );
+    }
+    cpu::local_irq_fiq_save();
+    println!("BSP entered the restore process.");
+
+    /* Restore GIC */
+    if let Some(acpi_rsdp) = unsafe { crate::ACPI_RSDP } {
+        restore_gic(acpi_rsdp);
+    }
+
+    /* Restore saved registers */
+    let saved_registers = unsafe { SAVED_SYSTEM_REGISTERS.assume_init_read() };
+    cpu::set_cpacr_el1(saved_registers.cpacr_el1);
+    cpu::set_ttbr0_el1(saved_registers.ttbr0_el1);
+    cpu::set_tcr_el1(saved_registers.tcr_el1);
+    cpu::set_mair_el1(saved_registers.mair_el1);
+    cpu::set_sctlr_el1(saved_registers.sctlr_el1);
+    cpu::set_vbar_el1(saved_registers.vbar_el1);
+    cpu::set_spsr_el2(saved_registers.spsr_el2);
+    cpu::set_elr_el2(saved_registers.elr_el2);
+    cpu::set_sp_el1(saved_registers.sp_el1);
+    cpu::set_cntp_ctl_el0(0);
+
+    /* Restore memory */
+    pr_debug!("Restore the memory");
+    restore_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
+
+    let stage_2_page_table = paging::TTBR::new(cpu::get_vttbr_el2()).get_base_address();
+    let vtcr_el2 = cpu::get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & cpu::VTCR_EL2_SL0) >> cpu::VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & cpu::VTCR_EL2_T0SZ) >> cpu::VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
+        0b00 => 2,
+        0b01 => 1,
+        0b10 => 0,
+        0b11 => 3,
+        _ => unreachable!(),
+    };
+    let num_of_pages =
+        paging::calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level);
+    for e in unsafe {
+        core::slice::from_raw_parts_mut(
+            stage_2_page_table as *mut u64,
+            (paging::PAGE_TABLE_SIZE / core::mem::size_of::<u64>()) * num_of_pages as usize,
+        )
+    } {
+        *e |= 1;
+    }
+    cpu::flush_tlb_el1();
+    cpu::clear_instruction_cache_all();
+    pr_debug!("ERET");
+    IS_RESTORE_NEEDED.store(false, Ordering::SeqCst);
+    unsafe {
+        asm!("
+            ldp x30, xzr, [x0, #( 15 * 16)]
+            ldp x28, x29, [x0, #( 14 * 16)]
+            ldp x26, x27, [x0, #( 13 * 16)]
+            ldp x24, x25, [x0, #( 12 * 16)]
+            ldp x22, x23, [x0, #( 11 * 16)]
+            ldp x20, x21, [x0, #( 10 * 16)]
+            ldp x18, x19, [x0, #(  9 * 16)]
+            ldp x16, x17, [x0, #(  8 * 16)]
+            ldp x14, x15, [x0, #(  7 * 16)]
+            ldp x12, x13, [x0, #(  6 * 16)]
+            ldp x10, x11, [x0, #(  5 * 16)]
+            ldp  x8,  x9, [x0, #(  4 * 16)]
+            ldp  x6,  x7, [x0, #(  3 * 16)]
+            ldp  x4,  x5, [x0, #(  2 * 16)]
+            ldp  x2,  x3, [x0, #(  1 * 16)]
+            ldp  x0,  x1, [x0, #(  0 * 16)]
+            eret", in("x0") SAVED_REGISTERS.as_ptr() as usize, options(noreturn))
+    }
+}
+
+const GICR_WAKER: usize = 0x0014;
+const GCIR_WAKER_PROCESSOR_SLEEP: u32 = 1 << 1;
+
+const GICD_CTLR: usize = 0x00;
+
+fn restore_gic(acpi_address: usize) {
+    // TODO: Discovery Base Address
+    if let Ok(table) = get_acpi_table(acpi_address, b"APIC") {
+        let table = unsafe { &*(table as *const MADT) };
+        let list = table.get_gic_list();
+        for e in list {
+            /* Set sleep */
+            let redistributor_base = e.gicr_base_address as usize;
+            if redistributor_base == 0 {
+                todo!()
+            }
+            let waker = redistributor_base + GICR_WAKER;
+            unsafe { write_volatile(waker as *mut u32, GCIR_WAKER_PROCESSOR_SLEEP) };
+        }
+        if let Some(distributor) = table.get_gic_distributor_address() {
+            if distributor != 0 {
+                unsafe { write_volatile((distributor + GICD_CTLR) as *mut u32, 0) };
+            }
+        } else {
+            println!("DistributorBase is zero");
+        }
+    }
+}

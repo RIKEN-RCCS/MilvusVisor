@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -23,6 +24,8 @@ use common::cpu::{
 use core::arch::asm;
 
 const NORMAL_INSTRUCTION_SIZE: usize = 4;
+
+const REGISTER_NUMBER_XZR: u8 = 31;
 
 #[allow(unused_variables)]
 pub fn data_abort_handler(
@@ -72,13 +75,14 @@ pub fn data_abort_handler(
         elr,
         instruction_intermediate_physical_address
     );
-    let target_instruction = if let Ok(e) = convert_virtual_address_to_physical_address_el2_read(
-        instruction_intermediate_physical_address,
-    ) {
-        unsafe { *(e as *const u32) }
-    } else {
-        handler_panic!(s_r, "TODO: Mapping...")
-    };
+    assert_eq!(
+        convert_virtual_address_to_physical_address_el2_read(
+            instruction_intermediate_physical_address
+        )
+        .unwrap_or(0),
+        instruction_intermediate_physical_address
+    );
+    let target_instruction = unsafe { *(instruction_intermediate_physical_address as *const u32) };
     pr_debug!("Target Instruction: {:#X}", target_instruction);
 
     return emulate_instruction(s_r, target_instruction, elr, far, hpfar);
@@ -210,17 +214,12 @@ fn emulate_instruction(
     return Err(());
 }
 
-fn faulting_virtual_address_to_intermediate_physical_address(far: u64) -> Result<usize, ()> {
-    /* TODO: check EL1 or EL0 */
-    if let Ok(a) = convert_virtual_address_to_intermediate_physical_address_el1_read(far as usize) {
-        return Ok(a);
-    }
-    if let Ok(a) = convert_virtual_address_to_intermediate_physical_address_el1_write(far as usize)
-    {
-        return Ok(a);
-    }
-    println!("Failed to convert the virtual address(FAR: {:#X}", far);
-    return Err(());
+fn faulting_va_to_ipa_load(far: u64) -> Result<usize, ()> {
+    convert_virtual_address_to_intermediate_physical_address_el1_read(far as usize)
+}
+
+fn faulting_va_to_ipa_store(far: u64) -> Result<usize, ()> {
+    convert_virtual_address_to_intermediate_physical_address_el1_write(far as usize)
 }
 
 fn advance_elr_el2() {

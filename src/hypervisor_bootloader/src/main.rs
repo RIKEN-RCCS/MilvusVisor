@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -8,6 +9,7 @@
 #![no_main]
 #![feature(asm_sym)]
 #![feature(const_maybe_uninit_uninit_array)]
+#![feature(format_args_nl)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
@@ -24,9 +26,9 @@ mod smmu;
 
 use common::cpu::*;
 use common::{
-    HypervisorKernelMainType, SystemInformation, ALLOC_SIZE, HYPERVISOR_PATH,
+    HypervisorKernelMainType, MemorySaveListEntry, SystemInformation, ALLOC_SIZE, HYPERVISOR_PATH,
     HYPERVISOR_SERIAL_BASE_ADDRESS, HYPERVISOR_VIRTUAL_BASE_ADDRESS, MAX_PHYSICAL_ADDRESS,
-    PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES,
+    MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES,
 };
 
 use uefi::{
@@ -63,6 +65,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     let efi_boot_services = unsafe { (*system_table).efi_boot_services };
     init_memory_pool(efi_boot_services);
+    #[cfg(debug_assertions)]
     dump_memory_map(efi_boot_services);
 
     let current_el: usize;
@@ -105,29 +108,30 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         None
     };
 
+    #[cfg(feature = "smmu")]
     let smmu_v3_base_address = if let Some(acpi_address) = unsafe { ACPI_20_TABLE_ADDRESS } {
         smmu::detect_smmu(acpi_address)
     } else {
         None
     };
+    #[cfg(not(feature = "smmu"))]
+    let smmu_v3_base_address = None;
 
     let stack_address = allocate_memory(STACK_PAGES).expect("Failed to alloc stack");
-    println!(
-        "Stack for BSP: {:#X}",
-        stack_address + (STACK_PAGES << PAGE_SHIFT)
-    );
+    let memory_save_list = create_memory_save_list(efi_boot_services);
 
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
     let mut system_info = SystemInformation {
         acpi_rsdp_address: unsafe { ACPI_20_TABLE_ADDRESS },
         vbar_el2: 0,
         memory_pool: unsafe { &MEMORY_POOL },
+        memory_save_list,
         serial_port: serial,
         ecam_info,
         smmu_v3_base_address,
+        exit_boot_service_address: unsafe { (*efi_boot_services).exit_boot_services } as usize,
     };
     unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
-    println!("Returned from the hypervisor");
     unsafe { MEMORY_POOL.1 = 0 }; /* Do not call allocate_memory after calling hypervisor */
 
     println!("Setup EL1");
@@ -162,12 +166,12 @@ fn detect_acpi_and_dtb(system_table: *const EfiSystemTable) {
                 + i * core::mem::size_of::<EfiConfigurationTable>())
                 as *const EfiConfigurationTable)
         };
-        println!("GUID: {:#X?}", table.vendor_guid);
+        pr_debug!("GUID: {:#X?}", table.vendor_guid);
         if table.vendor_guid == EFI_DTB_TABLE_GUID {
-            println!("Detect DTB");
+            pr_debug!("Detect DTB");
             unsafe { DTB_ADDRESS = Some(table.vendor_table) };
         } else if table.vendor_guid == EFI_ACPI_20_TABLE_GUID {
-            println!("Detect ACPI 2.0");
+            pr_debug!("Detect ACPI 2.0");
             unsafe { ACPI_20_TABLE_ADDRESS = Some(table.vendor_table) };
         }
     }
@@ -304,7 +308,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
         ORIGINAL_TCR_EL2 = get_tcr_el2();
     };
     set_ttbr0_el2(cloned_page_table as u64);
-    println!(
+    pr_debug!(
         "Switched TTBR0_EL2 from {:#X} to {:#X}",
         unsafe { ORIGINAL_PAGE_TABLE },
         cloned_page_table
@@ -312,7 +316,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
 
     for index in 0..elf_header.get_num_of_program_header_entries() {
         if let Some(info) = elf_header.get_segment_info(index, program_header_pool) {
-            println!("{:?}", info);
+            pr_debug!("{:#X?}", info);
             if info.memory_size == 0 {
                 continue;
             }
@@ -382,6 +386,75 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
     return elf_header.get_entry_point();
 }
 
+fn create_memory_save_list(b_s: *const EfiBootServices) -> &'static mut [MemorySaveListEntry] {
+    const MEMORY_SAVE_LIST_PAGES: usize = 3;
+    const MEMORY_SAVE_LIST_SIZE: usize = MEMORY_SAVE_LIST_PAGES << PAGE_SHIFT;
+    let memory_map_info =
+        boot_service::memory_service::get_memory_map(b_s).expect("Failed to get the memory map");
+    let list = unsafe {
+        core::slice::from_raw_parts_mut(
+            allocate_memory(MEMORY_SAVE_LIST_PAGES).expect("Failed to allocate Memory for map")
+                as *mut MemorySaveListEntry,
+            MEMORY_SAVE_LIST_SIZE / core::mem::size_of::<MemorySaveListEntry>(),
+        )
+    };
+
+    let mut base_address = memory_map_info.descriptor_address;
+    let mut list_pointer = 0usize;
+
+    for _ in 0..memory_map_info.num_of_entries {
+        use boot_service::memory_service::EfiMemoryType;
+        let e =
+            unsafe { &*(base_address as *const boot_service::memory_service::EfiMemoryDescriptor) };
+        if e.memory_type == EfiMemoryType::EfiBootServicesData
+            || e.memory_type == EfiMemoryType::EfiRuntimeServicesCode
+            || e.memory_type == EfiMemoryType::EfiRuntimeServicesData
+        {
+            pr_debug!(
+                "Add the area({:?}, Pages: {:#X}, Start: {:#X}) to save list",
+                e.memory_type,
+                e.number_of_pages,
+                e.physical_start
+            );
+            list[list_pointer] = MemorySaveListEntry {
+                memory_start: e.physical_start,
+                saved_address: 0,
+                num_of_pages: e.number_of_pages,
+            };
+            list_pointer += 1;
+        } else if e.memory_type == EfiMemoryType::EfiConventionalMemory
+            || e.memory_type == EfiMemoryType::EfiLoaderCode
+            || e.memory_type == EfiMemoryType::EfiLoaderData
+        {
+            pr_debug!(
+                "Add the area({:?}, Pages: {:#X}, Start: {:#X}) to on-demand save list",
+                e.memory_type,
+                e.number_of_pages,
+                e.physical_start
+            );
+            list[list_pointer] = MemorySaveListEntry {
+                memory_start: e.physical_start,
+                saved_address: MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG,
+                num_of_pages: e.number_of_pages,
+            };
+            list_pointer += 1;
+        }
+        base_address += memory_map_info.actual_descriptor_size;
+    }
+    list[list_pointer] = MemorySaveListEntry {
+        memory_start: 0,
+        saved_address: 0,
+        num_of_pages: 0,
+    };
+
+    if let Err(e) = boot_service::memory_service::free_pool(b_s, memory_map_info.descriptor_address)
+    {
+        println!("Failed to free pool for the memory map: {:?}", e);
+    }
+    return list;
+}
+
+#[allow(dead_code)]
 fn dump_memory_map(b_s: *const EfiBootServices) {
     let memory_map_info = match boot_service::memory_service::get_memory_map(b_s) {
         Ok(info) => info,
@@ -427,11 +500,20 @@ fn set_up_el1() {
     };
 
     /* CNTHCTL_EL2 */
-    let mut cnthctl_el2: u64;
-    unsafe { asm!("mrs {:x}, cnthctl_el2", out(reg) cnthctl_el2) };
-    cnthctl_el2 |=
-        CNTHCTL_EL2_EL1PTEN | CNTHCTL_EL2_EL1PCTEN | CNTHCTL_EL2_EL0PTEN | CNTHCTL_EL2_EL0PCTEN;
+    let cnthctl_el2 = CNTHCTL_EL2_EL1PCEN | CNTHCTL_EL2_EL1PCTEN;
     unsafe { asm!("msr cnthctl_el2, {:x}", in(reg) cnthctl_el2) };
+    unsafe { asm!("msr cntvoff_el2, xzr") };
+
+    /* HSTR_EL2 */
+    unsafe { asm!("msr hstr_el2, xzr") };
+
+    /* VPIDR_EL2 & VMPIDR_EL2 */
+    unsafe {
+        asm!("  mrs {t}, midr_el1
+                msr vpidr_el2, {t}
+                mrs {t}, mpidr_el1
+                msr vmpidr_el2, {t}", t = out(reg) _)
+    };
 
     /* ACTLR_EL1 */
     /* Ignore it currently... */
@@ -466,6 +548,31 @@ fn set_up_el1() {
         asm!("msr cpacr_el1, {:x}",in(reg) cpacr_el1);
         asm!("isb")
         /* CPTR_EL2 will be set after HCR_EL2 */
+    }
+
+    let id_aa64pfr0_el1: u64;
+    unsafe { asm!("mrs {:x}, id_aa64pfr0_el1", out(reg) id_aa64pfr0_el1) };
+    if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_SVE) != 0 {
+        /* ZCR_EL2 */
+        unsafe {
+            asm!("  mov {t}, 0x1ff
+                msr S3_4_C1_C2_0, {t}", t = out(reg) _)
+        };
+    }
+
+    if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_GIC) != 0 {
+        /* GICv3~ */
+        /*unsafe {
+            asm!("  mrs {t}, icc_sre_el2
+                    orr {t}, {t}, 1 << 0
+                    orr {t}, {t}, 1 << 3
+                    msr icc_sre_el2, {t}
+                    isb
+                    mrs {t}, icc_sre_el2
+                    tbz {t}, 0, 1f
+                    msr ich_hcr_el2, xzr
+                    1:", t = out(reg) _)
+        };*/
     }
 
     /* MAIR_EL1(Copy MAIR_EL2) */
@@ -518,6 +625,45 @@ fn set_up_el1() {
     /* VBAR_EL1 */
     unsafe {
         asm!("msr vbar_el1, {:x}",in(reg) ORIGINAL_VECTOR_BASE);
+    }
+
+    #[cfg(feature = "a64fx")]
+    {
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET: u32 = 0;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0: u32 =
+            1 << IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL1_TBO0_BIT_OFFSET: u32 = 0;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL2_SCE0_BIT_OFFSET: u32 = 8;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL2_SCE0: u32 =
+            1 << IMP_FJ_TAG_ADDRESS_CTRL_EL2_SCE0_BIT_OFFSET;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL1_SCE0_BIT_OFFSET: u32 = 8;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0_BIT_OFFSET: u32 = 8;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0: u32 =
+            1 << IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0_BIT_OFFSET;
+        const IMP_FJ_TAG_ADDRESS_CTRL_EL1_PFE0_BIT_OFFSET: u32 = 8;
+
+        let mut imp_fj_tag_address_ctrl_el2: u32;
+        let mut imp_fj_tag_address_ctrl_el1: u32 = 0;
+        unsafe { asm!("mrs {:x}, S3_4_C11_C2_0", out(reg) imp_fj_tag_address_ctrl_el2) };
+        if is_e2h_enabled {
+            imp_fj_tag_address_ctrl_el1 = imp_fj_tag_address_ctrl_el2;
+        } else {
+            imp_fj_tag_address_ctrl_el1 |= ((imp_fj_tag_address_ctrl_el2
+                & IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0)
+                >> IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET)
+                << IMP_FJ_TAG_ADDRESS_CTRL_EL1_TBO0_BIT_OFFSET;
+            imp_fj_tag_address_ctrl_el1 |= ((imp_fj_tag_address_ctrl_el2
+                & IMP_FJ_TAG_ADDRESS_CTRL_EL2_SCE0)
+                >> IMP_FJ_TAG_ADDRESS_CTRL_EL2_SCE0_BIT_OFFSET)
+                << IMP_FJ_TAG_ADDRESS_CTRL_EL1_SCE0_BIT_OFFSET;
+            imp_fj_tag_address_ctrl_el1 |= ((imp_fj_tag_address_ctrl_el2
+                & IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0)
+                >> IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0_BIT_OFFSET)
+                << IMP_FJ_TAG_ADDRESS_CTRL_EL1_PFE0_BIT_OFFSET;
+        }
+        imp_fj_tag_address_ctrl_el2 = 0;
+        unsafe { asm!("msr S3_4_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el2) };
+        unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
     }
 
     /* HCR_EL2 */
