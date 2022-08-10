@@ -13,17 +13,17 @@ use crate::paging::add_memory_access_trap;
 use crate::StoredRegisters;
 
 use common::acpi::{RSDP, XSDT, XSDT_STRUCT_SIZE};
-use common::{acpi, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
-const EXCEPT_TABLE: [&[u8; 4]; 1] = [&acpi::iort::IORT::SIGNATURE];
+const EXCEPT_TABLE: [&[u8; 4]; 0] = [];
 
 pub fn init_table_protection(rsdp_address: usize) {
     /* Assume table validation check is done */
     register_acpi_table(
         rsdp_address,
-        Some(unsafe { (&*(rsdp_address as *const RSDP)).length }),
+        Some(unsafe { (*(rsdp_address as *const RSDP)).length }),
     );
-    let xsdt = unsafe { &*((&*(rsdp_address as *const RSDP)).xsdt_address as *const XSDT) };
+    let xsdt = unsafe { &*((*(rsdp_address as *const RSDP)).xsdt_address as *const XSDT) };
     register_acpi_table(xsdt as *const _ as usize, None);
     let mut is_dsdt_processed = false;
 
@@ -94,5 +94,5 @@ pub fn acpi_table_store_handler(
     _access_size: u8,
     _data: u64,
 ) -> Result<StoreHookResult, ()> {
-    return Ok(StoreHookResult::Cancel);
+    Ok(StoreHookResult::Cancel)
 }

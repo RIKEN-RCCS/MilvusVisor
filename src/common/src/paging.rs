@@ -9,12 +9,12 @@
 //! Paging
 //!
 
-use crate::bitmask;
 use crate::cpu::{
     get_mair_el2, TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
     TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H,
     TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_TG0_WITHOUT_E2H,
 };
+use crate::{bitmask, PAGE_MASK, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 pub const PAGE_TABLE_SIZE: usize = 0x1000;
 
@@ -127,7 +127,13 @@ pub const fn table_level_to_table_shift(
     translation_granule_shift + 9 * (3 - table_level) as usize
 }
 
-/// 現時点ではTTBR0_EL2のみ対応
+/// Get first level of page table of TTBR_EL2
+///
+/// # Arguments
+/// * `tcr_el2` - the value to calculate first level
+///
+/// # Result
+/// Returns (first level of page table, the left-shift value of first level table's granule)
 pub const fn get_initial_page_table_level_and_bits_to_shift(tcr_el2: u64) -> (i8, usize) {
     let tcr_el2_ds =
         ((tcr_el2 & TCR_EL2_DS_WITHOUT_E2H) >> TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H) as u8;
@@ -172,4 +178,16 @@ pub const fn calculate_number_of_concatenated_page_tables(
     } else {
         2u8.pow(((43 - ((3 - initial_lookup_level) as u8) * 9) - t0sz) as u32)
     }
+}
+
+pub const fn page_align_up(size: usize) -> usize {
+    //assert_ne!(size, 0);
+    assert!(size != 0);
+    ((size - 1) & PAGE_MASK) + PAGE_SIZE
+}
+
+pub const fn stage2_page_align_up(size: usize) -> usize {
+    //assert_ne!(size, 0);
+    assert!(size != 0);
+    ((size - 1) & STAGE_2_PAGE_MASK) + STAGE_2_PAGE_SIZE
 }

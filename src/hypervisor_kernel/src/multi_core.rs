@@ -9,15 +9,15 @@
 //! MultiCore Handling Functions
 //!
 
-use crate::{allocate_memory, handler_panic, StoredRegisters};
-
 use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
+use crate::{allocate_memory, free_memory, handler_panic, StoredRegisters};
 
-use common::cpu::{convert_virtual_address_to_physical_address_el2_read, MAX_ZCR_EL2_LEN};
-use common::STACK_PAGES;
+use common::{cpu, PAGE_SHIFT, STACK_PAGES};
 
-use core::arch::asm;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+pub static NUMBER_OF_RUNNING_AP: AtomicU64 = AtomicU64::new(0);
+pub static STACK_TO_FREE_LATER: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C, align(16))]
 #[derive(Debug)]
@@ -56,30 +56,19 @@ static mut REGISTER_BUFFER: HypervisorRegisters = HypervisorRegisters {
 };
 
 pub fn setup_new_cpu(regs: &mut StoredRegisters) {
-    let stack_address: u64 =
-        allocate_memory(STACK_PAGES).expect("Failed to alloc stack for new CPU.") as u64;
-    let cnthctl_el2: u64;
-    let cptr_el2: u64;
-    let hcr_el2: u64;
-    let vttbr_el2: u64;
-    let ttbr0_el2: u64;
-    let mair_el2: u64;
-    let tcr_el2: u64;
-    let vtcr_el2: u64;
-    let sctlr_el2: u64;
-    let vbar_el2: u64;
-    unsafe {
-        asm!("mrs {:x}, cnthctl_el2", out(reg) cnthctl_el2);
-        asm!("mrs {:x}, cptr_el2", out(reg) cptr_el2);
-        asm!("mrs {:x}, hcr_el2", out(reg) hcr_el2);
-        asm!("mrs {:x}, ttbr0_el2", out(reg) ttbr0_el2);
-        asm!("mrs {:x}, vttbr_el2", out(reg) vttbr_el2);
-        asm!("mrs {:x}, mair_el2", out(reg)mair_el2);
-        asm!("mrs {:x}, tcr_el2", out(reg) tcr_el2);
-        asm!("mrs {:x}, vtcr_el2", out(reg) vtcr_el2);
-        asm!("mrs {:x}, sctlr_el2", out(reg) sctlr_el2);
-        asm!("mrs {:x}, vbar_el2", out(reg) vbar_el2);
-    }
+    let stack_address = (allocate_memory(STACK_PAGES, Some(STACK_PAGES))
+        .expect("Failed to allocate stack")
+        + (STACK_PAGES << PAGE_SHIFT)) as u64;
+    let cnthctl_el2 = cpu::get_cnthctl_el2();
+    let cptr_el2 = cpu::get_cptr_el2();
+    let hcr_el2 = cpu::get_hcr_el2();
+    let vttbr_el2 = cpu::get_vttbr_el2();
+    let ttbr0_el2 = cpu::get_ttbr0_el2();
+    let mair_el2 = cpu::get_mair_el2();
+    let tcr_el2 = cpu::get_tcr_el2();
+    let vtcr_el2 = cpu::get_vtcr_el2();
+    let sctlr_el2 = cpu::get_sctlr_el2();
+    let vbar_el2 = cpu::get_vbar_el2();
 
     /* Aquire REGISTER_BUFFER's lock */
     loop {
@@ -116,15 +105,16 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
         REGISTER_BUFFER.el1_context_id = regs.x3;
     }
 
-    let hypervisor_registers_real_address = convert_virtual_address_to_physical_address_el2_read(
-        unsafe { &REGISTER_BUFFER } as *const _ as usize,
-    )
-    .expect("Failed to convert virtual address to real address");
+    let hypervisor_registers_real_address =
+        cpu::convert_virtual_address_to_physical_address_el2_read(
+            unsafe { &REGISTER_BUFFER } as *const _ as usize
+        )
+        .expect("Failed to convert virtual address to real address");
     let cpu_boot_address_real_address =
-        convert_virtual_address_to_physical_address_el2_read(cpu_boot as *const fn() as usize)
+        cpu::convert_virtual_address_to_physical_address_el2_read(cpu_boot as *const fn() as usize)
             .expect("Failed to convert virtual address to real address");
 
-    pr_debug!("{:#X?}", hypervisor_registers);
+    pr_debug!("{:#X?}", unsafe { &REGISTER_BUFFER });
 
     regs.x0 = call_psci_function(
         PsciFunctionId::CpuOn,
@@ -135,19 +125,58 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
     if regs.x0 as i32 != PsciReturnCode::Success as i32 {
         handler_panic!(
             regs,
-            "Failed to on the cpu (MPIDR: {:#X}): {:?}",
+            "Failed to power on the cpu (MPIDR: {:#X}): {:?}",
             regs.x1,
             PsciReturnCode::try_from(regs.x0 as i32)
         );
     }
+    NUMBER_OF_RUNNING_AP.fetch_add(1, Ordering::SeqCst);
     pr_debug!("The initialization completed.");
+}
+
+/// # ATTENTION
+/// do not power off BSP(BSP's stack may not be aligned with [`STACK_PAGES`])
+pub fn power_off_cpu() -> i32 {
+    let stack_address = (cpu::get_sp() as usize) & !((STACK_PAGES << PAGE_SHIFT) - 1);
+
+    /*
+    STACK_TO_FREE_LATER_FLAG.lock();
+    let stack_address_to_free = STACK_TO_FREE_LATER.load(Ordering::Relaxed);
+    if stack_address_to_free != 0 {
+        if let Err(err) = free_memory(stack_address_to_free, STACK_PAGES) {
+            println!("Failed to free stack: {:?}", err);
+        }
+    }
+    STACK_TO_FREE_LATER.store(stack_address, Ordering::Relaxed);
+    STACK_TO_FREE_LATER_FLAG.unlock();
+    */
+
+    loop {
+        let current = STACK_TO_FREE_LATER.load(Ordering::Acquire);
+        if let Ok(stack_address_to_free) = STACK_TO_FREE_LATER.compare_exchange(
+            current,
+            stack_address,
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
+            if stack_address_to_free != 0 {
+                if let Err(err) = free_memory(stack_address_to_free, STACK_PAGES) {
+                    println!("Failed to free stack: {:?}", err);
+                }
+            }
+            break;
+        }
+    }
+
+    NUMBER_OF_RUNNING_AP.fetch_sub(1, Ordering::SeqCst);
+    call_psci_function(PsciFunctionId::CpuOff, 0, 0, 0) as i32
 }
 
 /* cpu_boot must use position-relative code */
 #[naked]
 extern "C" fn cpu_boot() {
     unsafe {
-        asm!(
+        core::arch::asm!(
             "       // MIDR_EL1 & MPIDR_EL1
                     mrs x15, midr_el1
                     msr vpidr_el2, x15
@@ -207,10 +236,13 @@ extern "C" fn cpu_boot() {
                     msr spsr_el2, x1
                     msr elr_el2, x12
                     mov x0, x13
+                    dsb sy
+                    isb
                     str x14, [x14]
                     isb
                     eret
-                    ",  MAX_ZCR_EL2_LEN = const MAX_ZCR_EL2_LEN, A64FX = const cfg!(feature = "a64fx") as u64,
+                    ",  MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
+                        A64FX = const cfg!(feature = "a64fx") as u64,
                         options(noreturn))
     }
 }

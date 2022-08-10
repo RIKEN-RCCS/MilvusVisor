@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -8,12 +9,12 @@
 //! Memory Allocation Services of Boot Service
 //!
 
-use super::super::EfiStatus;
 use super::EfiBootServices;
+
+use crate::EfiStatus;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
 #[repr(C)]
-#[allow(dead_code)]
 pub enum EfiMemoryType {
     EfiReservedMemoryType,
     EfiLoaderCode,
@@ -35,7 +36,6 @@ pub enum EfiMemoryType {
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u64)]
-#[allow(dead_code)]
 pub enum EfiMemoryAttribute {
     EfiMemoryUc = 0x0000000000000001,
     EfiMemoryWc = 0x0000000000000002,
@@ -55,7 +55,6 @@ pub enum EfiMemoryAttribute {
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
 #[repr(C)]
-#[allow(dead_code)]
 pub enum EfiAllocateType {
     AllocateAnyPages,
     AllocateMaxAddress,
@@ -100,9 +99,15 @@ pub fn free_pool(b_s: *const EfiBootServices, address: usize) -> Result<(), EfiS
     Ok(())
 }
 
-/// サイズ(ページ指定)を満たす中で最高位のアドレスを確保する。
+/// Allocate highest memory which matches the demanded size and `border_address`
 ///
-/// [`border_address`]以下で条件に合うアドレスを確保する。
+/// # Arguments
+/// * `b_s` - EfiBootService
+/// * `pages` - the number of needed pages
+/// * `border_address` - the upper border address to restrict to be allocating address  
+///
+/// # Result
+/// If the allocation is succeeded, Ok(start_address), otherwise Err(EfiStatus)
 pub fn alloc_highest_memory(
     b_s: *const EfiBootServices,
     pages: usize,
@@ -123,10 +128,18 @@ pub fn alloc_highest_memory(
     Ok(memory_address)
 }
 
-/// メモリマップを取得する
+/// Get memory map
 ///
-/// メモリマップを取得する際に、[`alloc_pool`]を使用し、その中にメモリマップを格納する。
-/// [`MemoryMapInfo::descriptor_address`]は[`free_pool`]で開放する。
+/// This function will allocate memory pool to store memory map by calling [`alloc_pool`]
+///
+/// # Arguments
+/// * `b_s` - EfiBootService
+///
+/// # Result
+/// If the allocation is succeeded, returns Ok(MemoryMapInfo), otherwise Err(EfiStatus)
+///
+/// # Attention
+/// After processed memory map, you must free [`MemoryMapInfo::descriptor_address`] with [`free_pool`]
 pub fn get_memory_map(b_s: *const EfiBootServices) -> Result<MemoryMapInfo, EfiStatus> {
     let mut memory_map_size = 0;
     let mut map_key = 0usize;

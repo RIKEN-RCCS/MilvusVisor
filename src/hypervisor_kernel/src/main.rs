@@ -8,11 +8,7 @@
 #![no_std]
 #![no_main]
 #![feature(asm_const)]
-#![feature(const_maybe_uninit_uninit_array)]
 #![feature(const_mut_refs)]
-#![feature(core_intrinsics)]
-#![feature(format_args_nl)]
-#![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 
@@ -22,6 +18,7 @@ mod acpi_protect;
 mod drivers;
 mod emulation;
 mod fast_restore;
+mod gic;
 mod memory_hook;
 mod multi_core;
 mod paging;
@@ -30,21 +27,25 @@ mod pci;
 mod psci;
 mod smmu;
 
-use common::cpu::{get_mpidr_el1, secure_monitor_call};
-use common::{acpi, bitmask};
-use common::{SystemInformation, ALLOC_SIZE, PAGE_SIZE};
+use common::cpu::{
+    advance_elr_el2, get_elr_el2, get_esr_el2, get_far_el2, get_hpfar_el2, get_mpidr_el1,
+    get_spsr_el2, secure_monitor_call,
+};
+use common::spin_flag::SpinLockFlag;
+use common::{
+    acpi, bitmask, MemoryAllocationError, MemoryAllocator, SystemInformation, COMPILER_INFO,
+    HYPERVISOR_HASH_INFO, HYPERVISOR_NAME, PAGE_SHIFT,
+};
 
-use core::arch::{asm, global_asm};
+use core::arch::global_asm;
 use core::mem::MaybeUninit;
 
 const EC_HVC: u8 = 0b010110;
 const EC_SMC_AA64: u8 = 0b010111;
 const EC_DATA_ABORT: u8 = 0b100100;
 
-const INSTRUCTION_SIZE: usize = 4;
-
-static mut MEMORY_POOL: ([MaybeUninit<usize>; ALLOC_SIZE / PAGE_SIZE], usize) =
-    (MaybeUninit::uninit_array(), 0);
+static mut MEMORY_ALLOCATOR: (SpinLockFlag, MaybeUninit<MemoryAllocator>) =
+    (SpinLockFlag::new(), MaybeUninit::uninit());
 static mut ACPI_RSDP: Option<usize> = None;
 static mut BSP_MPIDR: u64 = 0;
 
@@ -97,13 +98,16 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(s_info) = &system_information.serial_port {
         unsafe { serial_port::init_default_serial_port(s_info.clone()) };
     }
+
+    show_kernel_info();
+
     unsafe {
-        MEMORY_POOL = system_information.memory_pool.clone();
+        MEMORY_ALLOCATOR.1.assume_init_mut().init(
+            system_information.available_memory_info.0,
+            system_information.available_memory_info.1 << PAGE_SHIFT,
+        );
         ACPI_RSDP = system_information.acpi_rsdp_address;
     }
-
-    println!("Hello,world from Hypervisor Kernel!!");
-    show_features_status();
 
     if let Some(ecam_info) = &system_information.ecam_info {
         pci::init_pci(ecam_info.address, ecam_info.start_bus, ecam_info.end_bus);
@@ -131,14 +135,14 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         fast_restore::create_memory_trap_for_save_memory();
     }
 
-    unsafe {
-        BSP_MPIDR = get_mpidr_el1();
-        asm!("adr {:x}, vector_table_el2", out(reg) system_information.vbar_el2 );
+    unsafe { BSP_MPIDR = get_mpidr_el1() };
+    extern "C" {
+        fn vector_table_el2();
     }
-    return;
+    system_information.vbar_el2 = vector_table_el2 as *const fn() as usize as u64;
 }
 
-fn show_features_status() {
+fn show_kernel_info() {
     macro_rules! print_is_feature_enabled {
         ($feature:expr) => {
             println!(
@@ -153,6 +157,23 @@ fn show_features_status() {
         };
     }
 
+    if let Some(hash_info) = HYPERVISOR_HASH_INFO {
+        println!(
+            "{} Kernel Version {}({hash_info})",
+            HYPERVISOR_NAME,
+            env!("CARGO_PKG_VERSION")
+        );
+    } else {
+        println!(
+            "{} Kernel Version {}",
+            HYPERVISOR_NAME,
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    if let Some(compiler_info) = COMPILER_INFO {
+        println!("Compiler Information: {compiler_info}");
+    }
+
     print_is_feature_enabled!("smmu");
     print_is_feature_enabled!("i210");
     print_is_feature_enabled!("mt27800");
@@ -160,33 +181,63 @@ fn show_features_status() {
     print_is_feature_enabled!("acpi_table_protection");
     print_is_feature_enabled!("contiguous_bit");
     print_is_feature_enabled!("a64fx");
+    print_is_feature_enabled!("advanced_memory_manager");
 }
 
-pub fn allocate_memory(pages: usize) -> Result<usize, ()> {
-    if unsafe { MEMORY_POOL.1 < pages } {
-        return Err(());
+/// Allocate memory from memory pool
+///
+/// # Arguments
+/// * `pages` - The number of pages to allocate, the allocation size is `pages` << [`PAGE_SHIFT`]
+/// * `align` - The alignment of the returned address, if `None`, [`PAGE_SHIFT`] will be used
+///
+/// # Result
+/// If the allocation is succeeded, Ok(start_address), otherwise Err(())
+pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
+    unsafe {
+        MEMORY_ALLOCATOR.0.lock();
+        let result = MEMORY_ALLOCATOR
+            .1
+            .assume_init_mut()
+            .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT));
+        MEMORY_ALLOCATOR.0.unlock();
+        return result;
     }
-    unsafe { MEMORY_POOL.1 -= pages };
-    return Ok(unsafe { MEMORY_POOL.0[MEMORY_POOL.1].assume_init() });
+}
+
+/// Free memory to memory pool
+///
+/// # Arguments
+/// * address: The start address to return to memory pool, it must be allocated by [`allocate_memory`]
+/// * pages: The number of allocated pages
+///
+/// # Result
+/// If succeeded, Ok(()), otherwise Err(())
+pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationError> {
+    unsafe {
+        MEMORY_ALLOCATOR.0.lock();
+        let result = MEMORY_ALLOCATOR
+            .1
+            .assume_init_mut()
+            .free(address, pages << PAGE_SHIFT);
+        MEMORY_ALLOCATOR.0.unlock();
+        return result;
+    }
 }
 
 #[no_mangle]
 extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
-    let esr_el2: u64;
-    let elr_el2: u64;
-    let far_el2: u64;
-    let hpfar_el2: u64;
-    unsafe { asm!("mrs {:x}, esr_el2", out(reg) esr_el2) };
-    unsafe { asm!("mrs {:x}, elr_el2", out(reg) elr_el2) };
-    unsafe { asm!("mrs {:x}, far_el2", out(reg) far_el2) };
-    unsafe { asm!("mrs {:x}, hpfar_el2", out(reg) hpfar_el2) };
+    let esr_el2 = get_esr_el2();
+    let elr_el2 = get_elr_el2();
+    let far_el2 = get_far_el2();
+    let hpfar_el2 = get_hpfar_el2();
+    let spsr_el2 = get_spsr_el2();
 
     pr_debug!("Synchronous Exception!!");
     pr_debug!("ESR_EL2: {:#X}", esr_el2);
     pr_debug!("ELR_EL2: {:#X}", elr_el2);
     pr_debug!("FAR_EL2: {:#X}", far_el2);
     pr_debug!("HPFAR_EL2: {:#X}", hpfar_el2);
-    pr_debug!("MPIDR_EL1: {:#X}", mpidr_el1);
+    pr_debug!("MPIDR_EL1: {:#X}", get_mpidr_el1());
     pr_debug!("Registers: {:#X?}", regs);
 
     let ec = ((esr_el2 >> 26) & bitmask!(5, 0)) as u8;
@@ -216,11 +267,7 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
         },
         EC_SMC_AA64 => {
             /* Adjust return address */
-            unsafe {
-                asm!("mrs {t}, ELR_EL2
-                           add {t}, {t}, {size}
-                           msr ELR_EL2, {t}", t = out(reg) _, size = const INSTRUCTION_SIZE )
-            };
+            advance_elr_el2();
             let smc_number = esr_el2 & bitmask!(15, 0);
             pr_debug!("SecureMonitor Call: {:#X}", smc_number);
             pr_debug!("Registers: {:#X?}", regs);
@@ -257,7 +304,7 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
         EC_DATA_ABORT => {
             pr_debug!("Data Abort");
             if let Err(e) =
-                emulation::data_abort_handler(regs, esr_el2, elr_el2, far_el2, hpfar_el2)
+                emulation::data_abort_handler(regs, esr_el2, elr_el2, far_el2, hpfar_el2, spsr_el2)
             {
                 handler_panic!(regs, "Failed to emulate the instruction: {:?}", e);
             }
@@ -270,30 +317,20 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
 }
 
 #[no_mangle]
-extern "C" fn s_error_exception_handler() {
-    println!("S Error Exception!!");
-    loop {
-        unsafe {
-            asm!("wfi");
-        }
-    }
+extern "C" fn s_error_exception_handler(regs: &mut StoredRegisters) {
+    handler_panic!(regs, "S Error Exception!!");
 }
 
 #[track_caller]
 fn interrupt_handler_panic(s_r: &StoredRegisters, f: core::fmt::Arguments) -> ! {
-    let esr_el2: u64;
-    let elr_el2: u64;
-    let far_el2: u64;
-    let spsr_el2: u64;
-    let hpfar_el2: u64;
-    let mpidr_el1: u64;
-    unsafe { asm!("mrs {:x}, esr_el2", out(reg) esr_el2) };
-    unsafe { asm!("mrs {:x}, elr_el2", out(reg) elr_el2) };
-    unsafe { asm!("mrs {:x}, far_el2", out(reg) far_el2) };
-    unsafe { asm!("mrs {:x}, spsr_el2", out(reg) spsr_el2) };
-    unsafe { asm!("mrs {:x}, hpfar_el2", out(reg) hpfar_el2) };
-    unsafe { asm!("mrs {:x}, mpidr_el1", out(reg) mpidr_el1) };
-    if let Some(s) = unsafe { crate::serial_port::DEFAULT_SERIAL_PORT.as_ref() } {
+    let esr_el2 = get_esr_el2();
+    let elr_el2 = get_elr_el2();
+    let far_el2 = get_far_el2();
+    let spsr_el2 = get_spsr_el2();
+    let hpfar_el2 = get_hpfar_el2();
+    let mpidr_el1 = get_mpidr_el1();
+
+    if let Some(s) = unsafe { serial_port::DEFAULT_SERIAL_PORT.as_ref() } {
         unsafe { s.force_release_write_lock() };
     }
     println!("ESR_EL2: {:#X}", esr_el2);

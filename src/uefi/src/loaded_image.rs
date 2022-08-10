@@ -1,15 +1,15 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
 //!
-//! Loaded Image
+//! EFI Loaded Image Protocol
 //!
 
-use super::boot_service::memory_service::EfiMemoryType;
-use super::{EfiHandle, EfiStatus, EfiSystemTable};
+use crate::{boot_service::EfiMemoryType, EfiHandle, EfiStatus, EfiSystemTable};
 
 #[repr(C)]
 pub struct EfiLoadedImageProtocol {
@@ -24,5 +24,5 @@ pub struct EfiLoadedImageProtocol {
     pub image_base: usize,
     pub image_code_type: EfiMemoryType,
     pub image_data_type: EfiMemoryType,
-    pub unload: extern "C" fn(image_handle: EfiHandle) -> EfiStatus,
+    pub unload: extern "efiapi" fn(image_handle: EfiHandle) -> EfiStatus,
 }

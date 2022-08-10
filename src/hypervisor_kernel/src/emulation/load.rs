@@ -12,14 +12,14 @@
 //!
 
 use super::{
-    advance_elr_el2, faulting_va_to_ipa_load, get_register_reference_mut,
+    faulting_va_to_ipa_load, get_register_reference_mut, get_virtual_address_to_access_ipa,
     write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
 };
+
 use crate::memory_hook::{memory_load_hook_handler, LoadHookResult};
 use crate::StoredRegisters;
 
-use common::cpu::convert_virtual_address_to_physical_address_el2_read;
-use common::{bitmask, STAGE_2_PAGE_SHIFT};
+use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
 
 pub fn emulate_load_register(
     s_r: &mut StoredRegisters,
@@ -259,37 +259,22 @@ fn load_from_address_and_store_into_register(
         intermediate_physical_load_address,
         sse
     );
-    /* TODO: 物理アドレスへのアクセス関数を用意する。現方法だとVA!=PAの時に誤動作する */
-    let physical_load_address =
-        convert_virtual_address_to_physical_address_el2_read(intermediate_physical_load_address)
-            .expect("Failed to convert IPA => PA");
+    let virtual_address_to_load =
+        get_virtual_address_to_access_ipa(intermediate_physical_load_address, false)?;
 
-    pr_debug!(
-        "{}{} <= [{:#X}](PA)(Sign Extend: {})",
-        if sf { 'X' } else { 'W' },
-        target_register,
-        physical_load_address,
-        sse
-    );
     if !sf && size == 0b11 {
         println!("Invalid Instruction: Loading a 64bit data into the 32bit register.");
         return Err(());
     }
 
-    let hook_result = memory_load_hook_handler(physical_load_address, s_r, size, sf, sse)?;
+    let hook_result =
+        memory_load_hook_handler(intermediate_physical_load_address, s_r, size, sf, sse)?;
     let data = match hook_result {
         LoadHookResult::PassThrough => {
             if sse {
                 unimplemented!();
             } else {
-                use core::ptr::read_volatile;
-                match size {
-                    0b00 => unsafe { read_volatile(physical_load_address as *const u8) as u64 },
-                    0b01 => unsafe { read_volatile(physical_load_address as *const u16) as u64 },
-                    0b10 => unsafe { read_volatile(physical_load_address as *const u32) as u64 },
-                    0b11 => unsafe { read_volatile(physical_load_address as *const u64) },
-                    _ => unreachable!(),
-                }
+                _read_memory(virtual_address_to_load, size)
             }
         }
         LoadHookResult::Data(d) => d,
@@ -300,4 +285,23 @@ fn load_from_address_and_store_into_register(
         *get_register_reference_mut(s_r, target_register) = data;
     }
     return Ok(());
+}
+
+fn _read_memory(load_virtual_address: usize, access_size: u8) -> u64 {
+    use core::ptr::read_volatile;
+    match access_size {
+        0b00 => unsafe { read_volatile(load_virtual_address as *const u8) as u64 },
+        0b01 => unsafe { read_volatile(load_virtual_address as *const u16) as u64 },
+        0b10 => unsafe { read_volatile(load_virtual_address as *const u32) as u64 },
+        0b11 => unsafe { read_volatile(load_virtual_address as *const u64) },
+        _ => unreachable!(),
+    }
+}
+
+pub fn read_memory(intermediate_physical_load_address: usize, access_size: u8) -> u64 {
+    _read_memory(
+        get_virtual_address_to_access_ipa(intermediate_physical_load_address, false)
+            .expect("Failed to convert Address"),
+        access_size,
+    )
 }

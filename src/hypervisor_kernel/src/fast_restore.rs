@@ -5,27 +5,25 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-use crate::paging::{
-    add_memory_access_trap, map_address, remake_page_table, remove_memory_access_trap,
+use crate::{
+    allocate_memory, free_memory,
+    gic::restore_gic,
+    multi_core::{power_off_cpu, NUMBER_OF_RUNNING_AP, STACK_TO_FREE_LATER},
+    paging::{
+        add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
+    },
+    psci::PsciReturnCode,
+    smmu::restore_smmu_status,
+    StoredRegisters, BSP_MPIDR,
 };
-use crate::psci::{call_psci_function, PsciFunctionId};
-use crate::{allocate_memory, StoredRegisters, BSP_MPIDR, INSTRUCTION_SIZE};
 
-use common::acpi::get_acpi_table;
-use common::acpi::madt::MADT;
-use common::cpu::{
-    convert_virtual_address_to_intermediate_physical_address_el1_read,
-    convert_virtual_address_to_intermediate_physical_address_el1_write,
-};
 use common::{
     cpu, paging, MemorySaveListEntry, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, PAGE_MASK, PAGE_SHIFT,
-    PAGE_SIZE,
+    PAGE_SIZE, STACK_PAGES,
 };
 
-use core::arch::asm;
-use core::intrinsics::unlikely;
 use core::mem::MaybeUninit;
-use core::ptr::{copy_nonoverlapping, write_volatile};
+use core::ptr::copy_nonoverlapping;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 static IS_RESTORE_NEEDED: AtomicBool = AtomicBool::new(false);
@@ -57,7 +55,7 @@ pub fn add_memory_save_list(list: *mut [MemorySaveListEntry]) {
 
 pub fn create_memory_trap_for_save_memory() {
     unsafe { ORIGINAL_VTTBR_EL2 = cpu::get_vttbr_el2() };
-    let page_table = remake_page_table().expect("Failed to remake page table.");
+    let page_table = remake_stage2_page_table().expect("Failed to remake page table.");
     cpu::set_vttbr_el2(page_table as u64);
     let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
     for e in list {
@@ -77,12 +75,11 @@ pub fn create_memory_trap_for_save_memory() {
     }
 }
 
+#[inline(always)]
 pub fn check_memory_access_for_memory_save_list(ec: u8, far_el2: u64) -> bool {
-    if unlikely(unsafe { ORIGINAL_VTTBR_EL2 != 0 }) {
-        if ec == crate::EC_DATA_ABORT {
-            add_memory_area_to_memory_save_list(far_el2);
-            return true;
-        }
+    if unsafe { ORIGINAL_VTTBR_EL2 != 0 } && ec == crate::EC_DATA_ABORT {
+        add_memory_area_to_memory_save_list(far_el2);
+        return true;
     }
     return false;
 }
@@ -118,12 +115,15 @@ fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> 
     return None;
 }
 
+#[inline(never)]
 fn add_memory_area_to_memory_save_list(far_el2: u64) {
     let fault_address =
-        convert_virtual_address_to_intermediate_physical_address_el1_read(far_el2 as usize)
+        cpu::convert_virtual_address_to_intermediate_physical_address_el1_read(far_el2 as usize)
             .unwrap_or_else(|_| {
-                convert_virtual_address_to_intermediate_physical_address_el1_write(far_el2 as usize)
-                    .unwrap_or_else(|_| panic!("Failed to convert FAR_EL2({:#X})", far_el2))
+                cpu::convert_virtual_address_to_intermediate_physical_address_el1_write(
+                    far_el2 as usize,
+                )
+                .unwrap_or_else(|_| panic!("Failed to convert FAR_EL2({:#X})", far_el2))
             })
             & PAGE_MASK;
 
@@ -159,15 +159,13 @@ fn add_memory_area_to_memory_save_list(far_el2: u64) {
         }
         if e.saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG {
             available_entry = Some(e);
-        } else {
-            if e.memory_start == fault_address + PAGE_SIZE {
-                e.memory_start = fault_address;
-                e.num_of_pages += 1;
-                break;
-            } else if e.memory_start + ((e.num_of_pages as usize) << PAGE_SHIFT) == fault_address {
-                e.num_of_pages += 1;
-                break;
-            }
+        } else if e.memory_start == fault_address + PAGE_SIZE {
+            e.memory_start = fault_address;
+            e.num_of_pages += 1;
+            break;
+        } else if e.memory_start + ((e.num_of_pages as usize) << PAGE_SHIFT) == fault_address {
+            e.num_of_pages += 1;
+            break;
         }
         if i + 1 == list_length {
             let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
@@ -193,7 +191,7 @@ fn save_memory(list: &mut [MemorySaveListEntry]) {
         }
         if e.saved_address != usize::MAX {
             let allocated_memory =
-                allocate_memory(e.num_of_pages as usize).expect("Failed to allocate memory");
+                allocate_memory(e.num_of_pages as usize, None).expect("Failed to allocate memory");
             unsafe {
                 copy_nonoverlapping(
                     e.memory_start as *const u8,
@@ -269,11 +267,9 @@ pub fn exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
         return;
     }
     assert_ne!(elr, 0);
-    let hvc_address = elr as usize - INSTRUCTION_SIZE;
-    unsafe {
-        *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION;
-        asm!("msr elr_el2, {:x}", in(reg) hvc_address);
-    }
+    let hvc_address = elr as usize - cpu::AA64_INSTRUCTION_SIZE;
+    unsafe { *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION };
+    cpu::set_elr_el2(hvc_address as u64);
     save_original_instruction_and_insert_hvc(regs.x30 as usize, HVC_AFTER_EXIT_BOOT_SERVICE_TRAP);
 }
 
@@ -282,12 +278,12 @@ pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
         return;
     }
     assert_ne!(elr, 0);
-    let hvc_address = elr as usize - INSTRUCTION_SIZE;
+    let hvc_address = elr as usize - cpu::AA64_INSTRUCTION_SIZE;
     unsafe {
         *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION;
-        asm!("msr elr_el2, {:x}", in(reg) hvc_address);
         ORIGINAL_INSTRUCTION = 0;
     }
+    cpu::set_elr_el2(hvc_address as u64);
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
     pr_debug!("ExitBootServiceStatus: {:#X}", regs.x0);
@@ -314,14 +310,12 @@ pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
     cpu::set_vttbr_el2(unsafe { ORIGINAL_VTTBR_EL2 }); /* TODO: free old page table */
     unsafe { ORIGINAL_VTTBR_EL2 = 0 };
     pr_debug!("Remove page table for memory save");
-    return;
 }
 
-/// 再起動を検知した場合にこの関数を呼ぶ
-pub fn enter_restore_process() -> ! {
-    pr_debug!("Fast Restore is requested.");
-    cpu::local_irq_fiq_save();
-    IS_RESTORE_NEEDED.store(true, Ordering::SeqCst);
+/// If you disable all entries of Stage2 Page Table,
+/// don't call [`super::paging::add_memory_access_trap`] and [`super::paging::remove_memory_access_trap`]
+/// until you re-enable the entries.
+fn modify_all_enable_bit_of_stage2_top_level_entries(is_enabled: bool) {
     let stage_2_page_table = paging::TTBR::new(cpu::get_vttbr_el2()).get_base_address();
     let vtcr_el2 = cpu::get_vtcr_el2();
     let vtcr_el2_sl0 = ((vtcr_el2 & cpu::VTCR_EL2_SL0) >> cpu::VTCR_EL2_SL0_BITS_OFFSET) as u8;
@@ -335,14 +329,36 @@ pub fn enter_restore_process() -> ! {
     };
     let num_of_pages =
         paging::calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level);
-    for e in unsafe {
+
+    let table = unsafe {
         core::slice::from_raw_parts_mut(
             stage_2_page_table as *mut u64,
             (paging::PAGE_TABLE_SIZE / core::mem::size_of::<u64>()) * num_of_pages as usize,
         )
-    } {
-        *e &= !1;
+    };
+    if is_enabled {
+        for e in table {
+            *e |= 1;
+        }
+    } else {
+        for e in table {
+            *e &= !1;
+        }
     }
+}
+
+/// This function will be called when the guest OS requested power off or reboot
+pub fn enter_restore_process() -> ! {
+    pr_debug!("Fast Restore is requested.");
+    cpu::local_irq_fiq_save();
+    IS_RESTORE_NEEDED.store(true, Ordering::SeqCst);
+
+    modify_all_enable_bit_of_stage2_top_level_entries(false);
+    /*
+        After this point, we must not modify stage2 page table
+        including add_memory_access_trap/remove_memory_access_trap
+    */
+
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
     /* TODO: check if register access is enabled. */
@@ -356,26 +372,50 @@ pub fn enter_restore_process() -> ! {
 
 #[inline(always)]
 pub fn perform_restore_if_needed() {
-    if unlikely(IS_RESTORE_NEEDED.load(Ordering::Relaxed)) {
+    if IS_RESTORE_NEEDED.load(Ordering::Relaxed) {
         restore_main();
     }
 }
 
+#[inline(never)]
 fn restore_main() -> ! {
+    cpu::local_irq_fiq_save();
     if unsafe { BSP_MPIDR } != cpu::get_mpidr_el1() {
         pr_debug!("This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)", cpu::get_mpidr_el1());
+        let result = power_off_cpu();
         panic!(
-            "Failed to call CPU_OFF: {}",
-            call_psci_function(PsciFunctionId::CpuOff, 0, 0, 0) as i32
+            "Failed to call CPU_OFF: {:#X?}",
+            PsciReturnCode::try_from(result)
         );
     }
-    cpu::local_irq_fiq_save();
     println!("BSP entered the restore process.");
+    println!("Wait until all APs are powered off...");
+    cpu::dsb();
+    cpu::isb();
+    while NUMBER_OF_RUNNING_AP.load(Ordering::Relaxed) != 0 {
+        core::hint::spin_loop();
+    }
+    println!("All APs are powered off.");
+
+    modify_all_enable_bit_of_stage2_top_level_entries(true);
+    /* Now, we can call add_memory_access_trap/remove_memory_access_trap */
+
+    /* Free last one AP's stack if needed */
+    let old_stack = STACK_TO_FREE_LATER.load(Ordering::Relaxed);
+    if old_stack != 0 {
+        if let Err(err) = free_memory(old_stack, STACK_PAGES) {
+            println!("Failed to free stack: {:?}", err);
+        }
+        STACK_TO_FREE_LATER.store(0, Ordering::Relaxed);
+    }
 
     /* Restore GIC */
     if let Some(acpi_rsdp) = unsafe { crate::ACPI_RSDP } {
         restore_gic(acpi_rsdp);
     }
+
+    #[cfg(feature = "smmu")]
+    restore_smmu_status();
 
     /* Restore saved registers */
     let saved_registers = unsafe { SAVED_SYSTEM_REGISTERS.assume_init_read() };
@@ -394,33 +434,12 @@ fn restore_main() -> ! {
     pr_debug!("Restore the memory");
     restore_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
 
-    let stage_2_page_table = paging::TTBR::new(cpu::get_vttbr_el2()).get_base_address();
-    let vtcr_el2 = cpu::get_vtcr_el2();
-    let vtcr_el2_sl0 = ((vtcr_el2 & cpu::VTCR_EL2_SL0) >> cpu::VTCR_EL2_SL0_BITS_OFFSET) as u8;
-    let vtcr_el2_t0sz = ((vtcr_el2 & cpu::VTCR_EL2_T0SZ) >> cpu::VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
-    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
-        0b00 => 2,
-        0b01 => 1,
-        0b10 => 0,
-        0b11 => 3,
-        _ => unreachable!(),
-    };
-    let num_of_pages =
-        paging::calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level);
-    for e in unsafe {
-        core::slice::from_raw_parts_mut(
-            stage_2_page_table as *mut u64,
-            (paging::PAGE_TABLE_SIZE / core::mem::size_of::<u64>()) * num_of_pages as usize,
-        )
-    } {
-        *e |= 1;
-    }
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
     pr_debug!("ERET");
     IS_RESTORE_NEEDED.store(false, Ordering::SeqCst);
     unsafe {
-        asm!("
+        core::arch::asm!("
             ldp x30, xzr, [x0, #( 15 * 16)]
             ldp x28, x29, [x0, #( 14 * 16)]
             ldp x26, x27, [x0, #( 13 * 16)]
@@ -438,34 +457,5 @@ fn restore_main() -> ! {
             ldp  x2,  x3, [x0, #(  1 * 16)]
             ldp  x0,  x1, [x0, #(  0 * 16)]
             eret", in("x0") SAVED_REGISTERS.as_ptr() as usize, options(noreturn))
-    }
-}
-
-const GICR_WAKER: usize = 0x0014;
-const GCIR_WAKER_PROCESSOR_SLEEP: u32 = 1 << 1;
-
-const GICD_CTLR: usize = 0x00;
-
-fn restore_gic(acpi_address: usize) {
-    // TODO: Discovery Base Address
-    if let Ok(table) = get_acpi_table(acpi_address, b"APIC") {
-        let table = unsafe { &*(table as *const MADT) };
-        let list = table.get_gic_list();
-        for e in list {
-            /* Set sleep */
-            let redistributor_base = e.gicr_base_address as usize;
-            if redistributor_base == 0 {
-                todo!()
-            }
-            let waker = redistributor_base + GICR_WAKER;
-            unsafe { write_volatile(waker as *mut u32, GCIR_WAKER_PROCESSOR_SLEEP) };
-        }
-        if let Some(distributor) = table.get_gic_distributor_address() {
-            if distributor != 0 {
-                unsafe { write_volatile((distributor + GICD_CTLR) as *mut u32, 0) };
-            }
-        } else {
-            println!("DistributorBase is zero");
-        }
     }
 }

@@ -16,15 +16,17 @@ use core::arch::asm;
 #[derive(Clone)]
 pub struct InterruptFlag(u64);
 
-/* CPU Bit Fields */
+pub const AA64_INSTRUCTION_SIZE: usize = 4;
+
+/* DAIF */
 pub const DAIF_IRQ_BIT: u64 = 7;
 pub const DAIF_FIQ_BIT: u64 = 6;
 
-/* CNTHCTL_EL2 Register */
+/* CNTHCTL_EL2 */
 pub const CNTHCTL_EL2_EL1PCEN: u64 = 1 << 1;
 pub const CNTHCTL_EL2_EL1PCTEN: u64 = 1 << 0;
 
-/* CPACR_EL1 Register */
+/* CPACR_EL1 */
 pub const CPACR_EL1_TTA_BIT_OFFSET: u64 = 28;
 //pub const CPACR_EL1_TTA: u64 = 1 << CPACR_EL1_TTA_BIT_OFFSET;
 pub const CPACR_EL1_FPEN_BITS_OFFSET: u64 = 20;
@@ -32,7 +34,7 @@ pub const CPACR_EL1_FPEN_BITS_OFFSET: u64 = 20;
 pub const CPACR_EL1_ZEN_BITS_OFFSET: u64 = 16;
 //pub const CPACR_EL1_ZEN: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
 
-/* CPTR_EL2 Register */
+/* CPTR_EL2 */
 pub const CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H: u64 = 28;
 pub const CPTR_EL2_TTA_WITH_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H;
 pub const CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H: u64 = 20;
@@ -45,7 +47,7 @@ pub const CPTR_EL2_ZEN: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
 pub const CPTR_EL2_ZEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
 //pub const CPTR_EL2_RES1: u64 = 0b11111111 | (1 << 9) | (0b11 << 12);
 
-/* TCR_EL2 Register */
+/* TCR_EL2 */
 pub const TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H: u64 = 32;
 pub const TCR_EL2_DS_WITHOUT_E2H: u64 = 1 << TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H;
 pub const TCR_EL2_TCMA_BIT_OFFSET_WITHOUT_E2H: u64 = 30;
@@ -69,7 +71,7 @@ pub const TCR_EL2_TG0_WITHOUT_E2H: u64 = 0b11 << TCR_EL2_TG0_BITS_OFFSET_WITHOUT
 pub const TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H: u64 = 0;
 pub const TCR_EL2_T0SZ_WITHOUT_E2H: u64 = 0b111111 << TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H;
 
-/* TCR_EL1 Register */
+/* TCR_EL1 */
 pub const TCR_EL1_DS_BIT_OFFSET: u64 = 59;
 //pub const TCR_EL1_DS: u64 = 1 << TCR_EL1_DS_BIT_OFFSET;
 pub const TCR_EL1_TCMA0_BIT_OFFSET: u64 = 57;
@@ -90,7 +92,7 @@ pub const TCR_EL1_IPS_BITS_OFFSET: u64 = 32;
 //pub const TCR_EL1_IPS: u64 = 0b111 << TCR_EL1_IPS_BITS_OFFSET;
 pub const TCR_EL1_EPD1: u64 = 1 << 23;
 
-/* HCR_EL2 Register */
+/* HCR_EL2 */
 pub const HCR_EL2_FIEN: u64 = 1 << 47;
 pub const HCR_EL2_API: u64 = 1 << 41;
 pub const HCR_EL2_APK: u64 = 1 << 40;
@@ -100,7 +102,7 @@ pub const HCR_EL2_RW: u64 = 1 << 31;
 pub const HCR_EL2_TSC: u64 = 1 << 19;
 pub const HCR_EL2_VM: u64 = 1 << 0;
 
-/* VTCR_EL2 Register */
+/* VTCR_EL2 */
 pub const VTCR_EL2_SL2_BIT_OFFSET: u64 = 33;
 pub const VTCR_EL2_SL2: u64 = 1 << VTCR_EL2_SL2_BIT_OFFSET;
 pub const VTCR_EL2_RES1: u64 = 1 << 31;
@@ -108,6 +110,7 @@ pub const VTCR_EL2_HWU_BITS_OFFSET: u64 = 25;
 pub const VTCR_EL2_PS_BITS_OFFSET: u64 = 16;
 pub const VTCR_EL2_PS: u64 = 0b111 << VTCR_EL2_PS_BITS_OFFSET;
 pub const VTCR_EL2_TG0_BITS_OFFSET: u64 = 14;
+pub const VTCR_EL2_TG0: u64 = 0b11 << VTCR_EL2_TG0_BITS_OFFSET;
 pub const VTCR_EL2_SH0_BITS_OFFSET: u64 = 12;
 pub const VTCR_EL2_ORG0_BITS_OFFSET: u64 = 10;
 pub const VTCR_EL2_IRG0_BITS_OFFSET: u64 = 8;
@@ -115,6 +118,10 @@ pub const VTCR_EL2_SL0_BITS_OFFSET: u64 = 6;
 pub const VTCR_EL2_SL0: u64 = 0b11 << VTCR_EL2_SL0_BITS_OFFSET;
 pub const VTCR_EL2_T0SZ_BITS_OFFSET: u64 = 0;
 pub const VTCR_EL2_T0SZ: u64 = 0b111111 << VTCR_EL2_T0SZ_BITS_OFFSET;
+
+/* SPSR_EL2 */
+pub const SPSR_EL2_M: u64 = 0b1111;
+pub const SPSR_EL2_M_EL0T: u64 = 0b0000;
 
 /* ID_AA64PFR0_EL1 */
 pub const ID_AA64PFR0_EL1_SVE: u64 = 0b1111 << 32;
@@ -126,9 +133,7 @@ pub const ID_AA64MMFR0_EL1_PARANGE: u64 = 0b1111;
 /* ZCR_EL2 */
 pub const MAX_ZCR_EL2_LEN: u64 = 0x1ff;
 
-/// SMC Calling Convention 1.2に沿ったSMCを発行
-///
-/// 指定したレジスタの値をセットした状況でSMC #0を発行します。
+/// Execute SMC #0 with SMC Calling Convention 1.2
 pub fn secure_monitor_call(
     x0: &mut u64,
     x1: &mut u64,
@@ -249,6 +254,25 @@ pub fn set_vtcr_el2(vtcr_el2: u64) {
 }
 
 #[inline(always)]
+pub fn get_hcr_el2() -> u64 {
+    let hcr_el2: u64;
+    unsafe { asm!("mrs {:x}, hcr_el2", out(reg) hcr_el2) };
+    return hcr_el2;
+}
+
+#[inline(always)]
+pub fn set_hcr_el2(hcr_el2: u64) {
+    unsafe { asm!("msr hcr_el2, {:x}", in(reg) hcr_el2) };
+}
+
+#[inline(always)]
+pub fn get_current_el() -> u64 {
+    let current_el: u64;
+    unsafe { asm!("mrs {:x}, currentel", out(reg) current_el) };
+    return current_el;
+}
+
+#[inline(always)]
 pub fn set_icc_sgi1r_el1(icc_sgi1r_el1: u64) {
     unsafe { asm!("msr icc_sgi1r_el1, {:x}", in(reg) icc_sgi1r_el1) };
 }
@@ -343,6 +367,35 @@ pub fn set_mair_el1(mair_el1: u64) {
 }
 
 #[inline(always)]
+pub fn get_cnthctl_el2() -> u64 {
+    let cnthctl_el2: u64;
+    unsafe { asm!("mrs {:x}, cnthctl_el2", out(reg) cnthctl_el2) };
+    return cnthctl_el2;
+}
+
+#[inline(always)]
+pub fn set_cnthctl_el2(cnthctl_el2: u64) {
+    unsafe { asm!("msr cnthctl_el2, {:x}", in(reg) cnthctl_el2) };
+}
+
+#[inline(always)]
+pub fn set_cntvoff_el2(cntvoff_el2: u64) {
+    unsafe { asm!("msr cntvoff_el2, {:x}", in(reg) cntvoff_el2) };
+}
+
+#[inline(always)]
+pub fn get_cptr_el2() -> u64 {
+    let cptr_el2: u64;
+    unsafe { asm!("mrs {:x}, cptr_el2", out(reg) cptr_el2) };
+    return cptr_el2;
+}
+
+#[inline(always)]
+pub fn set_cptr_el2(cptr_el2: u64) {
+    unsafe { asm!("msr cptr_el2, {:x}", in(reg) cptr_el2) };
+}
+
+#[inline(always)]
 pub fn get_cpacr_el1() -> u64 {
     let cpacr_el1: u64;
     unsafe { asm!("mrs {:x}, cpacr_el1", out(reg) cpacr_el1) };
@@ -352,6 +405,18 @@ pub fn get_cpacr_el1() -> u64 {
 #[inline(always)]
 pub fn set_cpacr_el1(cpacr_el1: u64) {
     unsafe { asm!("msr cpacr_el1, {:x}", in(reg) cpacr_el1) };
+}
+
+#[inline(always)]
+pub fn get_sctlr_el2() -> u64 {
+    let sctlr_el2: u64;
+    unsafe { asm!("mrs {:x}, sctlr_el2", out(reg) sctlr_el2) };
+    return sctlr_el2;
+}
+
+#[inline(always)]
+pub fn set_sctlr_el2(sctlr_el2: u64) {
+    unsafe { asm!("msr sctlr_el2, {:x}", in(reg) sctlr_el2) };
 }
 
 #[inline(always)]
@@ -367,6 +432,18 @@ pub fn set_sctlr_el1(sctlr_el1: u64) {
 }
 
 #[inline(always)]
+pub fn get_vbar_el2() -> u64 {
+    let vbar_el2: u64;
+    unsafe { asm!("mrs {:x}, vbar_el2", out(reg) vbar_el2) };
+    return vbar_el2;
+}
+
+#[inline(always)]
+pub fn set_vbar_el2(vbar_el2: u64) {
+    unsafe { asm!("msr vbar_el2, {:x}", in(reg) vbar_el2) };
+}
+
+#[inline(always)]
 pub fn get_vbar_el1() -> u64 {
     let vbar_el1: u64;
     unsafe { asm!("mrs {:x}, vbar_el1", out(reg) vbar_el1) };
@@ -376,6 +453,27 @@ pub fn get_vbar_el1() -> u64 {
 #[inline(always)]
 pub fn set_vbar_el1(vbar_el1: u64) {
     unsafe { asm!("msr vbar_el1, {:x}", in(reg) vbar_el1) };
+}
+
+#[inline(always)]
+pub fn get_esr_el2() -> u64 {
+    let esr_el2: u64;
+    unsafe { asm!("mrs {:x}, esr_el2", out(reg) esr_el2) };
+    return esr_el2;
+}
+
+#[inline(always)]
+pub fn get_far_el2() -> u64 {
+    let far_el2: u64;
+    unsafe { asm!("mrs {:x}, far_el2", out(reg) far_el2) };
+    return far_el2;
+}
+
+#[inline(always)]
+pub fn get_hpfar_el2() -> u64 {
+    let hpfar_el2: u64;
+    unsafe { asm!("mrs {:x}, hpfar_el2", out(reg) hpfar_el2) };
+    return hpfar_el2;
 }
 
 #[inline(always)]
@@ -403,6 +501,13 @@ pub fn set_elr_el2(elr_el2: u64) {
 }
 
 #[inline(always)]
+pub fn get_sp() -> u64 {
+    let sp: u64;
+    unsafe { asm!("mov {:x}, sp", out(reg) sp) };
+    return sp;
+}
+
+#[inline(always)]
 pub fn get_sp_el1() -> u64 {
     let sp_el1: u64;
     unsafe { asm!("mrs {:x}, sp_el1", out(reg) sp_el1) };
@@ -422,10 +527,22 @@ pub fn get_id_aa64mmfr0_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_id_aa64pfr0_el1() -> u64 {
+    let id_aa64pfr0_el1: u64;
+    unsafe { asm!("mrs {:x}, id_aa64pfr0_el1", out(reg) id_aa64pfr0_el1) };
+    return id_aa64pfr0_el1;
+}
+
+#[inline(always)]
 pub fn get_mpidr_el1() -> u64 {
     let mpidr_el1: u64;
     unsafe { asm!("mrs {:x}, mpidr_el1", out(reg) mpidr_el1) };
     return mpidr_el1;
+}
+
+#[inline(always)]
+pub fn advance_elr_el2() {
+    set_elr_el2(get_elr_el2() + AA64_INSTRUCTION_SIZE as u64);
 }
 
 #[inline(always)]
@@ -455,6 +572,16 @@ pub fn flush_tlb_el1() {
 }
 
 #[inline(always)]
+pub fn dsb() {
+    unsafe { asm!("dsb sy") }
+}
+
+#[inline(always)]
+pub fn isb() {
+    unsafe { asm!("isb") }
+}
+
+#[inline(always)]
 pub fn flush_tlb_ipa_is(address: u64) {
     unsafe { asm!("TLBI IPAS2E1IS, {:x}", in(reg) address) };
 }
@@ -474,44 +601,40 @@ pub fn send_event_all() {
     unsafe { asm!("SEV") };
 }
 
-/// 現時点の割り込み状況を保存し、IRQ/FIQを禁止
+/// Save current interrupt status and disable IRQ/FIQ
 ///
-/// # Return Value
-/// 保存された割り込み状況、 [`local_irq_fiq_restore`]の引数として使用
+/// # Result
+/// Saved interrupt status, should be used as the argument of [`local_irq_fiq_restore`]
 pub fn local_irq_fiq_save() -> InterruptFlag {
     let mut daif: u64;
     unsafe { asm!("mrs {:x}, DAIF", out(reg) daif) };
     let flag = InterruptFlag(daif);
     daif |= (1 << DAIF_IRQ_BIT) | (1 << DAIF_FIQ_BIT);
-    unsafe {
-        asm!("  dsb ish
-                isb
-                msr DAIF, {:x}", in(reg) daif)
-    };
+    dsb();
+    isb();
+    unsafe { asm!("msr DAIF, {:x}", in(reg) daif) };
     flag
 }
 
-/// 割り込み状況を復元
+/// Restore interrupt
 ///
 /// # Arguments
-/// * f: 保存された割り込み状況、 [`local_irq_fiq_save`]の戻り値
+/// * f - InterruptFlag, the returned value of [`local_irq_fiq_restore`]
 pub fn local_irq_fiq_restore(f: InterruptFlag) {
-    unsafe {
-        asm!("  dsb ish
-                isb
-                msr DAIF, {:x}", in(reg) f.0)
-    };
+    dsb();
+    isb();
+    unsafe { asm!("msr DAIF, {:x}", in(reg) f.0) };
 }
 
-/// 渡された仮想アドレスをEL2での仮想アドレスと解釈し、物理アドレスに変換
+/// Convert virtual address of EL2 for read access to physical address
 ///
-/// AT S1E2Rを使用して、物理アドレスに変換します。マップされてない場合などはErrを返します。
+/// This function uses AT S1E2R instruction.
 ///
 /// # Arguments
-/// virtual_address: 変換を行う仮想アドレス
+/// * virtual_address - the virtual address to convert
 ///
-/// # Return Value
-/// 変換に成功した場合はOk(physical_address)、失敗した場合はErr(())
+/// # Result
+/// If succeeded, returns Ok(physical_address), otherwise(the address is not accessible) returns Err(())
 pub fn convert_virtual_address_to_physical_address_el2_read(
     virtual_address: usize,
 ) -> Result<usize, ()> {
@@ -532,15 +655,15 @@ pub fn convert_virtual_address_to_physical_address_el2_read(
     }
 }
 
-/// 渡された仮想アドレスをEL2での仮想アドレスと解釈し、物理アドレスに変換
+/// Convert virtual address of EL2 for write access to physical address
 ///
-/// AT S1E2Wを使用して、物理アドレスに変換します。マップされてない場合などはErrを返します。
+/// This function uses AT S1E2W instruction.
 ///
 /// # Arguments
-/// virtual_address: 変換を行う仮想アドレス
+/// * virtual_address - the virtual address to convert
 ///
-/// # Return Value
-/// 変換に成功した場合はOk(physical_address)、失敗した場合はErr(())
+/// # Result
+/// If succeeded, returns Ok(physical_address), otherwise(the address is not accessible) returns Err(())
 pub fn convert_virtual_address_to_physical_address_el2_write(
     virtual_address: usize,
 ) -> Result<usize, ()> {
@@ -561,15 +684,46 @@ pub fn convert_virtual_address_to_physical_address_el2_write(
     }
 }
 
-/// 渡された仮想アドレスをEL1での仮想アドレスと解釈し、中間物理アドレス(IPA)に変換
+/// Convert virtual address of EL0 for read access to intermediate physical address
 ///
-/// AT S1E1Rを使用して、中間物理アドレスに変換します。マップされてない場合などはErrを返します。
+/// This function uses AT S1E0R instruction.
 ///
 /// # Arguments
-/// virtual_address: 変換を行う仮想アドレス
+/// * virtual_address - **the virtual address of EL0** to convert
 ///
-/// # Return Value
-/// 変換に成功した場合はOk(physical_address)、失敗した場合はErr(())
+/// # Result
+/// If succeeded, returns Ok(intermediate_physical_address),
+///  otherwise(the address is not accessible) returns Err(())
+pub fn convert_virtual_address_to_intermediate_physical_address_el0_read(
+    virtual_address: usize,
+) -> Result<usize, ()> {
+    let aligned_virtual_address = virtual_address & PAGE_MASK;
+    let offset = virtual_address & !PAGE_MASK;
+    let aligned_physical_address: usize;
+    unsafe {
+        asm!("  at S1E0R, {:x}
+                mrs {:x}, par_el1",
+        in(reg) (aligned_virtual_address),
+        out(reg) aligned_physical_address)
+    };
+
+    if (aligned_physical_address & 1) == 0 {
+        Ok((aligned_physical_address & bitmask!(51, PAGE_SHIFT)) + offset)
+    } else {
+        Err(())
+    }
+}
+
+/// Convert virtual address of EL1 for read access to intermediate physical address
+///
+/// This function uses AT S1E1R instruction.
+///
+/// # Arguments
+/// * virtual_address - **the virtual address of EL1** to convert
+///
+/// # Result
+/// If succeeded, returns Ok(intermediate_physical_address),
+///  otherwise(the address is not accessible) returns Err(())
 pub fn convert_virtual_address_to_intermediate_physical_address_el1_read(
     virtual_address: usize,
 ) -> Result<usize, ()> {
@@ -590,15 +744,16 @@ pub fn convert_virtual_address_to_intermediate_physical_address_el1_read(
     }
 }
 
-/// 渡された仮想アドレスをEL1での仮想アドレスと解釈し、中間物理アドレス(IPA)に変換
+/// Convert virtual address of EL1 for write access to intermediate physical address
 ///
-/// AT S1E1Wを使用して、中間物理アドレスに変換します。マップされてない場合などはErrを返します。
+/// This function uses AT S1E1W instruction.
 ///
 /// # Arguments
-/// virtual_address: 変換を行う仮想アドレス
+/// * `virtual_address` - **the virtual address of EL1** to convert
 ///
-/// # Return Value
-/// 変換に成功した場合はOk(physical_address)、失敗した場合はErr(())
+/// # Result
+/// If succeeded, returns Ok(intermediate_physical_address),
+///  otherwise(the address is not accessible) returns Err(())
 pub fn convert_virtual_address_to_intermediate_physical_address_el1_write(
     virtual_address: usize,
 ) -> Result<usize, ()> {
@@ -621,8 +776,8 @@ pub fn convert_virtual_address_to_intermediate_physical_address_el1_write(
 
 /// Halt Loop
 ///
-/// CPUを待機状態にさせ停止させる
-/// マルチコア制御には未対応
+/// Stop the cpu.
+/// This function does not support to stop all cpus.
 pub fn halt_loop() -> ! {
     loop {
         unsafe { asm!("wfi") };

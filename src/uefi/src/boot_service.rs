@@ -9,35 +9,34 @@
 //! UEFI Boot Services
 //!
 
-pub mod memory_service;
+mod memory_service;
 
-use memory_service::{EfiAllocateType, EfiMemoryDescriptor, EfiMemoryType};
+pub use memory_service::*;
 
-use super::{EfiHandle, EfiStatus, EfiTableHeader, Guid};
+use crate::{EfiHandle, EfiStatus, EfiTableHeader, Guid};
 
-#[derive(Debug)]
 #[repr(C)]
 pub struct EfiBootServices {
     efi_table_header: EfiTableHeader,
     raise_tpl: usize,
     restore_tpl: usize,
-    pub allocate_pages: extern "C" fn(
+    allocate_pages: extern "efiapi" fn(
         allocate_type: EfiAllocateType,
         memory_type: EfiMemoryType,
         pages: usize,
         memory: *mut usize,
     ) -> EfiStatus,
     free_pages: usize,
-    pub get_memory_map: extern "C" fn(
+    get_memory_map: extern "efiapi" fn(
         memory_map_size: *mut usize,
         memory_map: *mut EfiMemoryDescriptor,
         map_key: *mut usize,
         descriptor_size: *mut usize,
         descriptor_version: *mut u32,
     ) -> EfiStatus,
-    pub allocate_pool:
-        extern "C" fn(pool_type: EfiMemoryType, size: usize, memory: *mut usize) -> EfiStatus,
-    pub free_pool: extern "C" fn(memory: usize) -> EfiStatus,
+    allocate_pool:
+        extern "efiapi" fn(pool_type: EfiMemoryType, size: usize, memory: *mut usize) -> EfiStatus,
+    free_pool: extern "efiapi" fn(memory: usize) -> EfiStatus,
     create_event: usize,
     set_timer: usize,
     wait_for_event: usize,
@@ -55,20 +54,21 @@ pub struct EfiBootServices {
     install_configuration_table: usize,
     load_image: usize,
     start_image: usize,
-    pub exit: extern "C" fn(
+    pub exit: extern "efiapi" fn(
         image_handler: EfiHandle,
         exit_status: EfiStatus,
         exit_data_size: usize,
         exit_data: *const u16,
     ) -> EfiStatus,
     unload_image: usize,
-    pub exit_boot_services: extern "C" fn(image_handler: EfiHandle, map_key: usize) -> EfiStatus,
+    pub exit_boot_services:
+        extern "efiapi" fn(image_handler: EfiHandle, map_key: usize) -> EfiStatus,
     get_next_monotonic_count: usize,
     stall: usize,
     set_watchdog_timer: usize,
     connect_controller: usize,
     disconnect_controller: usize,
-    pub open_protocol: extern "C" fn(
+    pub open_protocol: extern "efiapi" fn(
         handle: EfiHandle,
         protocol: *const Guid,
         interface: *mut *const usize,
@@ -80,7 +80,7 @@ pub struct EfiBootServices {
     open_protocol_information: usize,
     protocols_per_handle: usize,
     locate_handle_buffer: usize,
-    pub locate_protocol: extern "C" fn(
+    pub locate_protocol: extern "efiapi" fn(
         protocol: *const Guid,
         registration: *const usize,
         interface: *mut *const usize,
@@ -88,7 +88,19 @@ pub struct EfiBootServices {
     install_multiple_protocol_interfaces: usize,
     uninstall_multiple_protocol_interfaces: usize,
     calculate_crc32: usize,
-    pub copy_mem: extern "C" fn(destination: usize, source: usize, length: usize),
-    pub set_mem: extern "C" fn(buffer: usize, size: usize, value: u8),
+    copy_mem: extern "efiapi" fn(destination: usize, source: usize, length: usize),
+    set_mem: extern "efiapi" fn(buffer: usize, size: usize, value: u8),
     create_event_ex: usize,
 }
+
+pub const EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL: u32 = 0x00000001;
+#[allow(dead_code)]
+pub const EFI_OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x00000002;
+#[allow(dead_code)]
+pub const EFI_OPEN_PROTOCOL_TEST_PROTOCOL: u32 = 0x00000004;
+#[allow(dead_code)]
+pub const EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER: u32 = 0x00000008;
+#[allow(dead_code)]
+pub const EFI_OPEN_PROTOCOL_BY_DRIVER: u32 = 0x00000010;
+#[allow(dead_code)]
+pub const EFI_OPEN_PROTOCOL_EXCLUSIVE: u32 = 0x00000020;

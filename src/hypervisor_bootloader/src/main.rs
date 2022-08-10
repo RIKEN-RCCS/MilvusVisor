@@ -7,12 +7,10 @@
 
 #![no_std]
 #![no_main]
-#![feature(asm_sym)]
-#![feature(const_maybe_uninit_uninit_array)]
-#![feature(format_args_nl)]
-#![feature(maybe_uninit_uninit_array)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
+#![feature(let_else)]
+#![feature(int_log)]
 
 #[macro_use]
 mod console;
@@ -25,15 +23,11 @@ mod serial_port;
 mod smmu;
 
 use common::cpu::*;
-use common::{
-    HypervisorKernelMainType, MemorySaveListEntry, SystemInformation, ALLOC_SIZE, HYPERVISOR_PATH,
-    HYPERVISOR_SERIAL_BASE_ADDRESS, HYPERVISOR_VIRTUAL_BASE_ADDRESS, MAX_PHYSICAL_ADDRESS,
-    MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES,
-};
+use common::*;
 
 use uefi::{
-    boot_service, boot_service::EfiBootServices, file, EfiConfigurationTable, EfiHandle, EfiStatus,
-    EfiSystemTable, EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
+    boot_service, file, EfiConfigurationTable, EfiHandle, EfiStatus, EfiSystemTable,
+    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
 };
 
 use core::arch::asm;
@@ -44,47 +38,53 @@ static mut ORIGINAL_VECTOR_BASE: u64 = 0;
 static mut ORIGINAL_TCR_EL2: u64 = 0;
 static mut INTERRUPT_FLAG: MaybeUninit<InterruptFlag> = MaybeUninit::uninit();
 
-static mut MEMORY_POOL: ([MaybeUninit<usize>; ALLOC_SIZE / PAGE_SIZE], usize) =
-    (MaybeUninit::uninit_array(), 0);
-
 static mut IMAGE_HANDLE: EfiHandle = 0;
 static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
 static mut ACPI_20_TABLE_ADDRESS: Option<usize> = None;
 static mut DTB_ADDRESS: Option<usize> = None;
+static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) {
     unsafe {
-        /* Initialize console to use UEFI Output Protocol */
-        console::DEFAULT_CONSOLE.init((*system_table).console_output_protocol);
         IMAGE_HANDLE = image_handle;
         SYSTEM_TABLE = system_table;
+        console::DEFAULT_CONSOLE.init((*system_table).console_output_protocol);
     }
 
-    println!("Hello,world!");
+    if let Some(hash_info) = HYPERVISOR_HASH_INFO {
+        println!(
+            "{} Bootloader Version {}({hash_info})",
+            HYPERVISOR_NAME,
+            env!("CARGO_PKG_VERSION")
+        );
+    } else {
+        println!(
+            "{} Bootloader Version {}",
+            HYPERVISOR_NAME,
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    if let Some(compiler_info) = COMPILER_INFO {
+        println!("Compiler Information: {compiler_info}");
+    }
 
-    let efi_boot_services = unsafe { (*system_table).efi_boot_services };
-    init_memory_pool(efi_boot_services);
+    assert_eq!(get_current_el() >> 2, 2, "Expected CurrentEL is EL2");
+
+    let allocated_memory_address = init_memory_pool();
+
     #[cfg(debug_assertions)]
-    dump_memory_map(efi_boot_services);
+    dump_memory_map();
 
-    let current_el: usize;
-    unsafe { asm!("mrs {:x}, CurrentEL", out(reg) current_el) };
-    let current_el = current_el >> 2;
-    println!("CurrentEL: {}", current_el);
-    if current_el != 2 {
-        panic!("Expected current_el == 2");
-    }
-
-    let entry_point = load_hypervisor(image_handle, efi_boot_services);
+    let entry_point = load_hypervisor();
 
     #[cfg(debug_assertions)]
     paging::dump_page_table();
 
     paging::setup_stage_2_translation().expect("Failed to setup Stage2 Paging");
-    map_memory_pool();
+    map_memory_pool(allocated_memory_address);
 
-    detect_acpi_and_dtb(system_table);
+    detect_acpi_and_dtb();
 
     let mut serial = serial_port::detect_serial_port();
     if let Some(s) = &mut serial {
@@ -117,22 +117,27 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     #[cfg(not(feature = "smmu"))]
     let smmu_v3_base_address = None;
 
-    let stack_address = allocate_memory(STACK_PAGES).expect("Failed to alloc stack");
-    let memory_save_list = create_memory_save_list(efi_boot_services);
+    /* Stack for BSP */
+    let stack_address = allocate_memory(STACK_PAGES, None).expect("Failed to alloc stack")
+        + (STACK_PAGES << PAGE_SHIFT);
+    let memory_save_list = create_memory_save_list();
 
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
     let mut system_info = SystemInformation {
         acpi_rsdp_address: unsafe { ACPI_20_TABLE_ADDRESS },
         vbar_el2: 0,
-        memory_pool: unsafe { &MEMORY_POOL },
+        available_memory_info: unsafe { MEMORY_ALLOCATOR.assume_init_mut().get_all_memory() },
         memory_save_list,
         serial_port: serial,
         ecam_info,
         smmu_v3_base_address,
-        exit_boot_service_address: unsafe { (*efi_boot_services).exit_boot_services } as usize,
+        exit_boot_service_address: unsafe {
+            (*(*SYSTEM_TABLE).efi_boot_services).exit_boot_services
+        } as usize,
     };
     unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
-    unsafe { MEMORY_POOL.1 = 0 }; /* Do not call allocate_memory after calling hypervisor */
+
+    /* Do not call allocate_memory/free_memory from here */
 
     println!("Setup EL1");
 
@@ -141,24 +146,22 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     unsafe { INTERRUPT_FLAG.write(local_irq_fiq_save()) };
 
     /* Setup registers */
-    unsafe {
-        asm!("mrs {:x}, vbar_el2", out(reg) ORIGINAL_VECTOR_BASE);
-        asm!("msr vbar_el2, {:x}", in(reg) system_info.vbar_el2);
-    }
+    unsafe { ORIGINAL_VECTOR_BASE = get_vbar_el2() };
+    set_vbar_el2(system_info.vbar_el2);
+
     set_up_el1();
 
     /* Jump to EL1(el1_main) */
-    el2_to_el1(stack_address + (STACK_PAGES << PAGE_SHIFT));
+    el2_to_el1(stack_address, el1_main as *const fn() as usize);
 
     /* Never come here */
     local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
     panic!("Failed to jump EL1");
 }
 
-/// SystemTableを解析し、ACPI 2.0とDTBのアドレスを記録
-///
-/// SystemTableを解析し、[`EFI_ACPI_20_TABLE_GUID`]と[`EFI_DTB_TABLE_GUID`]に記録
-fn detect_acpi_and_dtb(system_table: *const EfiSystemTable) {
+/// Analyze EfiSystemTable and store [`ACPI_20_TABLE_ADDRESS`] and [`DTB_ADDRESS`]
+fn detect_acpi_and_dtb() {
+    let system_table = unsafe { SYSTEM_TABLE };
     let num_of_entries = unsafe { (*system_table).num_table_entries };
     for i in 0..num_of_entries {
         let table = unsafe {
@@ -176,13 +179,21 @@ fn detect_acpi_and_dtb(system_table: *const EfiSystemTable) {
         }
     }
 }
-/// UEFIからメモリを確保して[`MEMORY_POOL`]に格納
+
+/// Allocate memory and setup [`MEMORY_ALLOCATOR`]
 ///
-/// ALLOC_SIZE分をUEFIから確保する。確保したメモリ領域の属性はEfiUnusableMemoryに変更する。
-fn init_memory_pool(b_s: *const EfiBootServices) {
+/// This function allocates [`ALLOC_SIZE`] and then, set it into [`MEMORY_ALLOCATOR`]
+/// The attribute of allocated memory area will be changed to EfiUnusableMemory
+///
+/// # Panics
+/// If the allocation is failed, this function will panic.
+///
+/// # Result
+/// Returns the start_address allocated
+fn init_memory_pool() -> usize {
     let allocate_pages = ALLOC_SIZE >> PAGE_SHIFT;
-    let mut allocated_address = boot_service::memory_service::alloc_highest_memory(
-        b_s,
+    let allocated_address = boot_service::alloc_highest_memory(
+        unsafe { (*SYSTEM_TABLE).efi_boot_services },
         allocate_pages,
         MAX_PHYSICAL_ADDRESS,
     )
@@ -192,24 +203,31 @@ fn init_memory_pool(b_s: *const EfiBootServices) {
         allocated_address,
         allocated_address + ALLOC_SIZE
     );
-    for e in unsafe { &mut MEMORY_POOL.0 } {
-        e.write(allocated_address);
-        allocated_address += PAGE_SIZE;
-    }
-    unsafe { MEMORY_POOL.1 = MEMORY_POOL.0.len() };
+    //unsafe { MEMORY_ALLOCATOR.write(MemoryAllocator::create(allocated_address, ALLOC_SIZE)) };
+    unsafe {
+        MEMORY_ALLOCATOR
+            .assume_init_mut()
+            .init(allocated_address, ALLOC_SIZE)
+    };
+    return allocated_address;
 }
 
-/// [`MEMORY_POOL`]をTTBR0_EL2にマップし、更にEL1からアクセスできないようにする
+/// Map allocated memory area into TTBR0_EL2 and set up not to be accessible from EL1/EL0
 ///
-/// [`init_memory_pool`]で確保したメモリ領域をTTBR0_EL2にストレートマップし、ハイパーバイザーから
-/// アクセスできるようにする。
+/// This function map memory allocated by [`init_memory_pool`] into new TTBR0_EL2.
+/// Also, this function will setup the dummy page.
+/// This sets VTTBR_EL2 up to convert access to the allocated memory area from EL1/EL0 to single dummy page.
+/// Therefore, EL1/EL0 will not read/write allocated memory area.
 ///
-/// また該当領域をVTTBR_EL2でダミーのページへのアクセスするように設定する。
-fn map_memory_pool() {
-    let allocated_memory = unsafe { MEMORY_POOL.0[0].assume_init() };
+/// # Arguments
+/// * `allocated_memory_address` - base address of allocated memory by [`init_memory_pool`]
+///
+/// # Panics
+/// If the mapping into new TTBR0_EL2 or VTTBR_EL2 is failed, this function will panic.
+fn map_memory_pool(allocated_memory_address: usize) {
     paging::map_address(
-        allocated_memory,
-        allocated_memory,
+        allocated_memory_address,
+        allocated_memory_address,
         ALLOC_SIZE,
         true,
         true,
@@ -217,41 +235,61 @@ fn map_memory_pool() {
         false,
     )
     .expect("Failed to map allocated memory");
-    /*paging::unmap_address_from_vttbr_el2(b_s, allocated_memory, ALLOC_SIZE)
+    /*paging::unmap_address_from_vttbr_el2(b_s, allocated_memory_address, ALLOC_SIZE)
     .expect("Failed to unmap allocated address.");*/
-    let dummy_page = allocate_memory(1).expect("Failed to alloc dummy page");
-    paging::map_dummy_page_into_vttbr_el2(allocated_memory, ALLOC_SIZE, dummy_page)
+    let dummy_page = allocate_memory(1, None).expect("Failed to alloc dummy page");
+    paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, ALLOC_SIZE, dummy_page)
         .expect("Failed to map dummy page");
 }
 
-/// メモリをメモリプールから確保
-///
-/// メモリを[`pages`]だけメモリプールから確保する。
-/// 失敗した場合はErr(())を返却する。
+/// Allocate memory from memory pool
 ///
 /// # Arguments
-/// * pages: 確保するメモリページ数
+/// * `pages` - The number of pages to allocate, the allocation size is `pages` << [`PAGE_SHIFT`]
+/// * `align` - The alignment of the returned address, if `None`, [`PAGE_SHIFT`] will be used
 ///
-/// # Return Value
-/// 確保に成功した場合はOk(address)、失敗した場合はErr(())
-pub fn allocate_memory(pages: usize) -> Result<usize, ()> {
-    if unsafe { MEMORY_POOL.1 < pages } {
-        return Err(());
+/// # Result
+/// If the allocation is succeeded, Ok(start_address), otherwise Err(())
+pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
+    unsafe {
+        MEMORY_ALLOCATOR
+            .assume_init_mut()
+            .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT))
     }
-    unsafe { MEMORY_POOL.1 -= pages };
-    return Ok(unsafe { MEMORY_POOL.0[MEMORY_POOL.1].assume_init() });
 }
 
-/// ハイパーバイザー本体を[`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]にに配置
+/// Free memory to memory pool
 ///
-/// EFIを使用し、[`common::HYPERVISOR_PATH`]よりハイパーバイザー本体を読み込みELFヘッダに従って配置する。
-/// メモリに読み込む前に[`ORIGINAL_PAGE_TABLE`]に元のTTBR0_EL2を保存し、ページテーブルをコピーしたものに
-/// 切り替える。読み込みに失敗した場合この関数はpanicする。
+/// # Arguments
+/// * `address` - The start address to return to memory pool, it must be allocated by [`allocate_memory`]
+/// * `pages` - The number of allocated pages
 ///
-/// # Return Value
-/// ハイパーバイザー本体の初期化用エントリポイント
-fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootServices) -> usize /* Entry Point */
-{
+/// # Result
+/// If succeeded, Ok(()), otherwise Err(())
+pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationError> {
+    unsafe {
+        MEMORY_ALLOCATOR
+            .assume_init_mut()
+            .free(address, pages << PAGE_SHIFT)
+    }
+}
+
+/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
+///
+/// This function loads hypervisor_kernel according to ELF header.
+/// The hypervisor_kernel will be loaded from [`common::HYPERVISOR_PATH`]
+///
+/// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
+/// create new TTBR0_EL2 by copying original page table tree.
+///
+/// # Panics
+/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
+///
+/// # Result
+/// Returns the entry point of hypervisor_kernel
+fn load_hypervisor() -> usize {
+    let image_handle = unsafe { IMAGE_HANDLE };
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
     let root_protocol = file::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
     let mut file_name_utf16: [u16; HYPERVISOR_PATH.len() + 1] = [0; HYPERVISOR_PATH.len() + 1];
 
@@ -283,9 +321,8 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
     }
     let program_header_entries_size =
         elf_header.get_program_header_entry_size() * elf_header.get_num_of_program_header_entries();
-    let program_header_pool =
-        boot_service::memory_service::alloc_pool(b_s, program_header_entries_size)
-            .expect("Failed to allocate the pool for the program header");
+    let program_header_pool = boot_service::alloc_pool(b_s, program_header_entries_size)
+        .expect("Failed to allocate the pool for the program header");
     file::seek(hypervisor_protocol, elf_header.get_program_header_offset())
         .expect("Failed to seek for the program header");
     let read_size = file::read(
@@ -302,7 +339,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
     }
 
     /* Switch PageTable */
-    let cloned_page_table = paging::copy_page_table();
+    let cloned_page_table = paging::clone_page_table();
     unsafe {
         ORIGINAL_PAGE_TABLE = get_ttbr0_el2() as usize;
         ORIGINAL_TCR_EL2 = get_tcr_el2();
@@ -322,7 +359,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
             }
             let pages = (((info.memory_size - 1) & PAGE_MASK) >> PAGE_SHIFT) + 1;
             let physical_base_address =
-                allocate_memory(pages).expect("Failed to allocate memory for hypervisor");
+                allocate_memory(pages, None).expect("Failed to allocate memory for hypervisor");
 
             if info.file_size > 0 {
                 file::seek(hypervisor_protocol, info.file_offset)
@@ -343,10 +380,10 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
 
             if info.memory_size - info.file_size > 0 {
                 unsafe {
-                    ((*b_s).set_mem)(
-                        physical_base_address + info.file_size,
-                        info.memory_size - info.file_size,
+                    core::ptr::write_bytes(
+                        (physical_base_address + info.file_size) as *mut u8,
                         0,
+                        info.memory_size - info.file_size,
                     )
                 };
             }
@@ -373,7 +410,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
             .expect("Failed to map hypervisor");
         }
     }
-    if let Err(e) = boot_service::memory_service::free_pool(b_s, program_header_pool) {
+    if let Err(e) = boot_service::free_pool(b_s, program_header_pool) {
         println!("Failed to free the pool: {:?}", e);
     }
     if let Err(e) = file::close_file(hypervisor_protocol) {
@@ -386,14 +423,15 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: *const boot_service::EfiBootSer
     return elf_header.get_entry_point();
 }
 
-fn create_memory_save_list(b_s: *const EfiBootServices) -> &'static mut [MemorySaveListEntry] {
+fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
     const MEMORY_SAVE_LIST_PAGES: usize = 3;
     const MEMORY_SAVE_LIST_SIZE: usize = MEMORY_SAVE_LIST_PAGES << PAGE_SHIFT;
-    let memory_map_info =
-        boot_service::memory_service::get_memory_map(b_s).expect("Failed to get the memory map");
+    let memory_map_info = boot_service::get_memory_map(b_s).expect("Failed to get the memory map");
     let list = unsafe {
         core::slice::from_raw_parts_mut(
-            allocate_memory(MEMORY_SAVE_LIST_PAGES).expect("Failed to allocate Memory for map")
+            allocate_memory(MEMORY_SAVE_LIST_PAGES, None)
+                .expect("Failed to allocate memory for memory saving list")
                 as *mut MemorySaveListEntry,
             MEMORY_SAVE_LIST_SIZE / core::mem::size_of::<MemorySaveListEntry>(),
         )
@@ -403,9 +441,8 @@ fn create_memory_save_list(b_s: *const EfiBootServices) -> &'static mut [MemoryS
     let mut list_pointer = 0usize;
 
     for _ in 0..memory_map_info.num_of_entries {
-        use boot_service::memory_service::EfiMemoryType;
-        let e =
-            unsafe { &*(base_address as *const boot_service::memory_service::EfiMemoryDescriptor) };
+        use boot_service::EfiMemoryType;
+        let e = unsafe { &*(base_address as *const boot_service::EfiMemoryDescriptor) };
         if e.memory_type == EfiMemoryType::EfiBootServicesData
             || e.memory_type == EfiMemoryType::EfiRuntimeServicesCode
             || e.memory_type == EfiMemoryType::EfiRuntimeServicesData
@@ -447,24 +484,23 @@ fn create_memory_save_list(b_s: *const EfiBootServices) -> &'static mut [MemoryS
         num_of_pages: 0,
     };
 
-    if let Err(e) = boot_service::memory_service::free_pool(b_s, memory_map_info.descriptor_address)
-    {
+    if let Err(e) = boot_service::free_pool(b_s, memory_map_info.descriptor_address) {
         println!("Failed to free pool for the memory map: {:?}", e);
     }
     return list;
 }
 
 #[allow(dead_code)]
-fn dump_memory_map(b_s: *const EfiBootServices) {
-    let memory_map_info = match boot_service::memory_service::get_memory_map(b_s) {
+fn dump_memory_map() {
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let memory_map_info = match boot_service::get_memory_map(b_s) {
         Ok(info) => info,
         Err(e) => {
             println!("Failed to get memory_map: {:?}", e);
             return;
         }
     };
-    let default_descriptor_size =
-        core::mem::size_of::<boot_service::memory_service::EfiMemoryDescriptor>();
+    let default_descriptor_size = core::mem::size_of::<boot_service::EfiMemoryDescriptor>();
 
     if default_descriptor_size != memory_map_info.actual_descriptor_size {
         println!(
@@ -480,29 +516,22 @@ fn dump_memory_map(b_s: *const EfiBootServices) {
     let mut base_address = memory_map_info.descriptor_address;
     for index in 0..memory_map_info.num_of_entries {
         println!("{:02}: {:?}", index, unsafe {
-            &*(base_address as *const boot_service::memory_service::EfiMemoryDescriptor)
+            &*(base_address as *const boot_service::EfiMemoryDescriptor)
         });
         base_address += memory_map_info.actual_descriptor_size;
     }
 
-    if let Err(e) = boot_service::memory_service::free_pool(b_s, memory_map_info.descriptor_address)
-    {
+    if let Err(e) = boot_service::free_pool(b_s, memory_map_info.descriptor_address) {
         println!("Failed to free pool for the memory map: {:?}", e);
     }
 }
 
-/// EL2での各システムレジスタの値を適宜EL1にコピーし、EL2の各システムレジスタを適切な値に変更
 fn set_up_el1() {
-    let is_e2h_enabled = {
-        let hcr_el2: u64;
-        unsafe { asm!("mrs {:x}, hcr_el2", out(reg) hcr_el2) };
-        (hcr_el2 & HCR_EL2_E2H) != 0
-    };
+    let is_e2h_enabled = (get_hcr_el2() & HCR_EL2_E2H) != 0;
 
-    /* CNTHCTL_EL2 */
-    let cnthctl_el2 = CNTHCTL_EL2_EL1PCEN | CNTHCTL_EL2_EL1PCTEN;
-    unsafe { asm!("msr cnthctl_el2, {:x}", in(reg) cnthctl_el2) };
-    unsafe { asm!("msr cntvoff_el2, xzr") };
+    /* CNTHCTL_EL2 & CNTVOFF_EL2 */
+    set_cnthctl_el2(CNTHCTL_EL2_EL1PCEN | CNTHCTL_EL2_EL1PCTEN);
+    set_cntvoff_el2(0);
 
     /* HSTR_EL2 */
     unsafe { asm!("msr hstr_el2, xzr") };
@@ -522,9 +551,8 @@ fn set_up_el1() {
     /* Ignore it currently... */
 
     /* CPACR_EL1 & CPTR_EL2 */
-    let cptr_el2_current: u64;
+    let cptr_el2_current = get_cptr_el2();
     let mut cpacr_el1: u64 = 0;
-    unsafe { asm!("mrs {:x}, cptr_el2",out(reg) cptr_el2_current) };
 
     cpacr_el1 |= ((((cptr_el2_current) & CPTR_EL2_ZEN) >> CPTR_EL2_ZEN_BITS_OFFSET)
         << CPACR_EL1_ZEN_BITS_OFFSET)
@@ -541,17 +569,14 @@ fn set_up_el1() {
             >> CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H)
             << CPACR_EL1_TTA_BIT_OFFSET;
     }
-    /* TODO: CPTR_EL2を0から必要なBitのみONにするようにする */
+
     let mut cptr_el2: u64 = cptr_el2_current | CPTR_EL2_ZEN_NO_TRAP | CPTR_EL2_FPEN_NO_TRAP /*| CPTR_EL2_RES1*/;
     cptr_el2 &= !((1 << 28) | (1 << 30) | (1 << 31));
-    unsafe {
-        asm!("msr cpacr_el1, {:x}",in(reg) cpacr_el1);
-        asm!("isb")
-        /* CPTR_EL2 will be set after HCR_EL2 */
-    }
+    set_cpacr_el1(cpacr_el1);
+    isb();
+    /* CPTR_EL2 will be set after HCR_EL2 */
 
-    let id_aa64pfr0_el1: u64;
-    unsafe { asm!("mrs {:x}, id_aa64pfr0_el1", out(reg) id_aa64pfr0_el1) };
+    let id_aa64pfr0_el1 = get_id_aa64pfr0_el1();
     if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_SVE) != 0 {
         /* ZCR_EL2 */
         unsafe {
@@ -576,17 +601,14 @@ fn set_up_el1() {
     }
 
     /* MAIR_EL1(Copy MAIR_EL2) */
-    unsafe {
-        asm!("  mrs {t}, mair_el2
-                msr mair_el1, {t}", t = out(reg) _ )
-    };
+    set_mair_el1(get_mair_el2());
 
     /* TTBR0_EL1 */
     set_ttbr0_el1(unsafe { ORIGINAL_PAGE_TABLE } as u64);
 
     /* TCR_EL1 */
     if is_e2h_enabled {
-        unsafe { asm!("msr tcr_el1, {:x}",in(reg) ORIGINAL_TCR_EL2) };
+        set_tcr_el1(unsafe { ORIGINAL_TCR_EL2 });
     } else {
         let mut tcr_el1: u64 = 0;
         let tcr_el2 = unsafe { ORIGINAL_TCR_EL2 };
@@ -613,19 +635,14 @@ fn set_up_el1() {
             << TCR_EL1_IPS_BITS_OFFSET;
         tcr_el1 |= TCR_EL1_EPD1; /* Disable TTBR1_EL1 */
 
-        unsafe { asm!("msr tcr_el1, {:x}", in(reg) tcr_el1) };
+        set_tcr_el1(tcr_el1);
     }
 
     /* SCTLR_EL1(Copy SCTLR_EL2) */
-    unsafe {
-        asm!("  mrs {t}, sctlr_el2
-                msr sctlr_el1, {t}",t = out(reg) _)
-    };
+    set_sctlr_el1(get_sctlr_el2());
 
     /* VBAR_EL1 */
-    unsafe {
-        asm!("msr vbar_el1, {:x}",in(reg) ORIGINAL_VECTOR_BASE);
-    }
+    set_vbar_el1(unsafe { ORIGINAL_VECTOR_BASE });
 
     #[cfg(feature = "a64fx")]
     {
@@ -667,26 +684,17 @@ fn set_up_el1() {
     }
 
     /* HCR_EL2 */
-    let hcr_el2: u64 =
-        HCR_EL2_FIEN | HCR_EL2_API | HCR_EL2_APK | HCR_EL2_RW | HCR_EL2_TSC | HCR_EL2_VM;
-    unsafe {
-        asm!("msr hcr_el2, {:x}",in(reg) hcr_el2);
-        asm!("isb");
-        asm!("msr cptr_el2, {:x}",in(reg) cptr_el2);
-    }
+    let hcr_el2 = HCR_EL2_FIEN | HCR_EL2_API | HCR_EL2_APK | HCR_EL2_RW | HCR_EL2_TSC | HCR_EL2_VM;
+    set_hcr_el2(hcr_el2);
+    isb();
+    set_cptr_el2(cptr_el2);
 }
 
 extern "C" fn el1_main() -> ! {
     local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
 
+    assert_eq!(get_current_el() >> 2, 1, "Failed to jump to EL1");
     println!("Hello,world! from EL1");
-    let mut current_el: usize;
-    unsafe { asm!("mrs {:x}, CurrentEL", out(reg) current_el) };
-    let current_el = current_el >> 2;
-    println!("CurrentEL: {}", current_el);
-    if current_el != 1 {
-        panic!("Failed to jump into EL1");
-    }
 
     println!("Return to UEFI.");
     unsafe {
@@ -701,12 +709,11 @@ extern "C" fn el1_main() -> ! {
 }
 
 #[naked]
-extern "C" fn el2_to_el1(stack_pointer: usize) {
+extern "C" fn el2_to_el1(stack_pointer: usize, el1_entry_point: usize) {
     unsafe {
         asm!(
             "
-            adr x8, {}
-            msr elr_el2, x8
+            msr elr_el2, x1 // x1 contains the entry point of EL1
             mov x8, sp
             msr sp_el1, x8
             mov sp, x0 // x0 contains stack_pointer
@@ -714,9 +721,8 @@ extern "C" fn el2_to_el1(stack_pointer: usize) {
             msr spsr_el2, x0
             isb
             eret
-        ", 
-        sym el1_main,
-        options(noreturn)
+        ",
+            options(noreturn)
         )
     }
 }

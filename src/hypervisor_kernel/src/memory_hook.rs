@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -10,13 +11,11 @@
 
 use crate::StoredRegisters;
 
-#[allow(dead_code)]
 pub enum LoadHookResult {
     PassThrough,
     Data(u64),
 }
 
-#[allow(dead_code)]
 pub enum StoreHookResult {
     PassThrough,
     AlternativeData(u64),

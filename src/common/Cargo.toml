@@ -6,7 +6,8 @@
 # http://opensource.org/licenses/mit-license.php
 [package]
 name = "common"
-version = "0.4.0"
+version = "1.0.0"
 edition = "2021"
 
-[dependencies]
+[features]
+advanced_memory_manager = []

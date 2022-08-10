@@ -12,14 +12,14 @@
 //!
 
 use super::{
-    advance_elr_el2, faulting_va_to_ipa_store, get_register_reference_mut,
+    faulting_va_to_ipa_store, get_register_reference_mut, get_virtual_address_to_access_ipa,
     write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
 };
+
 use crate::memory_hook::{memory_store_hook_handler, StoreHookResult};
 use crate::{handler_panic, StoredRegisters};
 
-use common::cpu::{convert_virtual_address_to_physical_address_el2_write, invalidate_data_cache};
-use common::{bitmask, STAGE_2_PAGE_SHIFT};
+use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
 
 pub fn emulate_store_register(
     s_r: &mut StoredRegisters,
@@ -185,14 +185,12 @@ fn store_register_into_address(
     target_register: u8,
     size: u8,
 ) -> Result<(), ()> {
-    /* TODO: 物理アドレスへのアクセス関数を用意する。現方法だとVA!=PAの時に誤動作する */
-    let physical_store_address =
-        convert_virtual_address_to_physical_address_el2_write(intermediate_physical_store_address)
-            .expect("Failed to convert IPA => PA");
+    let virtual_address_to_store =
+        get_virtual_address_to_access_ipa(intermediate_physical_store_address, true)?;
 
     pr_debug!(
         "[{:#X}](PA) <= R{}({})",
-        physical_store_address,
+        intermediate_physical_store_address,
         target_register,
         match size {
             0b00 => " 8Bit",
@@ -208,7 +206,8 @@ fn store_register_into_address(
     } else {
         *get_register_reference_mut(s_r, target_register)
     };
-    let hook_result = memory_store_hook_handler(physical_store_address, s_r, size, reg_data)?;
+    let hook_result =
+        memory_store_hook_handler(intermediate_physical_store_address, s_r, size, reg_data)?;
     let data = match hook_result {
         StoreHookResult::PassThrough => reg_data,
         StoreHookResult::AlternativeData(d) => d,
@@ -219,14 +218,27 @@ fn store_register_into_address(
     };
 
     pr_debug!("Data: {:#X}", data);
+    _write_memory(virtual_address_to_store, size, data);
+    return Ok(());
+}
+
+pub fn _write_memory(store_address: usize, access_size: u8, data: u64) {
     use core::ptr::write_volatile;
-    match size {
-        0b00 => unsafe { write_volatile(physical_store_address as *mut u8, data as u8) },
-        0b01 => unsafe { write_volatile(physical_store_address as *mut u16, data as u16) },
-        0b10 => unsafe { write_volatile(physical_store_address as *mut u32, data as u32) },
-        0b11 => unsafe { write_volatile(physical_store_address as *mut u64, data) },
+    match access_size {
+        0b00 => unsafe { write_volatile(store_address as *mut u8, data as u8) },
+        0b01 => unsafe { write_volatile(store_address as *mut u16, data as u16) },
+        0b10 => unsafe { write_volatile(store_address as *mut u32, data as u32) },
+        0b11 => unsafe { write_volatile(store_address as *mut u64, data) },
         _ => unreachable!(),
     };
-    invalidate_data_cache(physical_store_address);
-    return Ok(());
+}
+
+#[allow(dead_code)]
+pub fn write_memory(intermediate_physical_store_address: usize, access_size: u8, data: u64) {
+    _write_memory(
+        get_virtual_address_to_access_ipa(intermediate_physical_store_address, true)
+            .expect("Failed to convert Address"),
+        access_size,
+        data,
+    )
 }

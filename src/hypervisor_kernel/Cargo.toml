@@ -7,11 +7,11 @@
 
 [package]
 name = "hypervisor_kernel"
-version = "0.4.0"
+version = "1.0.0"
 edition = "2021"
 
 [features]
-default = ["smmu", "i210", "mt27800", "fast_restore", "acpi_table_protection", "contiguous_bit"]
+default = ["smmu", "i210", "mt27800", "fast_restore", "acpi_table_protection", "contiguous_bit", "advanced_memory_manager"]
 smmu = []
 i210 = []
 mt27800 = []
@@ -19,6 +19,7 @@ fast_restore = []
 acpi_table_protection = []
 contiguous_bit = []
 a64fx = []
+advanced_memory_manager = ["common/advanced_memory_manager"]
 
 [dependencies]
 common = { path = "../common" }

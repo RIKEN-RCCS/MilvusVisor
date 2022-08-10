@@ -1,19 +1,20 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
 //!
-//! EFI Output Protocol
+//! EFI Simple Text Output Protocol
 //!
 
-use super::EfiStatus;
+use crate::EfiStatus;
 
 #[repr(C)]
 pub struct EfiOutputProtocol {
-    reset: extern "C" fn(*const EfiOutputProtocol, bool) -> EfiStatus,
-    output: extern "C" fn(*const EfiOutputProtocol, *const u16) -> EfiStatus,
+    reset: extern "efiapi" fn(*const EfiOutputProtocol, bool) -> EfiStatus,
+    output_string: extern "efiapi" fn(*const EfiOutputProtocol, *const u16) -> EfiStatus,
     test_string: usize,
     query_mode: usize,
     set_mode: usize,
@@ -25,15 +26,19 @@ pub struct EfiOutputProtocol {
 }
 
 impl EfiOutputProtocol {
-    /// 画面を消去してカーソルを一番先頭に持っていく
+    /// Clear the screen and move the cursor to top
+    ///
+    /// # Arguments
+    /// * `extended_verification` - should execute extended verification(this will be passed to UEFI)
     #[allow(dead_code)]
     pub fn reset(&self, extended_verification: bool) -> EfiStatus {
         (self.reset)(self as *const _, extended_verification)
     }
 
-    /// 文字列を画面に表示する
+    /// Print the string
     ///
-    /// ATTENTION: UTF-16であるため、日本語も扱えるがフォントを持っていないUEFIも多く正しく表示できない可能性あり
+    /// # Arguments
+    /// * `string` - string to print (Should avoid to contain non ASCII chars)
     pub fn output(&self, string: &str) -> EfiStatus {
         let mut buf = [0; 256];
         let mut pointer = 0;
@@ -41,19 +46,19 @@ impl EfiOutputProtocol {
         for x in string.encode_utf16() {
             if x == '\n' as u16 {
                 buf[pointer] = 0;
-                let status = (self.output)(self as *const _, buf.as_ptr());
+                let status = (self.output_string)(self as *const _, buf.as_ptr());
                 if status != EfiStatus::EfiSuccess {
                     return status;
                 }
                 pointer = 0;
                 let cr_lf = ['\r' as u16, '\n' as u16, '\0' as u16];
-                let status = (self.output)(self as *const _, cr_lf.as_ptr());
+                let status = (self.output_string)(self as *const _, cr_lf.as_ptr());
                 if status != EfiStatus::EfiSuccess {
                     return status;
                 }
             } else {
                 if pointer >= buf.len() - 1 {
-                    let status = (self.output)(self as *const _, buf.as_ptr());
+                    let status = (self.output_string)(self as *const _, buf.as_ptr());
                     if status != EfiStatus::EfiSuccess {
                         return status;
                     }
@@ -64,6 +69,6 @@ impl EfiOutputProtocol {
             }
         }
         buf[pointer] = 0;
-        (self.output)(self as *const _, buf.as_ptr())
+        (self.output_string)(self as *const _, buf.as_ptr())
     }
 }

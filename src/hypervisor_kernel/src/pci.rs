@@ -24,7 +24,7 @@ pub fn init_pci(ecam_address: usize, start_bus_number: u8, end_bus_number: u8) {
                 "{:X}:{:X} VenderId: {:#X}, DeviceId: {:#X}",
                 bus, device, vendor_id, device_id
             );
-            /* TODO: 動的にハンドラ呼び出し */
+            /* TODO: call handlers dynamically */
             if vendor_id == drivers::i210::VENDOR_ID && device_id == drivers::i210::DEVICE_ID {
                 #[cfg(feature = "i210")]
                 drivers::i210::setup_device(ecam_address, bus, device, 0);
@@ -76,11 +76,11 @@ pub fn get_configuration_space_data(
     let data = unsafe { *((address + aligned_offset) as *const u32) };
     let byte_offset = (offset & 0b11) as u8;
     assert!(byte_offset + size <= 4);
-    return if size == 4 {
+    if size == 4 {
         data
     } else {
         (data >> (byte_offset << 3)) & ((1 << (size << 3)) - 1)
-    };
+    }
 }
 
 pub fn get_ecam_target_address(base_address: usize, bus: u8, device: u8, function: u8) -> usize {

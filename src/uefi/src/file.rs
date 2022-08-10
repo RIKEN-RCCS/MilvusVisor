@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -8,11 +9,11 @@
 //! EFI Simple File System Protocol
 //!
 
-use super::boot_service::EfiBootServices;
-use super::loaded_image::EfiLoadedImageProtocol;
-use super::{
+use crate::boot_service::{EfiBootServices, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL};
+use crate::loaded_image::EfiLoadedImageProtocol;
+use crate::{
     EfiHandle, EfiStatus, EfiTime, Guid, EFI_LOADED_IMAGE_PROTOCOL_GUID,
-    EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
 };
 
 const EFI_FILE_MODE_READ: u64 = 0x0000000000000001;
@@ -46,7 +47,8 @@ const EFI_FILE_INFO_ID: Guid = Guid {
 #[repr(C)]
 pub struct EfiSimpleFileProtocol {
     revision: u64,
-    open_volume: extern "C" fn(this: *const Self, root: *mut *const EfiFileProtocol) -> EfiStatus,
+    open_volume:
+        extern "efiapi" fn(this: *const Self, root: *mut *const EfiFileProtocol) -> EfiStatus,
 }
 
 #[derive(Debug)]
@@ -65,34 +67,41 @@ pub struct EfiFileInfo {
 #[repr(C)]
 pub struct EfiFileProtocol {
     revision: u64,
-    open: extern "C" fn(
+    open: extern "efiapi" fn(
         this: *const Self,
         new_handle: *mut *const Self,
         file_name: *const u16,
         open_mode: u64,
         attributes: u64,
     ) -> EfiStatus,
-    close: extern "C" fn(this: *const Self) -> EfiStatus,
-    delete: extern "C" fn(this: *const Self) -> EfiStatus,
-    read: extern "C" fn(this: *const Self, buffer_size: *mut usize, buffer: *mut u8) -> EfiStatus,
-    write:
-        extern "C" fn(this: *const Self, buffer_size: *mut usize, buffer: *const u8) -> EfiStatus,
-    get_position: extern "C" fn(this: *const Self, position: *mut u64) -> EfiStatus,
-    set_position: extern "C" fn(this: *const Self, position: u64) -> EfiStatus,
-    get_info: extern "C" fn(
+    close: extern "efiapi" fn(this: *const Self) -> EfiStatus,
+    delete: extern "efiapi" fn(this: *const Self) -> EfiStatus,
+    read: extern "efiapi" fn(
+        this: *const Self,
+        buffer_size: *mut usize,
+        buffer: *mut u8,
+    ) -> EfiStatus,
+    write: extern "efiapi" fn(
+        this: *const Self,
+        buffer_size: *mut usize,
+        buffer: *const u8,
+    ) -> EfiStatus,
+    get_position: extern "efiapi" fn(this: *const Self, position: *mut u64) -> EfiStatus,
+    set_position: extern "efiapi" fn(this: *const Self, position: u64) -> EfiStatus,
+    get_info: extern "efiapi" fn(
         this: *const Self,
         information_type: *const Guid,
         buffer_size: *mut usize,
         buffer: *mut u8,
     ) -> EfiStatus,
-    set_info: extern "C" fn(
+    set_info: extern "efiapi" fn(
         this: *const Self,
         information_type: *const Guid,
         buffer_size: usize,
         buffer: *const u8,
     ) -> EfiStatus,
-    flush: extern "C" fn(this: *const Self) -> EfiStatus,
-    open_ex: extern "C" fn(
+    flush: extern "efiapi" fn(this: *const Self) -> EfiStatus,
+    open_ex: extern "efiapi" fn(
         this: *const Self,
         new_handle: *mut *const Self,
         file_name: *const u16,
@@ -100,9 +109,9 @@ pub struct EfiFileProtocol {
         attributes: u64,
         token: usize,
     ) -> EfiStatus,
-    read_ex: extern "C" fn(this: *const Self, token: usize) -> EfiStatus,
-    write_ex: extern "C" fn(this: *const Self, token: usize) -> EfiStatus,
-    flush_ex: extern "C" fn(this: *const Self, token: usize) -> EfiStatus,
+    read_ex: extern "efiapi" fn(this: *const Self, token: usize) -> EfiStatus,
+    write_ex: extern "efiapi" fn(this: *const Self, token: usize) -> EfiStatus,
+    flush_ex: extern "efiapi" fn(this: *const Self, token: usize) -> EfiStatus,
 }
 
 pub fn open_root_dir(

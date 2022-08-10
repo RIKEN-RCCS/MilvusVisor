@@ -9,21 +9,14 @@
 //! Paging
 //!
 
-use super::{
-    allocate_memory, TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
-    TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_TG0_WITHOUT_E2H,
-};
-use crate::{
-    TCR_EL2_PS_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_PS_WITHOUT_E2H,
-    TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H,
-};
+use crate::{allocate_memory, free_memory};
 
 use common::cpu::*;
 use common::paging::*;
 use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
 
-fn _copy_page_table(table_address: usize, current_level: i8) -> usize {
-    let cloned_table_address = allocate_memory(1).expect("Failed to allocate page table");
+fn _clone_page_table(table_address: usize, current_level: i8) -> usize {
+    let cloned_table_address = allocate_memory(1, None).expect("Failed to allocate page table");
 
     let cloned_table = unsafe {
         &mut *(cloned_table_address as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
@@ -39,23 +32,26 @@ fn _copy_page_table(table_address: usize, current_level: i8) -> usize {
         if is_descriptor_table_or_level_3_descriptor(*e) {
             let next_level_table_address = extract_output_address(*e, PAGE_SHIFT);
             *e = ((*e) & !(next_level_table_address as u64))
-                | (_copy_page_table(next_level_table_address, current_level + 1) as u64);
+                | (_clone_page_table(next_level_table_address, current_level + 1) as u64);
         }
     }
     return cloned_table_address;
 }
 
-/// Copy TTBR0_EL2 for Hypervisor
+/// Clone TTBR0_EL2
 ///
-/// ハイパーバイザー向けのページテーブルを複製する。
+/// Clone the page table tree of TTBR0_EL2。
 ///
-/// # Return Value
-/// Cloned Page Table Address
-pub fn copy_page_table() -> usize {
+/// # Panics
+/// If memory allocation is failed, this function panics
+///
+/// # Result
+/// Returns Cloned Page Table Address
+pub fn clone_page_table() -> usize {
     let page_table_address = TTBR::new(get_ttbr0_el2()).get_base_address();
     let tcr_el2 = get_tcr_el2();
     let first_table_level = get_initial_page_table_level_and_bits_to_shift(tcr_el2).0;
-    return _copy_page_table(page_table_address, first_table_level);
+    return _clone_page_table(page_table_address, first_table_level);
 }
 
 /// Map physical address recursively
@@ -63,8 +59,8 @@ pub fn copy_page_table() -> usize {
 /// This will map memory area upto `num_of_remaining_pages`.
 /// This will call itself recursively, and map address until `num_of_remaining_pages` == 0 or reached the end of table.
 /// When all page is mapped successfully, `num_of_remaining_pages` has been 0.
-/// # Arguments
 ///
+/// # Arguments
 /// * `physical_address` - The address to map
 /// * `virtual_address` - The address to associate with `physical_address`
 /// * `num_of_remaining_pages` - The number of page entries to be mapped, this value will be changed
@@ -131,15 +127,19 @@ fn map_address_recursive(
                 *physical_address,
                 table_level
             );
-            if is_descriptor_table_or_level_3_descriptor(*target_descriptor) {
-                pr_debug!(
-                    "PageTable:({:#X}) will be deleted.",
-                    extract_output_address(*target_descriptor, PAGE_SHIFT)
-                );
-                /* TODO: free page table */
+
+            let old_descriptor = core::mem::replace(
+                target_descriptor,
+                *physical_address as u64
+                    | create_attributes_for_stage_1(permission, memory_attribute, true),
+            );
+
+            if is_descriptor_table_or_level_3_descriptor(old_descriptor) {
+                let old_table = extract_output_address(old_descriptor, PAGE_SHIFT);
+                pr_debug!("PageTable:({:#X}) will be deleted.", old_table);
+                let _ = free_memory(old_table, 1);
             }
-            let attributes = create_attributes_for_stage_1(permission, memory_attribute, true);
-            *target_descriptor = *physical_address as u64 | attributes;
+
             *physical_address += 1 << shift_level;
             *virtual_address += 1 << shift_level;
             *num_of_remaining_pages -= 512usize.pow((3 - table_level) as u32);
@@ -209,6 +209,22 @@ fn map_address_recursive(
     return Ok(());
 }
 
+/// Map address
+///
+/// This will map virtual address into physical address
+/// The virtual address is for EL2.
+///
+/// # Arguments
+/// * `physical_address` - The address to map
+/// * `virtual_address` - The address to associate with `physical_address`
+/// * `size` - The map size
+/// * `readable` - If true, the memory area will be readable
+/// * `writable` - If true, the memory area will be writable
+/// * `executable` - If true, the memory area will be executable
+/// * `is_device` - If true, the cache control of the memory area will become for device memory
+///
+/// # Result
+/// If mapping is succeeded, returns Ok(()), otherwise returns Err(())
 pub fn map_address(
     mut physical_address: usize,
     mut virtual_address: usize,
@@ -285,9 +301,6 @@ pub fn map_address(
     return Ok(());
 }
 
-/// Map physical Address Recursively into Stage2 translation table
-///
-/// permission: Bit0:Readable, Bit1: Writable, Bit2: Executable
 fn map_address_recursive_stage2(
     physical_address: &mut usize,
     virtual_address: &mut usize,
@@ -374,17 +387,18 @@ fn map_address_recursive_stage2(
                 *physical_address,
                 table_level
             );
-            if is_descriptor_table_or_level_3_descriptor(*target_descriptor) {
-                pr_debug!(
-                    "PageTable:({:#X}) will be deleted.",
-                    extract_output_address(*target_descriptor, STAGE_2_PAGE_SHIFT)
-                );
-                /* TODO: free page table */
-            }
-            let attributes =
-                create_attributes_for_stage_2(permission, is_dummy_page, is_unmap, true);
 
-            *target_descriptor = *physical_address as u64 | attributes;
+            let old_descriptor = core::mem::replace(
+                target_descriptor,
+                *physical_address as u64
+                    | create_attributes_for_stage_2(permission, is_dummy_page, is_unmap, true),
+            );
+
+            if is_descriptor_table_or_level_3_descriptor(old_descriptor) {
+                let old_table = extract_output_address(old_descriptor, STAGE_2_PAGE_SHIFT);
+                pr_debug!("PageTable:({:#X}) will be deleted.", old_table);
+                let _ = free_memory(old_table, 1);
+            }
 
             *physical_address += 1 << shift_level;
             *virtual_address += 1 << shift_level;
@@ -459,8 +473,19 @@ fn map_address_recursive_stage2(
     return Ok(());
 }
 
+/// Map address ~ (address + size) to dummy page
+///
+/// This function sets `address` ~ (`address` + `size) to un-accessible from EL1/EL0
+///
+/// # Arguments
+/// * `address` - The address to hide from EL1/EL0
+/// * `size` - The size to hide
+/// * `dummy_page` - [`common::PAGE_SIZE`] memory area to convert the access from EL1/EL0
+///
+/// # Result
+/// If mapping is succeeded, returns Ok(()), otherwise returns Err(())
 pub fn map_dummy_page_into_vttbr_el2(
-    mut virtual_address: usize,
+    mut address: usize,
     size: usize,
     mut dummy_page: usize, /*4 KiB Page Physical Address*/
 ) -> Result<(), ()> {
@@ -483,7 +508,7 @@ pub fn map_dummy_page_into_vttbr_el2(
     let original_dummy_page = dummy_page;
     map_address_recursive_stage2(
         &mut dummy_page,
-        &mut virtual_address,
+        &mut address,
         &mut num_of_needed_pages,
         TTBR::new(get_vttbr_el2()).get_base_address(),
         initial_look_up_level,
@@ -807,29 +832,17 @@ fn allocate_page_table_for_stage_1(
     t0sz: u8,
     is_for_ttbr: bool,
 ) -> Result<usize, ()> {
-    let table_address_alignment = if is_for_ttbr {
-        ((64 - ((PAGE_SHIFT - 3) as u8 * (4 - look_up_level) as u8) - t0sz).max(4)).min(12)
+    let alignment = if is_for_ttbr {
+        ((64 - ((PAGE_SHIFT - 3) * (4 - look_up_level) as usize) - t0sz as usize).max(4)).min(12)
     } else {
-        PAGE_SHIFT as u8
+        PAGE_SHIFT
     };
-    loop {
-        match allocate_memory(1) {
-            Ok(address) => {
-                if (address & ((1 << table_address_alignment) - 1)) != 0 {
-                    println!(
-                        "The table address is not alignment with {}, {:#X} will be wasted.",
-                        table_address_alignment, address
-                    );
-                    /* TODO: アライメントを指定してメモリを確保できるようにし、無駄をなくす。 */
-                } else {
-                    return Ok(address);
-                }
-            }
-            Err(e) => {
-                println!("Failed to allocate memory for the paging table: {:?}", e);
-                return Err(e);
-            }
-        };
+    match allocate_memory(1, Some(alignment)) {
+        Ok(address) => Ok(address),
+        Err(err) => {
+            println!("Failed to allocate the page table: {:?}", err);
+            Err(())
+        }
     }
 }
 
@@ -842,33 +855,19 @@ fn allocate_page_table_for_stage_2(
     number_of_tables: u8,
 ) -> Result<usize, ()> {
     assert_ne!(number_of_tables, 0);
-    let table_address_alignment = if is_for_ttbr {
-        ((64 - ((PAGE_SHIFT - 3) as u8 * (4 - look_up_level) as u8) - t0sz).max(4)).min(12)
-            + (number_of_tables - 1)
+    let alignment = if is_for_ttbr {
+        ((64 - ((PAGE_SHIFT - 3) as usize * (4 - look_up_level) as usize) - t0sz as usize).max(4))
+            .min(12)
+            + (number_of_tables as usize - 1)
     } else {
         assert_eq!(number_of_tables, 1);
-        STAGE_2_PAGE_SHIFT as u8
+        STAGE_2_PAGE_SHIFT
     };
-    loop {
-        match allocate_memory(number_of_tables as usize) {
-            Ok(address) => {
-                if (address & ((1 << table_address_alignment) - 1)) != 0 {
-                    println!(
-                        "The table address is not alignment with {}, {:#X} will be wasted.",
-                        table_address_alignment, address
-                    );
-                    /* TODO: アライメントを指定してメモリを確保できるようにし、無駄をなくす。 */
-                    if number_of_tables != 1 {
-                        let _ = allocate_memory(1);
-                    }
-                } else {
-                    return Ok(address);
-                }
-            }
-            Err(e) => {
-                println!("Failed to allocate memory for the paging table: {:?}", e);
-                return Err(());
-            }
-        };
+    match allocate_memory(number_of_tables as usize, Some(alignment)) {
+        Ok(address) => Ok(address),
+        Err(err) => {
+            println!("Failed to allocate the page table: {:?}", err);
+            Err(())
+        }
     }
 }

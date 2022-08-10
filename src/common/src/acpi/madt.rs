@@ -16,6 +16,7 @@ const MADT_STRUCT_SIZE: usize = core::mem::size_of::<MADT>();
 
 const STRUCT_TYPE_GICC: u8 = 0x0B;
 const STRUCT_TYPE_GICD: u8 = 0x0C;
+const STRUCT_TYPE_ITS: u8 = 0x0F;
 
 const GICC_FLAGS_ENABLED: u32 = 1;
 
@@ -57,12 +58,13 @@ pub struct GicCpuInterfaceStructure {
     spe_overflow_interrupt: u16,
 }
 
-/// MADTのリストから順次GicCpuInterfaceStructureを検出し、MPIDRを返却するIterです
-///
-/// このIteratorはMADTのInterrupt Controller Structure配列からGicCpuInterfaceStructureを先頭から順に
-/// 取得し、その中にあるMPIDRの値を返します。なお該当MPIDRが有効でない([`GICC_FLAGS_ENABLED`]が立ってない)
-/// 場合はスキップします。
+/// The iterator to get MPIDR which is enabled(`GICC_FLAGS_ENABLED` is enabled)
 pub struct GicCpuInterfaceStructureList {
+    pointer: usize,
+    limit: usize,
+}
+
+pub struct GicInterruptTranslationServiceStructureList {
     pointer: usize,
     limit: usize,
 }
@@ -91,6 +93,16 @@ impl MADT {
         }
         return None;
     }
+
+    pub fn get_gic_its_list(&self) -> GicInterruptTranslationServiceStructureList {
+        let length = self.length as usize - MADT_STRUCT_SIZE;
+        let pointer = self as *const _ as usize + MADT_STRUCT_SIZE;
+
+        GicInterruptTranslationServiceStructureList {
+            pointer,
+            limit: pointer + length,
+        }
+    }
 }
 
 impl Iterator for GicCpuInterfaceStructureList {
@@ -114,6 +126,24 @@ impl Iterator for GicCpuInterfaceStructureList {
                     self.next()
                 }
             }
+            _ => self.next(),
+        }
+    }
+}
+
+impl Iterator for GicInterruptTranslationServiceStructureList {
+    type Item = usize;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pointer >= self.limit {
+            return None;
+        }
+        let record_base = self.pointer;
+        let record_type = unsafe { *(record_base as *const u8) };
+        let record_length = unsafe { *((record_base + 1) as *const u8) };
+
+        self.pointer += record_length as usize;
+        match record_type {
+            STRUCT_TYPE_ITS => Some(unsafe { *((record_base + 8) as *const u64) } as usize),
             _ => self.next(),
         }
     }

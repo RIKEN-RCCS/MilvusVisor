@@ -15,15 +15,27 @@ We are currently developing MilvusVisor as a research activity to achieve HPC en
 
 Currently, MilvusVisor provides the following function.
 
+You can build with enabling some functions by `make custom_all FEATURES=feature1,feautre2,...`.(`featureN` is described like `Feature Name: feature_name` in each section.)
+
 - Protecting non-volatile data in devices from guest OS (e.g. Firmware, MAC address)
-  - Supported device: Intel I210, Mellanox Technologies MT27800
-- Protecting MilvusVisor itself against DMA attack
+  - Intel I210 (Feature Name: `i210`)
+    - Protect EEPROM from writing access
+  - Mellanox Technologies MT27800 (Feature Name: `mt27800`)
+    - Protect from firmware update
+- Protecting MilvusVisor itself against DMA attack (Feature Name: `smmu`)
   - Using SMMUv3 Stage 2 Page Translation to protect from DMA attack
-- Fast restore: Fast restoring the guest environments without reboot the machine
+  - Stage 1 translation is available from guest OS
+- Fast restore: Fast restoring the guest environments without reboot the machine (Feature Name: `fast_restore`)
   - Taking a snapshot just before the first boot of the guest OS
   - Restoring it on rebooting/shutting down the guest OS
-- Protecting ACPI Tables from write accesses
+- Protecting ACPI Tables from write accesses (Feature Name: `acpi_table_protection`)
   - For the Fast Restore
+- Linked-List Style Memory Allocator (Feature Name:  `advanced_memory_manager`)
+- Contiguous Bit (Feature Name: `contiguous_bit`)
+  - Set contiguous bit enabled  if available (TLB will be optimized by the contiguous bit)
+  - Some machine may noe work fine with the contiguous bit
+- A64FX specific registers' initialization (Feature Name: `a64fx`)
+  - Initialize some a64fx specific registers during boot
 
 ## Tested machines
 
@@ -31,18 +43,17 @@ We have tested MilvusVisor on the following machines.
 
 - FIJITSU FX700
 - GIGABYTE E252-P30
-- AML-S805X-AC
 - QEMU
 
 The following table shows which feature worked on which machines.
 
-| Test items \\ Machine                                       | FX700 | E252-P30 | AML | QEMU |
-|:------------------------------------------------------------|:-----:|:--------:|:---:|:----:|
-| Booting Linux on MilvusVisor (Multi-core)                   | o     | o        | o   | o    |
-| Protecting non-volatile data of Intel I210                  | o     | -        | -   | -    |
-| Protecting firmware update of Mellanox Technologies MT27800 | o     | -        | -   | -    |
-| Protecting MilvusVisor itself against DMA attack            | o     | -        | -   | -    |
-| Fast Restore                                                | o     | -        | -   | -    |
+| Test items \\ Machine                                       | FX700 | E252-P30 | QEMU |
+|:------------------------------------------------------------|:-----:|:--------:|:----:|
+| Booting Linux on MilvusVisor (Multi-core)                   | o     | o        | o   |
+| Protecting non-volatile data of Intel I210                  | o     | -        | -   |
+| Protecting firmware update of Mellanox Technologies MT27800 | o     | -        | -   |
+| Protecting MilvusVisor itself against DMA attack            | o     | -        | -   |
+| Fast Restore                                                | o     | -        | -   |
 
 ## How to build the hypervisor
 
@@ -67,7 +78,7 @@ For example, if you want to build the hypervisor only with the device protection
 make custom_all FEATURES=i210,mt27800
 ```
 
-Next (How to run the hypervisor)[＃How to run the hypervisor]
+Next [How to run the hypervisor](#how-to-run-the-hypervisor)
 
 ### By docker
 #### Requirements
@@ -96,7 +107,7 @@ make QEMU_EFI=/usr/share/qemu-efi/QEMU_EFI.fd run #Please set the path of your Q
 ### On a physical machine from a USB memory stick
 #### Requirement
 - Prepare a USB memory that has an EFI (FAT) partition that has `/EFI/BOOT/` directory. Please confirm that there is no important file in the partition.
-- Prepare a physical machine that has ARMv8-A or later, and UEFI firmware.
+- Prepare a physical machine that has ARMv8.1-A or later, and UEFI firmware.
 
 #### Steps
 1. Attach your USB memory stick to the development machine which built the hypervisor binary.

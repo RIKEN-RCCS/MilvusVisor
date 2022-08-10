@@ -1,18 +1,18 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
 //!
-//! UEFI
+//! Unified Extensible Firmware Interface
+//!
+//! Supported Version: 2.9
 //!
 
 #![no_std]
-#![feature(maybe_uninit_array_assume_init)]
-
-use boot_service::EfiBootServices;
-use output::EfiOutputProtocol;
+#![feature(abi_efiapi)]
 
 pub mod boot_service;
 pub mod file;
@@ -98,11 +98,11 @@ pub struct EfiSystemTable {
     pub console_input_handler: EfiHandle,
     pub console_input_protocol: usize,
     pub console_output_handler: EfiHandle,
-    pub console_output_protocol: *const EfiOutputProtocol,
+    pub console_output_protocol: *const output::EfiOutputProtocol,
     pub standard_error_handler: EfiHandle,
-    pub standard_error_protocol: *const EfiOutputProtocol,
+    pub standard_error_protocol: *const output::EfiOutputProtocol,
     pub efi_runtime_services: usize,
-    pub efi_boot_services: *const EfiBootServices,
+    pub efi_boot_services: *const boot_service::EfiBootServices,
     pub num_table_entries: usize,
     pub configuration_table: usize,
 }
@@ -165,15 +165,3 @@ pub struct EfiTime {
     day_light: u8,
     pad_2: u8,
 }
-
-const EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL: u32 = 0x00000001;
-#[allow(dead_code)]
-const EFI_OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x00000002;
-#[allow(dead_code)]
-const EFI_OPEN_PROTOCOL_TEST_PROTOCOL: u32 = 0x00000004;
-#[allow(dead_code)]
-const EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER: u32 = 0x00000008;
-#[allow(dead_code)]
-const EFI_OPEN_PROTOCOL_BY_DRIVER: u32 = 0x00000010;
-#[allow(dead_code)]
-const EFI_OPEN_PROTOCOL_EXCLUSIVE: u32 = 0x00000020;

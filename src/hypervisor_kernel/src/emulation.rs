@@ -12,18 +12,21 @@
 mod load;
 mod store;
 
-use crate::{handler_panic, StoredRegisters};
+pub use load::read_memory;
+pub use store::write_memory;
 
-use common::bitmask;
+use crate::{handler_panic, paging::map_address, StoredRegisters};
+
 use common::cpu::{
+    convert_virtual_address_to_intermediate_physical_address_el0_read,
     convert_virtual_address_to_intermediate_physical_address_el1_read,
     convert_virtual_address_to_intermediate_physical_address_el1_write,
     convert_virtual_address_to_physical_address_el2_read,
+    convert_virtual_address_to_physical_address_el2_write, SPSR_EL2_M, SPSR_EL2_M_EL0T,
 };
+use common::{bitmask, PAGE_MASK, PAGE_SIZE};
 
 use core::arch::asm;
-
-const NORMAL_INSTRUCTION_SIZE: usize = 4;
 
 const REGISTER_NUMBER_XZR: u8 = 31;
 
@@ -34,6 +37,7 @@ pub fn data_abort_handler(
     elr: u64,
     far: u64,
     hpfar: u64,
+    spsr: u64,
 ) -> Result<(), ()> {
     #[cfg(debug_assertions)]
     if (esr & (1 << 24)) != 0 {
@@ -67,25 +71,23 @@ pub fn data_abort_handler(
         println!("No Valid Instruction Syndrome Information.");
     }
 
-    /* TODO: check EL1 or EL0 */
-    let instruction_intermediate_physical_address =
-        convert_virtual_address_to_intermediate_physical_address_el1_read(elr as usize).unwrap();
+    let instruction_intermediate_physical_address = if (spsr & SPSR_EL2_M) == SPSR_EL2_M_EL0T {
+        pr_debug!("Access from EL0");
+        convert_virtual_address_to_intermediate_physical_address_el0_read(elr as usize).unwrap()
+    } else {
+        convert_virtual_address_to_intermediate_physical_address_el1_read(elr as usize).unwrap()
+    };
     pr_debug!(
         "Target Instruction Address: {:#X} => {:#X}",
         elr,
         instruction_intermediate_physical_address
     );
-    assert_eq!(
-        convert_virtual_address_to_physical_address_el2_read(
-            instruction_intermediate_physical_address
-        )
-        .unwrap_or(0),
-        instruction_intermediate_physical_address
-    );
-    let target_instruction = unsafe { *(instruction_intermediate_physical_address as *const u32) };
+    let target_instruction_virtual_address =
+        get_virtual_address_to_access_ipa(instruction_intermediate_physical_address, false)?;
+    let target_instruction = unsafe { *(target_instruction_virtual_address as *const u32) };
     pr_debug!("Target Instruction: {:#X}", target_instruction);
 
-    return emulate_instruction(s_r, target_instruction, elr, far, hpfar);
+    emulate_instruction(s_r, target_instruction, elr, far, hpfar)
 }
 
 fn emulate_instruction(
@@ -211,7 +213,7 @@ fn emulate_instruction(
         }
     }
     println!("Unknown Instruction: {:#X}", target_instruction);
-    return Err(());
+    Err(())
 }
 
 fn faulting_va_to_ipa_load(far: u64) -> Result<usize, ()> {
@@ -222,14 +224,42 @@ fn faulting_va_to_ipa_store(far: u64) -> Result<usize, ()> {
     convert_virtual_address_to_intermediate_physical_address_el1_write(far as usize)
 }
 
-fn advance_elr_el2() {
-    unsafe {
-        asm!("
-                mrs {t}, elr_el2
-                add {t}, {t}, {SIZE}
-                msr elr_el2, {t}
-                ", t = out(reg) _ ,SIZE = const NORMAL_INSTRUCTION_SIZE)
-    };
+fn get_virtual_address_to_access_ipa(
+    intermediate_physical_address: usize,
+    is_write_access: bool,
+) -> Result<usize, ()> {
+    if is_write_access {
+        if let Ok(pa) =
+            convert_virtual_address_to_physical_address_el2_write(intermediate_physical_address)
+        {
+            return if pa != intermediate_physical_address {
+                println!("IPA({:#X}) != VA({:#X})", intermediate_physical_address, pa);
+                Err(())
+            } else {
+                Ok(intermediate_physical_address)
+            };
+        }
+    } else if let Ok(pa) =
+        convert_virtual_address_to_physical_address_el2_read(intermediate_physical_address)
+    {
+        return if pa != intermediate_physical_address {
+            println!("IPA({:#X}) != VA({:#X})", intermediate_physical_address, pa);
+            Err(())
+        } else {
+            Ok(intermediate_physical_address)
+        };
+    }
+    println!("Map {:#X}", intermediate_physical_address);
+    map_address(
+        intermediate_physical_address & PAGE_MASK,
+        intermediate_physical_address & PAGE_MASK,
+        PAGE_SIZE,
+        true,
+        true,
+        false,
+        true,
+    )?;
+    Ok(intermediate_physical_address)
 }
 
 fn get_register_reference_mut(s_r: &mut StoredRegisters, index: u8) -> &mut u64 {

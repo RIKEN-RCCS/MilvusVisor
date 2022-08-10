@@ -11,10 +11,10 @@
 //! Supported Version: ~2.0
 
 use crate::fast_restore::enter_restore_process;
-use crate::multi_core::setup_new_cpu;
-use crate::StoredRegisters;
+use crate::multi_core::{power_off_cpu, setup_new_cpu};
+use crate::{handler_panic, StoredRegisters};
 
-use common::cpu::secure_monitor_call;
+use common::cpu::{get_mpidr_el1, secure_monitor_call};
 
 /// PSCI Function ID List
 ///
@@ -121,6 +121,14 @@ pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut Stor
     if function_id == PsciFunctionId::CpuOn {
         pr_debug!("CPU ON: MPIDR: {:#X}", stored_registers.x1);
         setup_new_cpu(stored_registers);
+    } else if function_id == PsciFunctionId::CpuOff {
+        let result = power_off_cpu();
+        handler_panic!(
+            stored_registers,
+            "Failed to power off the cpu (MPIDR: {:#X}): {:?}",
+            get_mpidr_el1(),
+            PsciReturnCode::try_from(result)
+        );
     } else {
         #[cfg(feature = "fast_restore")]
         if function_id == PsciFunctionId::SystemOff

@@ -14,10 +14,9 @@ use arm_sbsa_generic_uart::SerialSbsaUart;
 use meson_gx_uart::SerialMesonGxUart;
 
 use common::serial_port::{SerialPortInfo, SerialPortType};
+use common::spin_flag::SpinLockFlag;
 
 use core::fmt;
-use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 trait SerialPortDevice {
     fn new(address: usize) -> Self;
@@ -55,7 +54,7 @@ impl SerialPortDevice for Device {
 
 pub struct SerialPort {
     device: Device,
-    write_lock: AtomicBool,
+    write_lock: SpinLockFlag,
 }
 
 impl SerialPort {
@@ -72,36 +71,18 @@ impl SerialPort {
                     Device::MesonGxUart(SerialMesonGxUart::new(info.virtual_address))
                 }
             },
-            write_lock: AtomicBool::new(false),
+            write_lock: SpinLockFlag::new(),
         }
     }
 
-    fn acquire_write_lock(&self) {
-        loop {
-            if self
-                .write_lock
-                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                return;
-            }
-            while self.write_lock.load(Ordering::Relaxed) {
-                core::hint::spin_loop();
-            }
-        }
-    }
-
-    fn release_write_lock(&self) {
-        self.write_lock.store(false, Ordering::Release)
-    }
-
-    fn wait_fifo(&mut self) -> core::fmt::Result {
+    fn wait_fifo(&mut self) -> fmt::Result {
+        assert!(self.write_lock.is_locked());
         let mut timeout = 0xFFFFusize;
         while self.device.is_write_fifo_full() {
             timeout -= 1;
             if timeout == 0 {
-                self.release_write_lock();
-                return Err(core::fmt::Error);
+                self.write_lock.unlock();
+                return Err(fmt::Error);
             }
             core::hint::spin_loop();
         }
@@ -110,7 +91,7 @@ impl SerialPort {
 
     /// For panic_handler
     pub unsafe fn force_release_write_lock(&self) {
-        self.release_write_lock();
+        self.write_lock.unlock();
     }
 }
 
@@ -118,25 +99,25 @@ pub unsafe fn init_default_serial_port(info: SerialPortInfo) {
     DEFAULT_SERIAL_PORT = Some(SerialPort::new(info));
 }
 
-impl Write for SerialPort {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.acquire_write_lock();
+impl fmt::Write for SerialPort {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.write_lock.lock();
         for c in s.as_bytes() {
             self.wait_fifo()?;
             if *c == b'\n' {
                 let result = self.device.write_char(b'\r');
                 if result.is_err() {
-                    self.release_write_lock();
+                    self.write_lock.unlock();
                     return Err(fmt::Error);
                 }
                 self.wait_fifo()?;
             }
-            if let Err(_) = self.device.write_char(*c) {
-                self.release_write_lock();
+            if self.device.write_char(*c).is_err() {
+                self.write_lock.unlock();
                 return Err(fmt::Error);
             }
         }
-        self.release_write_lock();
+        self.write_lock.unlock();
         return Ok(());
     }
 }
@@ -145,6 +126,7 @@ pub(super) static mut DEFAULT_SERIAL_PORT: Option<SerialPort> = None;
 
 pub fn print(args: fmt::Arguments) {
     if let Some(s) = unsafe { &mut DEFAULT_SERIAL_PORT } {
+        use fmt::Write;
         let _ = s.write_fmt(args);
     }
 }
@@ -158,8 +140,8 @@ macro_rules! print {
 
 #[macro_export]
 macro_rules! println {
-    ($fmt:expr) => ($crate::serial_port::print(format_args_nl!($fmt)));
-    ($fmt:expr, $($arg:tt)*) => ($crate::serial_port::print(format_args_nl!($fmt, $($arg)*)))
+    ($fmt:expr) => ($crate::serial_port::print(format_args!("{}\n", format_args!($fmt))));
+    ($fmt:expr, $($arg:tt)*) => ($crate::serial_port::print(format_args!("{}\n", format_args!($fmt, $($arg)*))));
 }
 
 #[cfg(debug_assertions)]
