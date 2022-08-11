@@ -153,11 +153,11 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
         *e = level2_table_address as u64 | (STREAM_TABLE_SPLIT as u64 - 1);
     }
 
+    let log2_size: u32 = (max_stream_id + 1).ilog2();
+
     println!(
-        "Level1 Table Entries: {:#X}, Max Stream Id: {:#X}, LOG2SIZE: {}",
-        number_of_level1_context_descriptors,
-        max_stream_id,
-        (max_stream_id + 1).log2()
+        "Level1 Table Entries: {:#X}, Max Stream Id: {:#X}, LOG2SIZE: {log2_size}",
+        number_of_level1_context_descriptors, max_stream_id
     );
 
     unsafe {
@@ -165,7 +165,7 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
             (base_address + SMMU_STRTAB_BASE_CFG) as *mut u32,
             SMMU_STRTAB_BASE_CFG_FMT_2LEVEL
                 | (STREAM_TABLE_SPLIT << SMMU_STRTAB_BASE_CFG_SPLIT_BITS_OFFSET)
-                | (max_stream_id + 1).log2(),
+                | log2_size,
         )
     };
     unsafe {
