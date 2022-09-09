@@ -6,6 +6,7 @@
 // http://opensource.org/licenses/mit-license.php
 
 #![no_std]
+#![feature(let_chains)]
 
 pub mod acpi;
 pub mod cpu;
