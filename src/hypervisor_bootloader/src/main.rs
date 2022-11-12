@@ -9,8 +9,6 @@
 #![no_main]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
-#![feature(let_else)]
-#![feature(int_log)]
 
 #[macro_use]
 mod console;
