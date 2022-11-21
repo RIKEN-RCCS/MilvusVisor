@@ -15,9 +15,11 @@
 #![feature(abi_efiapi)]
 
 pub mod boot_service;
+pub mod device_path;
 pub mod file;
 pub mod loaded_image;
 pub mod output;
+pub mod pxe;
 
 pub type EfiHandle = usize;
 
@@ -121,20 +123,6 @@ pub struct Guid {
     pub d3: u16,
     pub d4: [u8; 8],
 }
-
-const EFI_LOADED_IMAGE_PROTOCOL_GUID: Guid = Guid {
-    d1: 0x5B1B31A1,
-    d2: 0x9562,
-    d3: 0x11d2,
-    d4: [0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
-};
-
-const EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: Guid = Guid {
-    d1: 0x0964e5b22,
-    d2: 0x6459,
-    d3: 0x11d2,
-    d4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
-};
 
 pub const EFI_DTB_TABLE_GUID: Guid = Guid {
     d1: 0xb1b621d5,

@@ -9,7 +9,14 @@
 //! EFI Loaded Image Protocol
 //!
 
-use crate::{boot_service::EfiMemoryType, EfiHandle, EfiStatus, EfiSystemTable};
+use crate::{boot_service::EfiMemoryType, EfiHandle, EfiStatus, EfiSystemTable, Guid};
+
+pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: Guid = Guid {
+    d1: 0x5B1B31A1,
+    d2: 0x9562,
+    d3: 0x11d2,
+    d4: [0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
+};
 
 #[repr(C)]
 pub struct EfiLoadedImageProtocol {

@@ -23,8 +23,12 @@ mod smmu;
 use common::cpu::*;
 use common::*;
 
+#[cfg(not(feature = "tftp"))]
+use uefi::file;
+#[cfg(feature = "tftp")]
+use uefi::pxe;
 use uefi::{
-    boot_service, file, EfiConfigurationTable, EfiHandle, EfiStatus, EfiSystemTable,
+    boot_service, EfiConfigurationTable, EfiHandle, EfiStatus, EfiSystemTable,
     EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
 };
 
@@ -41,6 +45,9 @@ static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
 static mut ACPI_20_TABLE_ADDRESS: Option<usize> = None;
 static mut DTB_ADDRESS: Option<usize> = None;
 static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
+
+#[cfg(feature = "tftp")]
+static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) {
@@ -285,6 +292,7 @@ pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationE
 ///
 /// # Result
 /// Returns the entry point of hypervisor_kernel
+#[cfg(not(feature = "tftp"))]
 fn load_hypervisor() -> usize {
     let image_handle = unsafe { IMAGE_HANDLE };
     let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
@@ -408,6 +416,8 @@ fn load_hypervisor() -> usize {
             .expect("Failed to map hypervisor");
         }
     }
+
+    let entry_point = elf_header.get_entry_point();
     if let Err(e) = boot_service::free_pool(b_s, program_header_pool) {
         println!("Failed to free the pool: {:?}", e);
     }
@@ -418,7 +428,165 @@ fn load_hypervisor() -> usize {
         println!("Failed to clone the RootProtocol: {:?}", e);
     }
 
-    return elf_header.get_entry_point();
+    return entry_point;
+}
+
+/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] via TFTP
+///
+/// This function loads hypervisor_kernel according to ELF header.
+/// The hypervisor_kernel will be loaded from [`common::HYPERVISOR_PATH`]
+///
+/// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
+/// create new TTBR0_EL2 by copying original page table tree.
+///
+/// # Panics
+/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
+///
+/// # Result
+/// Returns the entry point of hypervisor_kernel
+#[cfg(feature = "tftp")]
+fn load_hypervisor() -> usize {
+    let image_handle = unsafe { IMAGE_HANDLE };
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let pxe_protocol =
+        pxe::open_pxe_handler(image_handle, b_s).expect("Failed to open PXE Handler");
+    unsafe { PXE_PROTOCOL = pxe_protocol };
+    let mut file_name_ascii: [u8; HYPERVISOR_TFTP_PATH.len() + 1] =
+        [0; HYPERVISOR_TFTP_PATH.len() + 1];
+    for (i, e) in HYPERVISOR_TFTP_PATH.as_bytes().iter().enumerate() {
+        file_name_ascii[i] = *e;
+    }
+
+    let server_ip = pxe::get_server_ip_v4(pxe_protocol).expect("Failed to get Server IP");
+    pr_debug!("Server IP: {:?}", server_ip);
+
+    let mut kernel_size = 0;
+    let mut dummy_buffer = [0u8; 4];
+    let result = pxe::get_file(
+        pxe_protocol,
+        dummy_buffer.as_mut_ptr(),
+        &mut kernel_size,
+        server_ip,
+        file_name_ascii.as_ptr(),
+    );
+    assert_eq!(result, Err(EfiStatus::EfiBufferTooSmall));
+
+    if kernel_size == 0 {
+        kernel_size = 0x10000;
+        println!(
+            "Failed to get file size, assume file size: {:#X}",
+            kernel_size
+        );
+    }
+
+    pr_debug!("Kernel Size: {:#X}", kernel_size);
+
+    /* Allocate pool */
+    let kernel_pool = boot_service::alloc_pool(b_s, kernel_size as usize)
+        .expect("Failed to allocate memory pool");
+
+    /* Read Hypervisor Binary */
+    let mut read_size = kernel_size;
+    pxe::get_file(
+        pxe_protocol,
+        kernel_pool as *mut u8,
+        &mut read_size,
+        server_ip,
+        file_name_ascii.as_ptr(),
+    )
+    .expect("Failed to receive file from server");
+    if read_size != kernel_size {
+        panic!(
+            "Expected {:#X} Bytes, but read size is {:#X} Bytes.",
+            kernel_size, read_size
+        );
+    }
+
+    /* Read ElfHeader */
+    let elf_header: &elf::Elf64Header = unsafe { &*(kernel_pool as *const elf::Elf64Header) };
+    if !elf_header.check_elf_header() {
+        panic!("Failed to load the hypervisor");
+    }
+
+    /* Switch PageTable */
+    let cloned_page_table = paging::clone_page_table();
+    unsafe {
+        ORIGINAL_PAGE_TABLE = get_ttbr0_el2() as usize;
+        ORIGINAL_TCR_EL2 = get_tcr_el2();
+    };
+    set_ttbr0_el2(cloned_page_table as u64);
+    pr_debug!(
+        "Switched TTBR0_EL2 from {:#X} to {:#X}",
+        unsafe { ORIGINAL_PAGE_TABLE },
+        cloned_page_table
+    );
+
+    assert!(
+        (kernel_size as usize)
+            > elf_header.get_program_header_entry_size()
+                * elf_header.get_num_of_program_header_entries()
+    );
+
+    for index in 0..elf_header.get_num_of_program_header_entries() {
+        if let Some(info) =
+            elf_header.get_segment_info(index, kernel_pool + elf_header.get_program_header_offset())
+        {
+            pr_debug!("{:#X?}", info);
+            if info.memory_size == 0 {
+                continue;
+            }
+            let pages = (((info.memory_size - 1) & PAGE_MASK) >> PAGE_SHIFT) + 1;
+            let physical_base_address =
+                allocate_memory(pages, None).expect("Failed to allocate memory for hypervisor");
+
+            if info.file_size > 0 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        (kernel_pool + info.file_offset) as *const u8,
+                        physical_base_address as *mut u8,
+                        info.file_size,
+                    )
+                };
+            }
+
+            if info.memory_size - info.file_size > 0 {
+                unsafe {
+                    core::ptr::write_bytes(
+                        (physical_base_address + info.file_size) as *mut u8,
+                        0,
+                        info.memory_size - info.file_size,
+                    )
+                };
+            }
+            if info.virtual_base_address < HYPERVISOR_VIRTUAL_BASE_ADDRESS {
+                panic!(
+                    "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_VIRTUAL_BASE_ADDRESS:{:#X}",
+                    info.virtual_base_address, HYPERVISOR_VIRTUAL_BASE_ADDRESS
+                );
+            } else if info.virtual_base_address >= HYPERVISOR_SERIAL_BASE_ADDRESS {
+                panic!(
+                    "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_SERIAL_BASE_ADDRESS:{:#X}",
+                    info.virtual_base_address, HYPERVISOR_SERIAL_BASE_ADDRESS
+                );
+            }
+            paging::map_address(
+                physical_base_address,
+                info.virtual_base_address,
+                pages << PAGE_SHIFT,
+                info.readable,
+                info.writable,
+                info.executable,
+                false,
+            )
+            .expect("Failed to map hypervisor");
+        }
+    }
+
+    let entry_point = elf_header.get_entry_point();
+    if let Err(e) = boot_service::free_pool(b_s, kernel_pool) {
+        println!("Failed to free the pool: {:?}", e);
+    }
+    return entry_point;
 }
 
 fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
@@ -688,20 +856,97 @@ fn set_up_el1() {
     set_cptr_el2(cptr_el2);
 }
 
+#[cfg(feature = "tftp")]
+fn run_payload() -> EfiStatus {
+    let image_handle = unsafe { IMAGE_HANDLE };
+    let mut payload_handle = 0;
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let device_path = uefi::device_path::get_full_path_of_current_device(image_handle, b_s)
+        .expect("Failed to get payload path");
+    let pxe_protocol = unsafe { PXE_PROTOCOL };
+    let mut file_name_ascii: [u8; UEFI_PAYLOAD_PATH.len() + 1] = [0; UEFI_PAYLOAD_PATH.len() + 1];
+    for (i, e) in UEFI_PAYLOAD_PATH.as_bytes().iter().enumerate() {
+        file_name_ascii[i] = *e;
+    }
+    let server_ip = pxe::get_server_ip_v4(pxe_protocol).expect("Failed to get Server IP");
+
+    /* Get Payload Binary via TFTP */
+    let mut file_size = 0;
+    let mut dummy_buffer = [0u8; 4];
+    let result = pxe::get_file(
+        pxe_protocol,
+        dummy_buffer.as_mut_ptr(),
+        &mut file_size,
+        server_ip,
+        file_name_ascii.as_ptr(),
+    );
+    assert_eq!(result, Err(EfiStatus::EfiBufferTooSmall));
+
+    if file_size == 0 {
+        file_size = 0x10000;
+        println!(
+            "Failed to get file size, assume file size: {:#X}",
+            file_size
+        );
+    }
+
+    pr_debug!("Kernel Size: {:#X}", file_size);
+
+    /* Allocate pool */
+    let file_pool =
+        boot_service::alloc_pool(b_s, file_size as usize).expect("Failed to allocate memory pool");
+
+    /* Receive Binary */
+    let mut read_size = file_size;
+    pxe::get_file(
+        pxe_protocol,
+        file_pool as *mut u8,
+        &mut read_size,
+        server_ip,
+        file_name_ascii.as_ptr(),
+    )
+    .expect("Failed to receive file from server");
+    if read_size != file_size {
+        panic!(
+            "Expected {:#X} Bytes, but read size is {:#X} Bytes.",
+            file_size, read_size
+        );
+    }
+
+    /* Load Binary into UEFI */
+    let status = unsafe {
+        ((*b_s).load_image)(
+            false,
+            image_handle,
+            device_path,
+            file_pool,
+            file_size as usize,
+            &mut payload_handle,
+        )
+    };
+    let _ = boot_service::free_pool(b_s, file_pool);
+    if status != EfiStatus::EfiSuccess {
+        panic!("Failed to load image: {:?}", status);
+    }
+    let mut data_size = 0usize;
+    /* Run */
+    unsafe { ((*b_s).start_image)(payload_handle, &mut data_size, 0) }
+}
+
 extern "C" fn el1_main() -> ! {
     local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
 
     assert_eq!(get_current_el() >> 2, 1, "Failed to jump to EL1");
     println!("Hello,world! from EL1");
 
+    #[cfg(feature = "tftp")]
+    let status = run_payload();
+    #[cfg(not(feature = "tftp"))]
+    let status = EfiStatus::EfiSuccess;
+
     println!("Return to UEFI.");
     unsafe {
-        ((*(*SYSTEM_TABLE).efi_boot_services).exit)(
-            IMAGE_HANDLE,
-            EfiStatus::EfiSuccess,
-            0,
-            core::ptr::null(),
-        )
+        ((*(*SYSTEM_TABLE).efi_boot_services).exit)(IMAGE_HANDLE, status, 0, core::ptr::null())
     };
     panic!("Failed to exit");
 }

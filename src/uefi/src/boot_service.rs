@@ -52,8 +52,16 @@ pub struct EfiBootServices {
     locate_handle: usize,
     locate_device_path: usize,
     install_configuration_table: usize,
-    load_image: usize,
-    start_image: usize,
+    pub load_image: extern "efiapi" fn(
+        boot_policy: bool,
+        parent_image_handler: EfiHandle,
+        device_path: *const crate::device_path::EfiDevicePathProtocol,
+        source_buffer: usize,
+        source_size: usize,
+        image_handle: *mut EfiHandle,
+    ) -> EfiStatus,
+    pub start_image:
+        extern "efiapi" fn(handle: EfiHandle, data_size: *mut usize, data: usize) -> EfiStatus,
     pub exit: extern "efiapi" fn(
         image_handler: EfiHandle,
         exit_status: EfiStatus,
@@ -94,7 +102,6 @@ pub struct EfiBootServices {
 }
 
 pub const EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL: u32 = 0x00000001;
-#[allow(dead_code)]
 pub const EFI_OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x00000002;
 #[allow(dead_code)]
 pub const EFI_OPEN_PROTOCOL_TEST_PROTOCOL: u32 = 0x00000004;

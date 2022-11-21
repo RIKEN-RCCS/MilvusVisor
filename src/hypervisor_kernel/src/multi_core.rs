@@ -10,7 +10,7 @@
 //!
 
 use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
-use crate::{allocate_memory, free_memory, handler_panic, StoredRegisters};
+use crate::{allocate_memory, free_memory, StoredRegisters};
 
 use common::{cpu, PAGE_SHIFT, STACK_PAGES};
 
@@ -123,12 +123,19 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
         hypervisor_registers_real_address as u64,
     );
     if regs.x0 as i32 != PsciReturnCode::Success as i32 {
-        handler_panic!(
-            regs,
+        if let Err(err) = free_memory(
+            stack_address as usize - (STACK_PAGES << PAGE_SHIFT),
+            STACK_PAGES,
+        ) {
+            println!("Failed to free memory: {:?}", err);
+        }
+        unsafe { REGISTER_BUFFER.complete_flag.store(1, Ordering::Release) };
+        println!(
             "Failed to power on the cpu (MPIDR: {:#X}): {:?}",
             regs.x1,
             PsciReturnCode::try_from(regs.x0 as i32)
         );
+        return;
     }
     NUMBER_OF_RUNNING_AP.fetch_add(1, Ordering::SeqCst);
     pr_debug!("The initialization completed.");

@@ -35,6 +35,10 @@ pub const HYPERVISOR_HASH_INFO: Option<&'static str> = if let Some(s) = option_e
 pub const COMPILER_INFO: Option<&'static str> =if let Some(s) = option_env!("RUSTC_VERSION") && s.len() != 0 {Some(s)}else{None};
 /// The path of hypervisor_kernel
 pub const HYPERVISOR_PATH: &'static str = "\\EFI\\BOOT\\hypervisor_kernel";
+/// The path of hypervisor_kernel of tftp
+pub const HYPERVISOR_TFTP_PATH: &'static str = "/uefi/hypervisor_kernel";
+/// The path of payload uefi application
+pub const UEFI_PAYLOAD_PATH: &'static str = "/uefi/grubaa64.efi";
 /// The virtual address to map hypervisor_kernel (same as hypervisor_kernel/config/linkerscript.ld)
 pub const HYPERVISOR_VIRTUAL_BASE_ADDRESS: usize = 0x7FC0000000;
 /// The virtual address of serial port MMIO

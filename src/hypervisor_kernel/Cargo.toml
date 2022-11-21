@@ -20,6 +20,7 @@ acpi_table_protection = []
 contiguous_bit = []
 a64fx = []
 advanced_memory_manager = ["common/advanced_memory_manager"]
+tftp = []
 
 [dependencies]
 common = { path = "../common" }

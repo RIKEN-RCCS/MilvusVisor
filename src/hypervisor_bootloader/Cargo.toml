@@ -19,6 +19,7 @@ acpi_table_protection = []
 contiguous_bit = []
 a64fx = []
 advanced_memory_manager = [] # Bootloader uses stack style allocator
+tftp = []
 
 [dependencies]
 common = { path = "../common" }

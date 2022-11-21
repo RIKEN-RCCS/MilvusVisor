@@ -10,10 +10,14 @@
 //!
 
 use crate::boot_service::{EfiBootServices, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL};
-use crate::loaded_image::EfiLoadedImageProtocol;
-use crate::{
-    EfiHandle, EfiStatus, EfiTime, Guid, EFI_LOADED_IMAGE_PROTOCOL_GUID,
-    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
+use crate::loaded_image::{EfiLoadedImageProtocol, EFI_LOADED_IMAGE_PROTOCOL_GUID};
+use crate::{EfiHandle, EfiStatus, EfiTime, Guid};
+
+const EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: Guid = Guid {
+    d1: 0x0964e5b22,
+    d2: 0x6459,
+    d3: 0x11d2,
+    d4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
 
 const EFI_FILE_MODE_READ: u64 = 0x0000000000000001;
