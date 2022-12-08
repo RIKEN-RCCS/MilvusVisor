@@ -33,15 +33,17 @@ You can build with enabling some functions by `make custom_all FEATURES=feature1
 - Linked-List Style Memory Allocator (Feature Name:  `advanced_memory_manager`)
 - Contiguous Bit (Feature Name: `contiguous_bit`)
   - Set contiguous bit enabled  if available (TLB will be optimized by the contiguous bit)
-  - Some machine may noe work fine with the contiguous bit
+  - Some machine may not work fine with the contiguous bit
 - A64FX specific registers' initialization (Feature Name: `a64fx`)
-  - Initialize some a64fx specific registers during boot
+  - Initialize some A64FX specific registers during boot
+- PXE Boot (Feature Name: `tftp`)
+  - download hypervisor_kernel and payload(usually, bootloader) via TFTP
 
 ## Tested machines
 
 We have tested MilvusVisor on the following machines.
 
-- FIJITSU FX700
+- FUJITSU FX700
 - GIGABYTE E252-P30
 - QEMU
 
@@ -89,10 +91,10 @@ Next [How to run the hypervisor](#how-to-run-the-hypervisor)
 
 ```bash
 cd path/to/repo-root/src
-./build_docker_image.sh #Build docker image to build
-./build_hypervisor_by_docker.sh #Build the hypervisor by the docker image
+./build_by_docker.sh # You can add arguments to pass the make command, like as `custom_all FEATURES=...`
 ```
 For more detail, please see the scripts.
+
 
 ## How to run the hypervisor
 ### On QEMU
