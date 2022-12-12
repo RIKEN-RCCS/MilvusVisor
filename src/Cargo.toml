@@ -1,0 +1,8 @@
+[workspace]
+members = ["common", "hypervisor_bootloader", "hypervisor_kernel", "uefi"]
+
+[profile.release.package.hypervisor_bootloader]
+strip = "symbols"
+
+[profile.release.package.hypervisor_kernel]
+strip = "symbols"

@@ -24,6 +24,3 @@ tftp = []
 
 [dependencies]
 common = { path = "../common" }
-
-[profile.release]
-strip = "symbols"
