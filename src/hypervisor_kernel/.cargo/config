@@ -1,6 +1,6 @@
 [build]
 target = "aarch64-unknown-none"
-rustflags = ["-C", "target-feature=+v8.1a", "-C", "link-arg=-Tconfig/linkerscript.ld"]
+rustflags = ["-C", "target-feature=+v8.1a", "-C", "link-arg=-Thypervisor_kernel/config/linkerscript.ld"]
 
 [unstable]
 build-std = ["core", "compiler_builtins"]

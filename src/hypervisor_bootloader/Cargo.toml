@@ -24,6 +24,3 @@ tftp = []
 [dependencies]
 common = { path = "../common" }
 uefi = { path = "../uefi" }
-
-[profile.release]
-strip = "symbols"

@@ -12,7 +12,7 @@ BOOTLOADER = hypervisor_bootloader
 KERNEL = hypervisor_kernel
 CP = cp
 MKDIR = mkdir -p
-QEMU = qemu-system-aarch64
+QEMU ?= qemu-system-aarch64
 RM = rm -rf
 CARGO = cargo
 export PROJECT_HASH := $(shell git rev-parse HEAD 2> /dev/null)
@@ -25,8 +25,8 @@ QEMU_EFI ?= QEMU_EFI.fd
 
 all:  bootloader kernel
 	$(MKDIR) bin/EFI/BOOT/
-	$(CP) $(BOOTLOADER)/target/*/release/$(BOOTLOADER).efi bin/EFI/BOOT/BOOTAA64.EFI
-	$(CP) $(KERNEL)/target/*/release/$(KERNEL) bin/EFI/BOOT/$(KERNEL)
+	$(CP) target/*/release/$(BOOTLOADER).efi bin/EFI/BOOT/BOOTAA64.EFI
+	$(CP) target/*/release/$(KERNEL) bin/EFI/BOOT/$(KERNEL)
 
 minimum_all: export CARGO_BUILD_OPTION :=--no-default-features $(CARGO_BUILD_OPTION)
 minimum_all: all
@@ -42,14 +42,10 @@ kernel: .FORCE
 
 clean:
 	$(RM) bin
-	$(CD) $(BOOTLOADER) && $(CARGO) clean
-	$(CD) $(KERNEL) && $(CARGO) clean
+	$(CARGO) clean
 
 fmt:
-	$(CD) $(COMMON_MODULE) && $(CARGO) fmt
-	$(CD) $(UEFI_MODULE) && $(CARGO) fmt
-	$(CD) $(BOOTLOADER) && $(CARGO) fmt
-	$(CD) $(KERNEL) && $(CARGO) fmt
+	$(CARGO) fmt
 
 run:  all
 	$(QEMU) -m 1G -cpu a64fx -machine virt,virtualization=on,iommu=smmuv3 -smp 4 -nographic -bios $(QEMU_EFI) -drive file=fat:rw:bin/,format=raw,media=disk

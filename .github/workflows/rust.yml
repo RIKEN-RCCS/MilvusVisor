@@ -28,17 +28,13 @@ jobs:
         rustup component add rust-src
         mkdir bin
 
-    - name: Build bootloader
+    - name: Build hypervisor
       run: |
         cd src
         make bootloader
-        mv   hypervisor_bootloader/target/*/release/hypervisor_bootloader.efi ../bin/BOOTAA64.EFI
-
-    - name: Build kernel
-      run: |
-        cd src
+        mv   target/*/release/hypervisor_bootloader.efi ../bin/BOOTAA64.EFI
         make kernel
-        mv   hypervisor_kernel/target/*/release/hypervisor_kernel ../bin/hypervisor_kernel
+        mv   target/*/release/hypervisor_kernel ../bin/hypervisor_kernel
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v2
