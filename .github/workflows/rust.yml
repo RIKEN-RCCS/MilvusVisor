@@ -28,11 +28,15 @@ jobs:
         rustup component add rust-src
         mkdir bin
 
-    - name: Build hypervisor
+    - name: Build UEFI bootloader
       run: |
         cd src
         make bootloader
         mv   target/*/release/hypervisor_bootloader.efi ../bin/BOOTAA64.EFI
+
+    - name: Build kernel
+      run: |
+        cd src
         make kernel
         mv   target/*/release/hypervisor_kernel ../bin/hypervisor_kernel
 
