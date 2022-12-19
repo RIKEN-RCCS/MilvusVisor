@@ -216,6 +216,72 @@ fn emulate_instruction(
     Err(())
 }
 
+#[cfg(feature = "mrs_msr_emulation")]
+pub fn mrs_msr_handler(s_r: &mut StoredRegisters, esr: u64) -> Result<(), ()> {
+    let op0 = ((esr & bitmask!(21, 20)) >> 20) as u8;
+    let op2 = ((esr & bitmask!(19, 17)) >> 17) as u8;
+    let op1 = ((esr & bitmask!(16, 14)) >> 14) as u8;
+    let crn = ((esr & bitmask!(13, 10)) >> 10) as u8;
+    let target_register = ((esr & bitmask!(9, 5)) >> 5) as u8;
+    let crm = ((esr & bitmask!(4, 1)) >> 1) as u8;
+    let is_read_access = (esr & 1) == 1;
+    let mut xzr = 0;
+    let reg = if target_register == REGISTER_NUMBER_XZR {
+        &mut xzr
+    } else {
+        get_register_reference_mut(s_r, target_register)
+    };
+
+    macro_rules! emulate_mrs_msr_if_matched {
+        ($op0:literal, $op1:literal, $crn:literal, $crm:literal, $op2:literal) => {
+            if op0 == $op0 && op1 == $op1 && crn == $crn && crm == $crm && op2 == $op2 {
+                pr_debug!("S{}_{}_C{}_C{}_{}", $op0, $op1, $crn, $crm, $op2);
+                if is_read_access {
+                    unsafe {
+                        asm!("mrs {:x}, S{}_{}_C{}_C{}_{}",
+                                out(reg) * reg,
+                                const $op0,
+                                const $op1,
+                                const $crn,
+                                const $crm,
+                                const $op2)
+                    };
+                } else {
+                    unsafe{
+                        asm!("msr S{}_{}_C{}_C{}_{}, {:x}",
+                                const $op0,
+                                const $op1,
+                                const $crn,
+                                const $crm,
+                                const $op2,
+                                in(reg) *reg)
+                    };
+                }
+                common::cpu::advance_elr_el2();
+                return Ok(());
+            }
+        };
+    }
+
+    #[cfg(feature = "a64fx")]
+    {
+        /* IMP_FJ_CORE_UARCH_RESTRECTION_EL1 */
+        emulate_mrs_msr_if_matched!(3, 0, 11, 0, 5);
+        /* IMP_PF_CTRL_EL1 */
+        emulate_mrs_msr_if_matched!(3, 0, 11, 4, 0);
+        /* IMP_BARRIER_CTRL_EL1 */
+        emulate_mrs_msr_if_matched!(3, 0, 11, 12, 0);
+        /* IMP_SCCR_CTRL_EL1 */
+        emulate_mrs_msr_if_matched!(3, 0, 11, 8, 0);
+    }
+
+    println!(
+        "Unknown Register: S{}_{}_C{}_C{}_{}",
+        op0, op1, crn, crm, op2
+    );
+    Err(())
+}
+
 fn faulting_va_to_ipa_load(far: u64) -> Result<usize, ()> {
     convert_virtual_address_to_intermediate_physical_address_el1_read(far as usize)
 }

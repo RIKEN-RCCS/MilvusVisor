@@ -824,9 +824,22 @@ fn set_up_el1() {
         const IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0: u32 =
             1 << IMP_FJ_TAG_ADDRESS_CTRL_EL2_PFE0_BIT_OFFSET;
         const IMP_FJ_TAG_ADDRESS_CTRL_EL1_PFE0_BIT_OFFSET: u32 = 8;
+        const IMP_SCCR_CTRL_EL1_EL1AE: u64 = 1 << 63;
+        const IMP_SCCR_CTRL_EL1_EL0AE: u64 = 1 << 62;
+        const IMP_PF_CTRL_EL1_EL1AE: u64 = 1 << 63;
+        const IMP_PF_CTRL_EL1_EL0AE: u64 = 1 << 62;
+        const IMP_BARRIER_CTRL_EL1_EL1AE: u64 = 1 << 63;
+        const IMP_BARRIER_CTRL_EL1_EL0AE: u64 = 1 << 62;
 
         let mut imp_fj_tag_address_ctrl_el2: u32;
         let mut imp_fj_tag_address_ctrl_el1: u32 = 0;
+        /* Is it ok including IMP_SCCR_CTRL_EL1_EL0AE? */
+        let imp_sccr_ctrl_el1: u64 = IMP_SCCR_CTRL_EL1_EL1AE | IMP_SCCR_CTRL_EL1_EL0AE;
+        /* Is it ok including IMP_PF_CTRL_EL1_EL0AE? */
+        let imp_pf_ctrl_el1: u64 = IMP_PF_CTRL_EL1_EL1AE | IMP_PF_CTRL_EL1_EL0AE;
+        /* Is it ok including IMP_BARRIER_CTRL_EL1_EL0AE? */
+        let imp_barrier_ctrl_el1: u64 = IMP_BARRIER_CTRL_EL1_EL1AE | IMP_BARRIER_CTRL_EL1_EL0AE;
+
         unsafe { asm!("mrs {:x}, S3_4_C11_C2_0", out(reg) imp_fj_tag_address_ctrl_el2) };
         if is_e2h_enabled {
             imp_fj_tag_address_ctrl_el1 = imp_fj_tag_address_ctrl_el2;
@@ -847,6 +860,9 @@ fn set_up_el1() {
         imp_fj_tag_address_ctrl_el2 = 0;
         unsafe { asm!("msr S3_4_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el2) };
         unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C8_0, {:x}", in(reg) imp_sccr_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C4_0, {:x}", in(reg) imp_pf_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C12_0, {:x}", in(reg) imp_barrier_ctrl_el1) };
     }
 
     /* HCR_EL2 */

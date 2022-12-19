@@ -15,7 +15,8 @@ We are currently developing MilvusVisor as a research activity to achieve HPC en
 
 Currently, MilvusVisor provides the following function.
 
-You can build with enabling some functions by `make custom_all FEATURES=feature1,feautre2,...`.(`featureN` is described like `Feature Name: feature_name` in each section.)
+You can build with enabling some functions by `make custom_all FEATURES=feature1,feautre2,...`.(`featureN` is described like `Feature Name: feature_name` in each section.)  
+If you want to build with extra features, you can build by `make custom_all FEATURES=default,feature1,feature2,...`.
 
 - Protecting non-volatile data in devices from guest OS (e.g. Firmware, MAC address)
   - Intel I210 (Feature Name: `i210`)
@@ -35,27 +36,28 @@ You can build with enabling some functions by `make custom_all FEATURES=feature1
   - Set contiguous bit enabled  if available (TLB will be optimized by the contiguous bit)
   - Some machine may not work fine with the contiguous bit
 - A64FX specific registers' initialization (Feature Name: `a64fx`)
-  - Initialize some A64FX specific registers during boot
+  - Control some A64FX specific registers
 - PXE Boot (Feature Name: `tftp`)
-  - download hypervisor_kernel and payload(usually, bootloader) via TFTP
+  - download hypervisor_kernel and payload(usually, bootloader) via TFTP  
 
 ## Tested machines
 
 We have tested MilvusVisor on the following machines.
 
 - FUJITSU FX700
+- FUJITSU FX1000
 - GIGABYTE E252-P30
-- QEMU
+- QEMU (>= 7.1.0)
 
 The following table shows which feature worked on which machines.
 
-| Test items \\ Machine                                       | FX700 | E252-P30 | QEMU |
-|:------------------------------------------------------------|:-----:|:--------:|:----:|
-| Booting Linux on MilvusVisor (Multi-core)                   | o     | o        | o   |
-| Protecting non-volatile data of Intel I210                  | o     | -        | -   |
-| Protecting firmware update of Mellanox Technologies MT27800 | o     | -        | -   |
-| Protecting MilvusVisor itself against DMA attack            | o     | -        | -   |
-| Fast Restore                                                | o     | -        | -   |
+| Test items \\ Machine                                       | FX700 | FX1000 | E252-P30 | QEMU |
+|:------------------------------------------------------------|:-----:|:------:|:--------:|:----:|
+| Booting Linux on MilvusVisor (Multi-core)                   | o     |   o    | o        | o   |
+| Protecting non-volatile data of Intel I210                  | o     |   -    | -        | -   |
+| Protecting firmware update of Mellanox Technologies MT27800 | o     |   -    | -        | -   |
+| Protecting MilvusVisor itself against DMA attack            | o     |   -    | -        | -   |
+| Fast Restore                                                | o     |   o    | -        | -   |
 
 ## How to build the hypervisor
 
@@ -95,7 +97,6 @@ cd path/to/repo-root/src
 ```
 For more detail, please see the scripts.
 
-
 ## How to run the hypervisor
 ### On QEMU
 First, please install QEMU that supports emulating `QEMU ARM Virtual Machine`, `a64fx` CPU.
@@ -118,6 +119,27 @@ make QEMU_EFI=/usr/share/qemu-efi/QEMU_EFI.fd run #Please set the path of your Q
    !! Please be careful not to specify a wrong partition as `DEVICE` because the script mount/unmount the partition and copies the binary file with root privilege.!!
 4. Detach the USB memory from the development machine, and attach it to the physical machine to run the hypervisor.
 5. Boot the physical machine with UEFI, and specify `BOOTAA64.EFI` in the EFI partition as the EFI application to boot.
+
+### PXE Boot
+#### Requirement
+Modify each PATH in `src/common/src/lib.rs`.
+- `HYPERVISOR_TFTP_PATH` : The absolute path of hypervisor_kernel at the tftp server 
+- `UEFI_PAYLOAD_PATH` : The absolute path of payload UEFI Application like OS bootloader at the tftp server
+
+The default settings assume that files are deploy on tftp server likes below. 
+
+```
+(tftp root)
+`-- uefi
+    |-- BOOTAA64.EFI
+    |-- grubaa64.efi
+    `-- hypervisor_kernel
+```
+
+#### Steps
+1. Build MilvusVisor with tfp feature like `make custom_all FEATURES=default,tftp`
+2. Deploy `BOOTAA64.EFI` and `hypervisor_kernel` on tftp server.(you can rename `BOOTAA64.EFI`)
+3. Modify DHCP setting to change the boot file to `BOOTAA64.EFI`(if you renamed, adjust the name).
 
 ## How to generate the documentation
 You can generate the document by `cargo doc` in each cargo project directory.

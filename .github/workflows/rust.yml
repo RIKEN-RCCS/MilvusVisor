@@ -20,7 +20,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install tools
       run: |
@@ -41,7 +41,7 @@ jobs:
         mv   target/*/release/hypervisor_kernel ../bin/hypervisor_kernel
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: MilvusVisor
         path: bin/

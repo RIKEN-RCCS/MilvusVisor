@@ -6,7 +6,7 @@
 # http://opensource.org/licenses/mit-license.php
 [package]
 name = "hypervisor_bootloader"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 
 [features]
@@ -17,7 +17,8 @@ mt27800 = []
 fast_restore = []
 acpi_table_protection = []
 contiguous_bit = []
-a64fx = []
+mrs_msr_emulation = []
+a64fx = ["mrs_msr_emulation"]
 advanced_memory_manager = [] # Bootloader uses stack style allocator
 tftp = []
 

@@ -6,7 +6,7 @@
 # http://opensource.org/licenses/mit-license.php
 [package]
 name = "common"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 
 [features]

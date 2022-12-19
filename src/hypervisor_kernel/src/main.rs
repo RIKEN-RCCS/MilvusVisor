@@ -43,6 +43,8 @@ use core::mem::MaybeUninit;
 const EC_HVC: u8 = 0b010110;
 const EC_SMC_AA64: u8 = 0b010111;
 const EC_DATA_ABORT: u8 = 0b100100;
+#[cfg(feature = "mrs_msr_emulation")]
+const EC_MRS_MSR: u8 = 0b011000;
 
 static mut MEMORY_ALLOCATOR: (SpinLockFlag, MaybeUninit<MemoryAllocator>) =
     (SpinLockFlag::new(), MaybeUninit::uninit());
@@ -307,6 +309,13 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
                 emulation::data_abort_handler(regs, esr_el2, elr_el2, far_el2, hpfar_el2, spsr_el2)
             {
                 handler_panic!(regs, "Failed to emulate the instruction: {:?}", e);
+            }
+        }
+        #[cfg(feature = "mrs_msr_emulation")]
+        EC_MRS_MSR => {
+            pr_debug!("MRS/MSR Abort");
+            if let Err(e) = emulation::mrs_msr_handler(regs, esr_el2) {
+                handler_panic!(regs, "Failed to emulate MRS/MSR: {:?}", e);
             }
         }
         ec => {
