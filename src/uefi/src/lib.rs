@@ -12,7 +12,6 @@
 //!
 
 #![no_std]
-#![feature(abi_efiapi)]
 
 pub mod boot_service;
 pub mod device_path;

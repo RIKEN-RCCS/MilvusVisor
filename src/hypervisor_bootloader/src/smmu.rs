@@ -111,9 +111,8 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
         None,
     )
     .expect("Failed to allocate memory for Level2 Stream Table");
-    let level2_table = unsafe {
-        &mut *(level2_table_address as *mut [StreamTableEntry; (1 << STREAM_TABLE_SPLIT)])
-    };
+    let level2_table =
+        unsafe { &mut *(level2_table_address as *mut [StreamTableEntry; 1 << STREAM_TABLE_SPLIT]) };
     for e in level2_table {
         core::mem::forget(core::mem::replace(e, ste.clone()));
     }

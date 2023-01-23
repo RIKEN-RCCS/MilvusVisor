@@ -831,22 +831,22 @@ pub fn dump_page_table_stage2(
             current_level
         );
     }
-    for _ in 0..(paging_level - 1) {
-        base_address <<= 9; /*512Entry*/
-        current_level -= 1;
-        if !should_dump_table_only {
-            if (base_address >> 10) < 1024 {
-                print!("  {} KiB", base_address >> 10)
-            } else if (base_address >> 20) < 1024 {
-                print!("  {} MiB", base_address >> 20);
-            } else {
-                print!("  {} GiB", base_address >> 30);
+    if !should_dump_table_only {
+        for _ in 0..(paging_level - 1) {
+            base_address <<= 9; /* 512Entry */
+            current_level -= 1;
+            if !should_dump_table_only {
+                if (base_address >> 10) < 1024 {
+                    print!("  {} KiB", base_address >> 10)
+                } else if (base_address >> 20) < 1024 {
+                    print!("  {} MiB", base_address >> 20);
+                } else {
+                    print!("  {} GiB", base_address >> 30);
+                }
+                println!(": Level {} Descriptor", current_level);
             }
-            println!(": Level {} Descriptor", current_level);
         }
     }
-
-    if !should_dump_table_only {}
 
     dump_page_table_recursive(
         page_table_address,

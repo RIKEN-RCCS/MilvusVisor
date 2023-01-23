@@ -802,7 +802,6 @@ pub fn dump_page_table() {
         }
         println!(": Level {} Descriptor", current_level);
     }
-    drop(current_level);
 
     let mair_el2 = get_mair_el2();
 
