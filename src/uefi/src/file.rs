@@ -12,10 +12,18 @@
 use crate::boot_service::{EfiBootServices, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL};
 use crate::loaded_image::{EfiLoadedImageProtocol, EFI_LOADED_IMAGE_PROTOCOL_GUID};
 use crate::{EfiHandle, EfiStatus, EfiTime, Guid};
+use core::mem::MaybeUninit;
 
 const EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: Guid = Guid {
     d1: 0x0964e5b22,
     d2: 0x6459,
+    d3: 0x11d2,
+    d4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+
+const EFI_FILE_INFO_GUID: Guid = Guid {
+    d1: 0x09576e92,
+    d2: 0x6d3f,
     d3: 0x11d2,
     d4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
@@ -58,14 +66,15 @@ pub struct EfiSimpleFileProtocol {
 #[derive(Debug)]
 #[repr(C)]
 pub struct EfiFileInfo {
-    size: u64,
-    file_size: u64,
-    physical_size: u64,
-    create_time: EfiTime,
-    last_access_time: EfiTime,
-    modification_time: EfiTime,
-    attribute: u64,
-    /* file_name: [u16]*/
+    pub size: usize,
+    pub file_size: usize,
+    pub physical_size: usize,
+    pub create_time: EfiTime,
+    pub last_access_time: EfiTime,
+    pub modification_time: EfiTime,
+    pub attribute: u64,
+    // TODO: fix this part
+    pub file_name: [u16; 32],
 }
 
 #[repr(C)]
@@ -183,6 +192,23 @@ pub fn open_file(
         return Err(status);
     }
     Ok(file_handle)
+}
+
+pub fn get_file_info(file: *const EfiFileProtocol) -> Result<EfiFileInfo, EfiStatus> {
+    let mut result = MaybeUninit::<EfiFileInfo>::uninit();
+    let mut read_size = core::mem::size_of::<EfiFileInfo>();
+    let status = unsafe {
+        ((*file).get_info)(
+            file,
+            &EFI_FILE_INFO_GUID,
+            &mut read_size,
+            result.as_mut_ptr() as *mut _,
+        )
+    };
+    if status != EfiStatus::EfiSuccess {
+        return Err(status);
+    }
+    Ok(unsafe { result.assume_init() })
 }
 
 pub fn read(
