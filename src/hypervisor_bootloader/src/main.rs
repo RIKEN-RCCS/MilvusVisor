@@ -45,12 +45,14 @@ static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
 static mut ACPI_20_TABLE_ADDRESS: Option<usize> = None;
 static mut DTB_ADDRESS: Option<usize> = None;
 static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
+#[cfg(feature = "u_boot")]
+static mut MEMORY_ALLOCATOR_SUB: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
 
 #[cfg(feature = "tftp")]
 static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
 
 #[no_mangle]
-extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) {
+extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) -> ! {
     unsafe {
         IMAGE_HANDLE = image_handle;
         SYSTEM_TABLE = system_table;
@@ -77,6 +79,8 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     assert_eq!(get_current_el() >> 2, 2, "Expected CurrentEL is EL2");
 
     let allocated_memory_address = init_memory_pool();
+    #[cfg(feature = "u_boot")]
+    let allocated_memory_address_sub = init_sub_memory_pool();
 
     #[cfg(debug_assertions)]
     dump_memory_map();
@@ -87,7 +91,15 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     paging::dump_page_table();
 
     paging::setup_stage_2_translation().expect("Failed to setup Stage2 Paging");
-    map_memory_pool(allocated_memory_address);
+    map_memory_pool(allocated_memory_address, false);
+    #[cfg(feature = "u_boot")]
+    {
+        map_memory_pool(allocated_memory_address_sub, true);
+        let u_boot_addr = load_u_boot();
+        unsafe {
+            U_BOOT_ADDR = u_boot_addr;
+        }
+    }
 
     detect_acpi_and_dtb();
 
@@ -128,6 +140,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     let memory_save_list = create_memory_save_list();
 
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
+
     let mut system_info = SystemInformation {
         acpi_rsdp_address: unsafe { ACPI_20_TABLE_ADDRESS },
         vbar_el2: 0,
@@ -217,6 +230,39 @@ fn init_memory_pool() -> usize {
     return allocated_address;
 }
 
+/// Allocate memory and setup [`MEMORY_ALLOCATOR_SUB`]
+///
+/// This function allocates [`ALLOC_SIZE_SUB`] and then, set it into [`MEMORY_ALLOCATOR_SUB`]
+/// The attribute of allocated memory area will be changed to EfiUnusableMemory
+///
+/// # Panics
+/// If the allocation is failed, this function will panic.
+///
+/// # Result
+/// Returns the start_address allocated
+#[cfg(feature = "u_boot")]
+fn init_sub_memory_pool() -> usize {
+    let allocate_pages = ALLOC_SIZE_SUB >> PAGE_SHIFT;
+    let allocated_address = boot_service::alloc_highest_memory(
+        unsafe { (*SYSTEM_TABLE).efi_boot_services },
+        allocate_pages,
+        MAX_PHYSICAL_ADDRESS,
+    )
+    .expect("Failed to init memory pool");
+    println!(
+        "Allocated {:#X} ~ {:#X} for sub",
+        allocated_address,
+        allocated_address + ALLOC_SIZE_SUB
+    );
+    //unsafe { MEMORY_ALLOCATOR.write(MemoryAllocator::create(allocated_address, ALLOC_SIZE)) };
+    unsafe {
+        MEMORY_ALLOCATOR_SUB
+            .assume_init_mut()
+            .init(allocated_address, ALLOC_SIZE_SUB)
+    };
+    return allocated_address;
+}
+
 /// Map allocated memory area into TTBR0_EL2 and set up not to be accessible from EL1/EL0
 ///
 /// This function map memory allocated by [`init_memory_pool`] into new TTBR0_EL2.
@@ -226,10 +272,11 @@ fn init_memory_pool() -> usize {
 ///
 /// # Arguments
 /// * `allocated_memory_address` - base address of allocated memory by [`init_memory_pool`]
+/// * `el01_accessible` - allow EL1/EL0 to access this area
 ///
 /// # Panics
 /// If the mapping into new TTBR0_EL2 or VTTBR_EL2 is failed, this function will panic.
-fn map_memory_pool(allocated_memory_address: usize) {
+fn map_memory_pool(allocated_memory_address: usize, el01_accessible: bool) {
     paging::map_address(
         allocated_memory_address,
         allocated_memory_address,
@@ -242,9 +289,11 @@ fn map_memory_pool(allocated_memory_address: usize) {
     .expect("Failed to map allocated memory");
     /*paging::unmap_address_from_vttbr_el2(b_s, allocated_memory_address, ALLOC_SIZE)
     .expect("Failed to unmap allocated address.");*/
-    let dummy_page = allocate_memory(1, None).expect("Failed to alloc dummy page");
-    paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, ALLOC_SIZE, dummy_page)
-        .expect("Failed to map dummy page");
+    if !el01_accessible {
+        let dummy_page = allocate_memory(1, None).expect("Failed to alloc dummy page");
+        paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, ALLOC_SIZE, dummy_page)
+            .expect("Failed to map dummy page");
+    }
 }
 
 /// Allocate memory from memory pool
@@ -258,6 +307,18 @@ fn map_memory_pool(allocated_memory_address: usize) {
 pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
     unsafe {
         MEMORY_ALLOCATOR
+            .assume_init_mut()
+            .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT))
+    }
+}
+
+#[cfg(feature = "u_boot")]
+pub fn allocate_sub_memory(
+    pages: usize,
+    align: Option<usize>,
+) -> Result<usize, MemoryAllocationError> {
+    unsafe {
+        MEMORY_ALLOCATOR_SUB
             .assume_init_mut()
             .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT))
     }
@@ -277,6 +338,59 @@ pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationE
             .assume_init_mut()
             .free(address, pages << PAGE_SHIFT)
     }
+}
+
+/// Load u-boot
+///
+/// # Panics
+/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
+///
+/// # Result
+/// Returns the entry point of u-boot
+#[cfg(feature = "u_boot")]
+fn load_u_boot() -> usize {
+    let image_handle = unsafe { IMAGE_HANDLE };
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let root_protocol = file::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
+    let mut file_name_utf16: [u16; U_BOOT_PATH.len() + 1] = [0; U_BOOT_PATH.len() + 1];
+
+    for (i, e) in U_BOOT_PATH.encode_utf16().enumerate() {
+        file_name_utf16[i] = e;
+    }
+    let u_boot_protocol = file::open_file(root_protocol, &file_name_utf16)
+        .expect("Failed to open the u-boot binary file");
+
+    let u_boot_info =
+        file::get_file_info(u_boot_protocol).expect("Failed to get u-boot file information");
+    let pages = (((u_boot_info.file_size - 1) & PAGE_MASK) >> PAGE_SHIFT) + 1;
+    println!(
+        "u_boot info: {:#X} {:#X} {:#X} {:#X}",
+        u_boot_info.size, u_boot_info.file_size, u_boot_info.physical_size, pages
+    );
+
+    // U-Boot must be loaded at a 4K aligned address
+    let physical_base_address =
+        allocate_sub_memory(pages, Some(12)).expect("Failed to allocate memory for hypervisor");
+
+    let read_size = file::read(
+        u_boot_protocol,
+        physical_base_address as *mut u8,
+        u_boot_info.file_size,
+    )
+    .expect("Failed to read hypervisor segments");
+
+    if read_size != u_boot_info.file_size {
+        panic!("read failure? {}, {}", read_size, u_boot_info.file_size);
+    }
+
+    if let Err(e) = file::close_file(u_boot_protocol) {
+        println!("Failed to clone the U-BootProtocol: {:?}", e);
+    }
+    if let Err(e) = file::close_file(root_protocol) {
+        println!("Failed to clone the RootProtocol: {:?}", e);
+    }
+
+    return physical_base_address;
 }
 
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
@@ -717,6 +831,8 @@ fn set_up_el1() {
     /* Ignore it currently... */
 
     /* CPACR_EL1 & CPTR_EL2 */
+    #[cfg(feature = "u_boot")]
+    set_cptr_el2(0x0);
     let cptr_el2_current = get_cptr_el2();
     let mut cpacr_el1: u64 = 0;
 
@@ -778,7 +894,7 @@ fn set_up_el1() {
     } else {
         let mut tcr_el1: u64 = 0;
         let tcr_el2 = unsafe { ORIGINAL_TCR_EL2 };
-        /*Copy same bitfields */
+        /* Copy same bitfields */
         tcr_el1 |= tcr_el2 & ((1 << 16) - 1);
 
         tcr_el1 |= ((tcr_el2 & TCR_EL2_DS_WITHOUT_E2H) >> TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H)
@@ -949,6 +1065,9 @@ fn run_payload() -> EfiStatus {
     unsafe { ((*b_s).start_image)(payload_handle, &mut data_size, 0) }
 }
 
+#[cfg(feature = "u_boot")]
+static mut U_BOOT_ADDR: usize = 0x0;
+
 extern "C" fn el1_main() -> ! {
     local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
 
@@ -960,11 +1079,19 @@ extern "C" fn el1_main() -> ! {
     #[cfg(not(feature = "tftp"))]
     let status = EfiStatus::EfiSuccess;
 
-    println!("Return to UEFI.");
-    unsafe {
-        ((*(*SYSTEM_TABLE).efi_boot_services).exit)(IMAGE_HANDLE, status, 0, core::ptr::null())
-    };
-    panic!("Failed to exit");
+    #[cfg(feature = "u_boot")]
+    {
+        unsafe { asm!("br {x}", x = in(reg) U_BOOT_ADDR, options(noreturn)) };
+        panic!("Failed to jump");
+    }
+
+    #[cfg(not(feature = "u_boot"))]
+    {
+        unsafe {
+            ((*(*SYSTEM_TABLE).efi_boot_services).exit)(IMAGE_HANDLE, status, 0, core::ptr::null());
+        }
+        panic!("Failed to exit");
+    }
 }
 
 #[naked]

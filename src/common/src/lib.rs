@@ -35,6 +35,8 @@ pub const HYPERVISOR_HASH_INFO: Option<&'static str> = if let Some(s) = option_e
 pub const COMPILER_INFO: Option<&'static str> =if let Some(s) = option_env!("RUSTC_VERSION") && s.len() != 0 {Some(s)}else{None};
 /// The path of hypervisor_kernel
 pub const HYPERVISOR_PATH: &'static str = "\\EFI\\BOOT\\hypervisor_kernel";
+/// The path of EL1 u-boot
+pub const U_BOOT_PATH: &'static str = "\\EFI\\BOOT\\u-boot.bin";
 /// The path of hypervisor_kernel of tftp
 pub const HYPERVISOR_TFTP_PATH: &'static str = "/uefi/hypervisor_kernel";
 /// The path of payload uefi application
@@ -45,6 +47,7 @@ pub const HYPERVISOR_VIRTUAL_BASE_ADDRESS: usize = 0x7FC0000000;
 pub const HYPERVISOR_SERIAL_BASE_ADDRESS: usize = 0x7FD0000000;
 /// The memory size to allocate
 pub const ALLOC_SIZE: usize = 256 * 1024 * 1024; /* 256 MB */
+pub const ALLOC_SIZE_SUB: usize = 16 * 1024 * 1024; /* 16 MB */
 pub const MAX_PHYSICAL_ADDRESS: usize = (1 << (52 + 1)) - 1; /* Armv8.2-A */
 //pub const MAX_PHYSICAL_ADDRESS: usize = (1 << (48 + 1)) - 1;/* Armv8.0 */
 pub const PAGE_SHIFT: usize = 12;

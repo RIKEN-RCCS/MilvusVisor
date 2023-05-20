@@ -22,6 +22,7 @@ mrs_msr_emulation = []
 a64fx = ["mrs_msr_emulation"]
 advanced_memory_manager = ["common/advanced_memory_manager"]
 tftp = []
+u_boot = []
 
 [dependencies]
 common = { path = "../common" }
