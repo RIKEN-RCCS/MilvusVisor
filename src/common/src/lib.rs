@@ -47,7 +47,7 @@ pub const HYPERVISOR_VIRTUAL_BASE_ADDRESS: usize = 0x7FC0000000;
 pub const HYPERVISOR_SERIAL_BASE_ADDRESS: usize = 0x7FD0000000;
 /// The memory size to allocate
 pub const ALLOC_SIZE: usize = 256 * 1024 * 1024; /* 256 MB */
-pub const ALLOC_SIZE_SUB: usize = 16 * 1024 * 1024; /* 16 MB */
+pub const ALLOC_SIZE_SUB: usize = 32 * 1024 * 1024; /* 32 MB */
 pub const MAX_PHYSICAL_ADDRESS: usize = (1 << (52 + 1)) - 1; /* Armv8.2-A */
 //pub const MAX_PHYSICAL_ADDRESS: usize = (1 << (48 + 1)) - 1;/* Armv8.0 */
 pub const PAGE_SHIFT: usize = 12;
