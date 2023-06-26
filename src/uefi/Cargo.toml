@@ -8,5 +8,6 @@
 name = "uefi"
 version = "1.2.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]

@@ -1,5 +1,6 @@
 [workspace]
 members = ["common", "hypervisor_bootloader", "hypervisor_kernel", "uefi"]
+resolver = "2"
 
 [profile.release.package.hypervisor_bootloader]
 strip = "symbols"
