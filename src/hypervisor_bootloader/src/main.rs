@@ -32,6 +32,8 @@ use uefi::{
     EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
 };
 
+#[cfg(feature = "raspberrypi")]
+use crate::dtb::add_new_memory_reservation_entry_to_dtb;
 use core::arch::asm;
 use core::mem::{transmute, MaybeUninit};
 
@@ -91,10 +93,10 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     paging::dump_page_table();
 
     paging::setup_stage_2_translation().expect("Failed to setup Stage2 Paging");
-    map_memory_pool(allocated_memory_address, false);
+    map_memory_pool(allocated_memory_address, ALLOC_SIZE, false);
     #[cfg(feature = "u_boot")]
     {
-        map_memory_pool(allocated_memory_address_sub, true);
+        map_memory_pool(allocated_memory_address_sub, ALLOC_SIZE_SUB, true);
         let u_boot_addr = load_u_boot();
         unsafe {
             U_BOOT_ADDR = u_boot_addr;
@@ -154,6 +156,24 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         } as usize,
     };
     unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
+
+    #[cfg(feature = "raspberrypi")]
+    {
+        let dtb_buffer_size = (4 * 1024) << PAGE_SHIFT;
+        let new_dtb_addr = allocate_sub_memory(dtb_buffer_size >> PAGE_SHIFT, None)
+            .expect("Failed to alloc new dtb area");
+        add_new_memory_reservation_entry_to_dtb(
+            unsafe { DTB_ADDRESS.expect("No DTB found") },
+            new_dtb_addr,
+            dtb_buffer_size,
+            allocated_memory_address,
+            ALLOC_SIZE,
+        )
+        .expect("failed to edit dtb");
+        unsafe {
+            DTB_ADDRESS = Some(new_dtb_addr);
+        }
+    }
 
     /* Do not call allocate_memory/free_memory from here */
 
@@ -276,11 +296,11 @@ fn init_sub_memory_pool() -> usize {
 ///
 /// # Panics
 /// If the mapping into new TTBR0_EL2 or VTTBR_EL2 is failed, this function will panic.
-fn map_memory_pool(allocated_memory_address: usize, el01_accessible: bool) {
+fn map_memory_pool(allocated_memory_address: usize, alloc_size: usize, el01_accessible: bool) {
     paging::map_address(
         allocated_memory_address,
         allocated_memory_address,
-        ALLOC_SIZE,
+        alloc_size,
         true,
         true,
         true, /* For cpu_boot */
@@ -291,7 +311,7 @@ fn map_memory_pool(allocated_memory_address: usize, el01_accessible: bool) {
     .expect("Failed to unmap allocated address.");*/
     if !el01_accessible {
         let dummy_page = allocate_memory(1, None).expect("Failed to alloc dummy page");
-        paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, ALLOC_SIZE, dummy_page)
+        paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, alloc_size, dummy_page)
             .expect("Failed to map dummy page");
     }
 }
@@ -1079,10 +1099,23 @@ extern "C" fn el1_main() -> ! {
     #[cfg(not(feature = "tftp"))]
     let status = EfiStatus::EfiSuccess;
 
-    #[cfg(feature = "u_boot")]
+    #[cfg(feature = "raspberrypi")]
     {
-        unsafe { asm!("br {x}", x = in(reg) U_BOOT_ADDR, options(noreturn)) };
+        unsafe {
+            asm!(
+            "br {x}", x = in(reg) U_BOOT_ADDR, in("x0") DTB_ADDRESS.unwrap(),
+            options(noreturn))
+        };
         panic!("Failed to jump");
+    }
+
+    #[cfg(all(feature = "u_boot", not(feature = "raspberrypi")))]
+    {
+        unsafe {
+            asm!(
+            "br {x}", x = in(reg) U_BOOT_ADDR,
+            options(noreturn))
+        };
     }
 
     #[cfg(not(feature = "u_boot"))]

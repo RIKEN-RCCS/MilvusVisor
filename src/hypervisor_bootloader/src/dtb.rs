@@ -602,3 +602,115 @@ impl DtbAnalyser {
         self.struct_block_size + self.struct_block_address
     }
 }
+
+#[cfg(feature = "raspberrypi")]
+pub fn add_new_memory_reservation_entry_to_dtb(
+    original_base_address: usize,
+    new_base_address: usize,
+    new_size: usize,
+    reserved_address: usize,
+    reserved_size: usize,
+) -> Result<(), ()> {
+    let mut total_new_size = 0;
+    let original_dtb_header = unsafe { &*(original_base_address as *const DtbHeader) };
+
+    let new_dtb_header = unsafe { &mut *(new_base_address as *mut DtbHeader) };
+    total_new_size += core::mem::size_of::<DtbHeader>();
+    if new_size < total_new_size {
+        return Err(());
+    }
+
+    new_dtb_header.magic = original_dtb_header.magic;
+    new_dtb_header.version = original_dtb_header.version;
+    new_dtb_header.last_comp_version = original_dtb_header.last_comp_version;
+    new_dtb_header.boot_cpuid_phys = original_dtb_header.boot_cpuid_phys;
+    new_dtb_header.size_dt_struct = original_dtb_header.size_dt_struct;
+    new_dtb_header.size_dt_strings = original_dtb_header.size_dt_strings;
+
+    // copy memory reservation block and add new reservation entry
+    let original_reservation_block_address =
+        original_base_address + u32::from_be(original_dtb_header.off_mem_rsv_map) as usize;
+    let new_reservation_block_address = new_base_address + total_new_size;
+    let mut pointer = original_reservation_block_address;
+    loop {
+        let address = unsafe { *(pointer as *const u64) };
+        pointer += core::mem::size_of::<u64>();
+        let size = unsafe { *(pointer as *const u64) };
+        pointer += core::mem::size_of::<u64>();
+        if address == 0 && size == 0 {
+            break;
+        }
+    }
+    // original reservation block size without terminal entry
+    let reservation_block_section_size =
+        pointer - original_reservation_block_address - core::mem::size_of::<u64>() * 2;
+    // new total size will be  the size of original reservation block + new entry + terminal entry
+    total_new_size += reservation_block_section_size + core::mem::size_of::<u64>() * 4;
+    if new_size < total_new_size {
+        return Err(());
+    }
+    unsafe {
+        // copy original mrb to new mrb
+        core::ptr::copy_nonoverlapping(
+            original_reservation_block_address as *const u8,
+            new_reservation_block_address as *mut u8,
+            reservation_block_section_size,
+        );
+    }
+    unsafe {
+        // write new entries
+        let new_reservation_entry_address_filed_address = new_reservation_block_address + reservation_block_section_size;
+        let new_reservation_entry_size_field_address =
+            new_reservation_block_address + reservation_block_section_size + core::mem::size_of::<u64>();
+        *(new_reservation_entry_address_filed_address as *mut usize) = reserved_address.to_be();
+        *(new_reservation_entry_size_field_address as *mut usize) = reserved_size.to_be();
+        let new_termianal_entry_address =
+            new_reservation_block_address + reservation_block_section_size + core::mem::size_of::<u64>() * 2;
+        *(new_termianal_entry_address as *mut usize) = 0;
+        *((new_termianal_entry_address + core::mem::size_of::<u64>()) as *mut usize) = 0;
+    }
+
+    // copy struct section
+    let new_struct_base_address = new_base_address + total_new_size;
+    let original_struct_base_address =
+        original_base_address + u32::from_be(original_dtb_header.off_dt_struct) as usize;
+    let struct_section_size = u32::from_be(original_dtb_header.size_dt_struct) as usize;
+    total_new_size += struct_section_size;
+    if total_new_size > new_size {
+        return Err(());
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            original_struct_base_address as *const u8,
+            new_struct_base_address as *mut u8,
+            struct_section_size,
+        );
+    }
+
+    // copy string section
+    let new_string_section_address = new_base_address + total_new_size;
+    let original_string_section_address =
+        original_base_address + u32::from_be(original_dtb_header.off_dt_strings) as usize;
+    let string_section_size = u32::from_be(original_dtb_header.size_dt_strings) as usize;
+    total_new_size += string_section_size;
+    if total_new_size > new_size {
+        return Err(());
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            original_string_section_address as *const u8,
+            new_string_section_address as *mut u8,
+            u32::from_be(original_dtb_header.size_dt_strings) as usize,
+        );
+    }
+
+    // edit header
+    new_dtb_header.off_mem_rsv_map =
+        ((new_reservation_block_address - new_base_address) as u32).to_be();
+    new_dtb_header.off_dt_struct = ((new_struct_base_address - new_base_address) as u32).to_be();
+    new_dtb_header.off_dt_strings =
+        ((new_string_section_address - new_base_address) as u32).to_be();
+    new_dtb_header.total_size = (total_new_size as u32).to_be();
+
+    Ok(())
+}
