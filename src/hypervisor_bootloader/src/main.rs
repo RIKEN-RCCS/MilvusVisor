@@ -49,7 +49,8 @@ static mut DTB_ADDRESS: Option<usize> = None;
 static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
 #[cfg(feature = "u_boot")]
 static mut MEMORY_ALLOCATOR_SUB: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
-
+#[cfg(feature = "u_boot")]
+static mut U_BOOT_ADDR: usize = 0x0;
 #[cfg(feature = "tftp")]
 static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
 
@@ -1086,7 +1087,44 @@ fn run_payload() -> EfiStatus {
 }
 
 #[cfg(feature = "u_boot")]
-static mut U_BOOT_ADDR: usize = 0x0;
+fn exit_bootloader() -> ! {
+    unsafe {
+        asm!("br {x}",
+         x = in(reg) U_BOOT_ADDR,
+         in("x0") DTB_ADDRESS.unwrap_or(0),
+         in("x1") 0,
+         in("x2") 0,
+         in("x3") 0,
+         options(noreturn)
+        )
+    };
+}
+
+#[cfg(feature = "tftp")]
+fn exit_bootloader() -> ! {
+    unsafe {
+        ((*(*SYSTEM_TABLE).efi_boot_services).exit)(
+            IMAGE_HANDLE,
+            run_payload(),
+            0,
+            core::ptr::null(),
+        );
+    }
+    panic!("Failed to exit");
+}
+
+#[cfg(all(not(feature = "u_boot"), not(feature = "tftp")))]
+fn exit_bootloader() -> ! {
+    unsafe {
+        ((*(*SYSTEM_TABLE).efi_boot_services).exit)(
+            IMAGE_HANDLE,
+            EfiStatus::EfiSuccess,
+            0,
+            core::ptr::null(),
+        );
+    }
+    panic!("Failed to exit");
+}
 
 extern "C" fn el1_main() -> ! {
     local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
@@ -1094,37 +1132,7 @@ extern "C" fn el1_main() -> ! {
     assert_eq!(get_current_el() >> 2, 1, "Failed to jump to EL1");
     println!("Hello,world! from EL1");
 
-    #[cfg(feature = "tftp")]
-    let status = run_payload();
-    #[cfg(not(feature = "tftp"))]
-    let status = EfiStatus::EfiSuccess;
-
-    #[cfg(feature = "raspberrypi")]
-    {
-        unsafe {
-            asm!(
-            "br {x}", x = in(reg) U_BOOT_ADDR, in("x0") DTB_ADDRESS.unwrap(),
-            options(noreturn))
-        };
-        panic!("Failed to jump");
-    }
-
-    #[cfg(all(feature = "u_boot", not(feature = "raspberrypi")))]
-    {
-        unsafe {
-            asm!(
-            "br {x}", x = in(reg) U_BOOT_ADDR,
-            options(noreturn))
-        };
-    }
-
-    #[cfg(not(feature = "u_boot"))]
-    {
-        unsafe {
-            ((*(*SYSTEM_TABLE).efi_boot_services).exit)(IMAGE_HANDLE, status, 0, core::ptr::null());
-        }
-        panic!("Failed to exit");
-    }
+    exit_bootloader();
 }
 
 #[naked]

@@ -63,7 +63,7 @@ impl MemoryAllocator {
         /* Initialize members */
         self.free_memory_size = 0;
         self.first_entry = core::ptr::null_mut();
-        forget(replace(&mut self.free_list, [None; Self::NUM_OF_FREE_LIST]));
+        let _ = replace(&mut self.free_list, [None; Self::NUM_OF_FREE_LIST]);
 
         for e in &mut self.memory_entry_pool {
             forget(replace(

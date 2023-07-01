@@ -659,13 +659,16 @@ pub fn add_new_memory_reservation_entry_to_dtb(
     }
     unsafe {
         // write new entries
-        let new_reservation_entry_address_filed_address = new_reservation_block_address + reservation_block_section_size;
-        let new_reservation_entry_size_field_address =
-            new_reservation_block_address + reservation_block_section_size + core::mem::size_of::<u64>();
+        let new_reservation_entry_address_filed_address =
+            new_reservation_block_address + reservation_block_section_size;
+        let new_reservation_entry_size_field_address = new_reservation_block_address
+            + reservation_block_section_size
+            + core::mem::size_of::<u64>();
         *(new_reservation_entry_address_filed_address as *mut usize) = reserved_address.to_be();
         *(new_reservation_entry_size_field_address as *mut usize) = reserved_size.to_be();
-        let new_termianal_entry_address =
-            new_reservation_block_address + reservation_block_section_size + core::mem::size_of::<u64>() * 2;
+        let new_termianal_entry_address = new_reservation_block_address
+            + reservation_block_section_size
+            + core::mem::size_of::<u64>() * 2;
         *(new_termianal_entry_address as *mut usize) = 0;
         *((new_termianal_entry_address + core::mem::size_of::<u64>()) as *mut usize) = 0;
     }
