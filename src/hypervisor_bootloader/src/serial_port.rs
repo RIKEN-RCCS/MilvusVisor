@@ -49,30 +49,31 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
         return None;
     }
     let dtb_analyser = dtb_analyser.unwrap();
-    let dtb_search_holder = dtb_analyser.get_root_node().get_search_holder();
-    if let Err(_) = dtb_search_holder {
+    let Ok(mut serial_node) = dtb_analyser.get_root_node().get_search_holder() else {
         println!("Failed to analysis the DTB");
         return None;
-    }
-
-    let mut dtb_search_holder = dtb_search_holder.unwrap();
-
+    };
     loop {
-        match dtb_search_holder
-            .search_next_device_by_compatible(&["amlogic,meson-gx-uart".as_bytes()], &dtb_analyser)
-        {
+        match serial_node.search_next_device_by_compatible(
+            &[b"arm,pl011", b"amlogic,meson-gx-uart"],
+            &dtb_analyser,
+        ) {
             Ok(Some((node, index))) => {
                 if node.is_status_okay(&dtb_analyser) != Ok(Some(true)) {
                     println!("Device is not okay.");
                     continue;
                 }
-                assert_eq!(index, 0);
+
                 let address = node.get_offset();
                 println!("Found MesonGxUart at {:#X}", address);
                 return Some(SerialPortInfo {
                     physical_address: address,
                     virtual_address: address,
-                    port_type: SerialPortType::MesonGxUart,
+                    port_type: match index {
+                        0 => SerialPortType::ArmPl011,
+                        1 => SerialPortType::MesonGxUart,
+                        _ => unreachable!(),
+                    },
                 });
             }
             Ok(None) => break,
