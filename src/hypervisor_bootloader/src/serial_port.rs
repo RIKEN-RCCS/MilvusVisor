@@ -65,7 +65,6 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
                 }
 
                 let address = node.get_offset();
-                println!("Found MesonGxUart at {:#X}", address);
                 return Some(SerialPortInfo {
                     physical_address: address,
                     virtual_address: address,

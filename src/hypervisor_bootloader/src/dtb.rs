@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2023 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -76,11 +77,6 @@ impl DtbNode {
 
     fn skip_padding(pointer: &mut usize) -> Result<(), ()> {
         while (*pointer & (TOKEN_SIZE - 1)) != 0 {
-            if unsafe { *(*pointer as *const u8) } != 0 {
-                println!("Warning: Expected zero paddings, but found {:#X}", unsafe {
-                    *(*pointer as *const u8)
-                });
-            }
             *pointer += 1;
         }
         return Ok(());
@@ -151,6 +147,18 @@ impl DtbNode {
         }
         *pointer += TOKEN_SIZE;
         return Ok(());
+    }
+
+    fn add_offset(&mut self, mut regs: usize, regs_len: u32) {
+        if regs_len == (self.address_cells + self.size_cells) * TOKEN_SIZE as u32 {
+            let mut address_cells = 0usize;
+            for _ in 0..self.address_cells {
+                address_cells <<= u32::BITS;
+                address_cells |= u32::from_be(unsafe { *(regs as *const u32) }) as usize;
+                regs += TOKEN_SIZE;
+            }
+            self.address_offset += address_cells as usize;
+        }
     }
 
     fn search_pointer_to_property(
@@ -230,26 +238,11 @@ impl DtbNode {
         }
         *pointer += TOKEN_SIZE;
 
-        // TODO: delete println!("NodeName") and improve code to do both of matching the name and
-        //       skipping left words if the name is not matched.
-        let name_base = *pointer;
+        let is_name_matched = Self::match_name(*pointer, node_name);
+
         while unsafe { *(*pointer as *const u8) } != 0 {
             *pointer += 1;
         }
-        let name_len = *pointer - name_base;
-
-        println!(
-            "NodeName: {}",
-            unsafe {
-                core::str::from_utf8(core::slice::from_raw_parts(
-                    name_base as *const u8,
-                    name_len,
-                ))
-            }
-            .unwrap_or("???")
-        );
-        let is_name_matched = Self::match_name(name_base, node_name);
-
         *pointer += 1;
 
         Self::skip_padding(pointer)?;
@@ -264,6 +257,8 @@ impl DtbNode {
         pointer: &mut usize,
         is_name_matched: bool,
     ) -> Result<Option<Self>, ()> {
+        let mut regs: usize = 0;
+        let mut regs_len: u32 = 0;
         while unsafe { *(*pointer as *const u32) } != FDT_END_NODE {
             assert_eq!(*pointer & (TOKEN_SIZE - 1), 0);
             match unsafe { *(*pointer as *const u32) } {
@@ -280,37 +275,18 @@ impl DtbNode {
                     } else if Self::match_string(prop_name, PROP_SIZE_CELLS) {
                         self.size_cells = u32::from_be(unsafe { *(*pointer as *const u32) });
                     } else if Self::match_string(prop_name, PROP_REG) {
-                        println!(
-                            "Reg: {:#X} {:#X}, Size: {:#X}",
-                            u32::from_be(unsafe { *(*pointer as *const u32) }),
-                            u32::from_be(unsafe { *((*pointer + 4) as *const u32) }),
-                            self.address_cells
-                        );
-                        let mut p = *pointer;
-                        let mut address_cells = 0usize;
-                        for _ in 0..self.address_cells {
-                            address_cells <<= u32::BITS;
-                            address_cells |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
-                            p += TOKEN_SIZE;
-                        }
-                        self.address_offset += address_cells as usize;
-                        println!("AddressOffset: {:#X}", self.address_offset);
-                        if property_len
-                            != (self.address_cells + self.size_cells) * TOKEN_SIZE as u32
-                        {
-                            println!(
-                                "Expected {} bytes for reg, but found {} bytes",
-                                (self.address_cells + self.size_cells) * TOKEN_SIZE as u32,
-                                property_len
-                            );
-                            return Err(());
-                        }
+                        regs = *pointer;
+                        regs_len = property_len;
                     }
 
                     *pointer += property_len as usize;
                     Self::skip_padding(pointer)?;
                 }
                 FDT_BEGIN_NODE => {
+                    if regs != 0 {
+                        self.add_offset(regs, regs_len);
+                        regs = 0;
+                    }
                     if is_name_matched {
                         return Ok(Some(self.clone()));
                     }
@@ -332,6 +308,9 @@ impl DtbNode {
                 }
             }
             Self::skip_nop(pointer);
+        }
+        if regs != 0 {
+            self.add_offset(regs, regs_len);
         }
         if is_name_matched {
             return Ok(Some(self.clone()));
@@ -374,6 +353,8 @@ impl DtbNode {
         pointer: &mut usize,
     ) -> Result<Option<(Self, usize)>, ()> {
         let mut compatible_index: Option<usize> = None;
+        let mut regs: usize = 0;
+        let mut regs_len: u32 = 0;
 
         while unsafe { *(*pointer as *const u32) } != FDT_END_NODE {
             assert_eq!(*pointer & (TOKEN_SIZE - 1), 0);
@@ -405,36 +386,17 @@ impl DtbNode {
                     } else if Self::match_string(prop_name, PROP_SIZE_CELLS) {
                         self.size_cells = u32::from_be(unsafe { *(*pointer as *const u32) });
                     } else if Self::match_string(prop_name, PROP_REG) {
-                        println!(
-                            "Reg: {:#X} {:#X}, Size: {:#X}",
-                            u32::from_be(unsafe { *(*pointer as *const u32) }),
-                            u32::from_be(unsafe { *((*pointer + 4) as *const u32) }),
-                            self.address_cells
-                        );
-                        let mut p = *pointer;
-                        let mut address_cells = 0usize;
-                        for _ in 0..self.address_cells {
-                            address_cells <<= u32::BITS;
-                            address_cells |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
-                            p += TOKEN_SIZE;
-                        }
-                        self.address_offset += address_cells as usize;
-                        println!("AddressOffset: {:#X}", self.address_offset);
-                        if property_len
-                            != (self.address_cells + self.size_cells) * TOKEN_SIZE as u32
-                        {
-                            println!(
-                                "Expected {} bytes for reg, but found {} bytes",
-                                (self.address_cells + self.size_cells) * TOKEN_SIZE as u32,
-                                property_len
-                            );
-                            /* Some devices contains the dtb which does not match the specifications... */
-                        }
+                        regs = *pointer;
+                        regs_len = property_len;
                     }
                     *pointer += property_len as usize;
                     Self::skip_padding(pointer)?;
                 }
                 FDT_BEGIN_NODE => {
+                    if regs != 0 {
+                        self.add_offset(regs, regs_len);
+                        regs = 0;
+                    }
                     if let Some(index) = compatible_index {
                         return Ok(Some((self.clone(), index)));
                     }
@@ -457,6 +419,9 @@ impl DtbNode {
                 }
             }
             Self::skip_nop(pointer);
+        }
+        if regs != 0 {
+            self.add_offset(regs, regs_len);
         }
         if let Some(index) = compatible_index {
             return Ok(Some((self.clone(), index)));
