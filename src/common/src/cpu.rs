@@ -541,6 +541,13 @@ pub fn get_mpidr_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_midr_el1() -> u64 {
+    let midr_el1: u64;
+    unsafe { asm!("mrs {:x}, midr_el1", out(reg) midr_el1) };
+    return midr_el1;
+}
+
+#[inline(always)]
 pub fn advance_elr_el2() {
     set_elr_el2(get_elr_el2() + AA64_INSTRUCTION_SIZE as u64);
 }
