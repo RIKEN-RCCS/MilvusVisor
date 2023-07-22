@@ -49,7 +49,10 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
             return None;
         }
     };
-    let Some(smmu_v3) = iort.get_smmu_v3_information() else { println!("SMMUv3 is not found"); return None;};
+    let Some(smmu_v3) = iort.get_smmu_v3_information() else {
+        println!("SMMUv3 is not found");
+        return None;
+    };
     let base_address = smmu_v3.base_address as usize;
     println!("SMMUv3 BaseAddress: {:#X}", base_address);
 

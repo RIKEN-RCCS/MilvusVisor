@@ -1,6 +1,5 @@
 [build]
 target = "aarch64-unknown-uefi"
-rustflags = ["-C", "target-feature=+v8.1a"]
 
 [unstable]
 build-std-features = ["compiler-builtins-mem"]
