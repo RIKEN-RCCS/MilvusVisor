@@ -581,7 +581,7 @@ pub fn add_new_memory_reservation_entry_to_dtb(
     new_size: usize,
     reserved_address: usize,
     reserved_size: usize,
-) -> Result<(), ()> {
+) -> Result<usize, ()> {
     let mut total_new_size = 0;
     let original_dtb_header = unsafe { &*(original_base_address as *const DtbHeader) };
 
@@ -686,5 +686,5 @@ pub fn add_new_memory_reservation_entry_to_dtb(
         ((new_string_section_address - new_base_address) as u32).to_be();
     new_dtb_header.total_size = (total_new_size as u32).to_be();
 
-    Ok(())
+    Ok(total_new_size)
 }

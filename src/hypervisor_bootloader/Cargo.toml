@@ -23,7 +23,8 @@ a64fx = ["mrs_msr_emulation"]
 advanced_memory_manager = [] # Bootloader uses stack style allocator
 tftp = []
 edit_dtb_memory = []
-u_boot = ["edit_dtb_memory"]
+save_dtb = []
+raspberrypi = ["edit_dtb_memory", "save_dtb"]
 
 [dependencies]
 common = { path = "../common" }

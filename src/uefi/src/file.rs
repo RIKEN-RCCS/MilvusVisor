@@ -31,7 +31,6 @@ const EFI_FILE_INFO_GUID: Guid = Guid {
 const EFI_FILE_MODE_READ: u64 = 0x0000000000000001;
 #[allow(dead_code)]
 const EFI_FILE_MODE_WRITE: u64 = 0x0000000000000002;
-#[allow(dead_code)]
 const EFI_FILE_MODE_CREATE: u64 = 0x8000000000000000;
 #[allow(dead_code)]
 const EFI_FILE_READ_ONLY: u64 = 0x0000000000000001;
@@ -194,6 +193,27 @@ pub fn open_file(
     Ok(file_handle)
 }
 
+pub fn create_file(
+    root_file_protocol: *const EfiFileProtocol,
+    utf16_file_name: &[u16],
+) -> Result<*const EfiFileProtocol, EfiStatus> {
+    let mut file_handle: *const EfiFileProtocol = core::ptr::null();
+
+    let status = unsafe {
+        ((*root_file_protocol).open)(
+            root_file_protocol,
+            &mut file_handle,
+            utf16_file_name.as_ptr(),
+            EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+            0,
+        )
+    };
+    if status != EfiStatus::EfiSuccess || file_handle.is_null() {
+        return Err(status);
+    }
+    Ok(file_handle)
+}
+
 pub fn get_file_info(file: *const EfiFileProtocol) -> Result<EfiFileInfo, EfiStatus> {
     let mut result = MaybeUninit::<EfiFileInfo>::uninit();
     let mut read_size = core::mem::size_of::<EfiFileInfo>();
@@ -222,6 +242,19 @@ pub fn read(
         return Err(status);
     }
     Ok(read_size)
+}
+
+pub fn write(
+    file: *const EfiFileProtocol,
+    buffer: *mut u8,
+    buffer_size: usize,
+) -> Result<usize, EfiStatus> {
+    let mut write_size = buffer_size;
+    let status = unsafe { ((*file).write)(file, &mut write_size as *mut _, buffer) };
+    if status != EfiStatus::EfiSuccess {
+        return Err(status);
+    }
+    Ok(write_size)
 }
 
 pub fn seek(file: *const EfiFileProtocol, position: usize) -> Result<(), EfiStatus> {
