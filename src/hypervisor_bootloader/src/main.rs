@@ -138,7 +138,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
                 .expect("Failed to allocate memory for u-boot");
 
         /* Edit DTB's memory region */
-        add_new_memory_reservation_entry_to_dtb(
+        let dtb_total_size = add_new_memory_reservation_entry_to_dtb(
             dtb_address,
             new_dtb_address,
             size,
@@ -146,7 +146,13 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
             ALLOC_SIZE,
         )
         .expect("Failed to add new reservation entry to DTB");
-        println!("DTB_ADDRESS: {:#X}", new_dtb_address);
+        #[cfg(feature = "save_dtb")]
+        save_dtb(new_dtb_address, dtb_total_size);
+        #[cfg(not(feature = "save_dtb"))]
+        println!(
+            "DTB_ADDRESS: {:#X} (Size: {:#X})",
+            new_dtb_address, dtb_total_size
+        );
     }
 
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
@@ -455,6 +461,42 @@ fn load_hypervisor() -> usize {
     return entry_point;
 }
 
+/// Save DTB
+///
+/// This function saves DTB into [`common::DTB_WRITTEN_PATH`]
+/// This process needed by passing the edited DTB to U-Boot.
+///
+/// # Panics
+/// When opening file or writing into file fail, this function will panic
+///
+/// # Arguments
+/// * `dtb_address` - The address to save
+/// * `dtb_size` - The total size of DTB
+#[cfg(feature = "save_dtb")]
+fn save_dtb(dtb_address: usize, dtb_size: usize) {
+    let image_handle = unsafe { IMAGE_HANDLE };
+    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let root_protocol = file::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
+    let mut file_name_utf16: [u16; DTB_WRITTEN_PATH.len() + 1] = [0; DTB_WRITTEN_PATH.len() + 1];
+
+    for (i, e) in DTB_WRITTEN_PATH.encode_utf16().enumerate() {
+        file_name_utf16[i] = e;
+    }
+    let dtb_protocol = file::create_file(root_protocol, &file_name_utf16)
+        .expect("Failed to create the DTB binary file");
+
+    let written_size =
+        file::write(dtb_protocol, dtb_address as *mut u8, dtb_size).expect("Failed to write DTB");
+    assert_eq!(dtb_size, written_size);
+
+    if let Err(e) = file::close_file(dtb_protocol) {
+        println!("Failed to clone the HypervisorProtocol: {:?}", e);
+    }
+    if let Err(e) = file::close_file(root_protocol) {
+        println!("Failed to clone the RootProtocol: {:?}", e);
+    }
+}
+
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] via TFTP
 ///
 /// This function loads hypervisor_kernel according to ELF header.
@@ -741,7 +783,7 @@ fn set_up_el1() {
     /* Ignore it currently... */
 
     /* CPACR_EL1 & CPTR_EL2 */
-    #[cfg(feature = "u_boot")]
+    #[cfg(feature = "raspberrypi")]
     set_cptr_el2(0x0);
     let cptr_el2_current = get_cptr_el2();
     let mut cpacr_el1: u64 = 0;

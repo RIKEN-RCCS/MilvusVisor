@@ -24,7 +24,8 @@ a64fx = ["mrs_msr_emulation"]
 advanced_memory_manager = ["common/advanced_memory_manager"]
 tftp = []
 edit_dtb_memory = []
-u_boot = ["edit_dtb_memory"]
+save_dtb = []
+raspberrypi = ["edit_dtb_memory", "save_dtb"]
 
 [dependencies]
 common = { path = "../common" }
