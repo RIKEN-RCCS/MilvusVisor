@@ -465,30 +465,21 @@ impl DtbNode {
         self.address_offset
     }
 
-    #[allow(dead_code)]
-    pub fn get_reg(&self, dtb: &DtbAnalyser, index: usize) -> Result<(usize, usize), ()> {
+    pub fn get_prop_as_u32(
+        &self,
+        prop_name: &[u8],
+        dtb: &DtbAnalyser,
+    ) -> Result<Option<&[u32]>, ()> {
         let mut s = self.clone();
-        if let Some((mut p, property_len)) = s.search_pointer_to_property(PROP_REG, dtb)? {
-            let offset = index * ((self.address_cells + self.size_cells) as usize) * TOKEN_SIZE;
-            if offset >= property_len as usize {
-                return Err(());
-            }
-            p += offset;
-            let mut address = 0usize;
-            let mut size = 0usize;
-            for _ in 0..self.address_cells {
-                address <<= u32::BITS;
-                address |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
-                p += TOKEN_SIZE;
-            }
-            for _ in 0..self.size_cells {
-                size <<= u32::BITS;
-                size |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
-                p += TOKEN_SIZE;
-            }
-            return Ok((address, size));
+        if let Some((p, len)) = s.search_pointer_to_property(prop_name, dtb)? {
+            Ok(Some(unsafe {
+                core::slice::from_raw_parts(
+                    p as *const u32,
+                    len as usize / core::mem::size_of::<u32>(),
+                )
+            }))
         } else {
-            Err(())
+            Ok(None)
         }
     }
 }

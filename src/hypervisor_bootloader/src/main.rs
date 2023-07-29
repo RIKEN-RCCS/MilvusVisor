@@ -114,6 +114,12 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         None
     };
 
+    let spin_table_info = if let Some(dtb_address) = unsafe { DTB_ADDRESS } {
+        detect_spin_table(dtb_address)
+    } else {
+        None
+    };
+
     #[cfg(feature = "smmu")]
     let smmu_v3_base_address = if let Some(acpi_address) = unsafe { ACPI_20_TABLE_ADDRESS } {
         smmu::detect_smmu(acpi_address)
@@ -155,6 +161,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         acpi_rsdp_address: unsafe { ACPI_20_TABLE_ADDRESS },
         vbar_el2: 0,
         available_memory_info: unsafe { MEMORY_ALLOCATOR.assume_init_mut().get_all_memory() },
+        spin_table_info,
         memory_save_list,
         serial_port: serial,
         ecam_info,
@@ -301,6 +308,41 @@ pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationE
             .assume_init_mut()
             .free(address, pages << PAGE_SHIFT)
     }
+}
+
+/// Detect spin table
+///
+/// When device tree is available, this function searches "cpu" node and check "cpu-release-addr".
+/// When "cpu-release-addr" exists, secondary processors are enabled by spin-table,
+/// This finds area of spin-table(this function assumes "cpu-release-addr" is continued linearly.)
+fn detect_spin_table(dtb_address: usize) -> Option<(usize /* Base Address */, usize /* Length */)> {
+    let dtb_analyzer = dtb::DtbAnalyser::new(dtb_address).unwrap();
+    let mut search_holder = dtb_analyzer.get_root_node().get_search_holder().unwrap();
+    let Ok(Some(cpu_node)) = search_holder.search_next_device_by_node_name(b"cpu", &dtb_analyzer)
+    else {
+        pr_debug!("Failed to find CPU node");
+        return None;
+    };
+    let Ok(Some(release_addr)) = cpu_node.get_prop_as_u32(b"cpu-release-addr", &dtb_analyzer)
+    else {
+        pr_debug!("Faiked to find cpu-release-addr");
+        return None;
+    };
+    let base_address = ((u32::from_be(release_addr[0]) as usize) << u32::BITS)
+        | (u32::from_be(release_addr[1]) as usize);
+    let mut length = core::mem::size_of::<u64>();
+    while let Ok(Some(node)) = search_holder.search_next_device_by_node_name(b"cpu", &dtb_analyzer)
+    {
+        let Ok(Some(release_addr)) = node.get_prop_as_u32(b"cpu-release-addr", &dtb_analyzer)
+        else {
+            return None;
+        };
+        let release_address = ((u32::from_be(release_addr[0]) as usize) << u32::BITS)
+            | (u32::from_be(release_addr[1]) as usize);
+        length = release_address + core::mem::size_of::<u64>() - base_address;
+        pr_debug!("CPU Release Address: {:#X}", release_address);
+    }
+    Some((base_address, length))
 }
 
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
