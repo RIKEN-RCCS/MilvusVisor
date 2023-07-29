@@ -12,8 +12,6 @@ const FDT_NOP: u32 = 0x00000004u32.to_be();
 const FDT_END: u32 = 0x00000009u32.to_be();
 const TOKEN_SIZE: usize = 4;
 
-//const NODE_NAME_SERIAL: &[u8] = "serial".as_bytes();
-
 const PROP_STATUS: &[u8] = "status".as_bytes();
 const PROP_STATUS_OKAY: &[u8] = "okay".as_bytes();
 const PROP_COMPATIBLE: &[u8] = "compatible".as_bytes();
@@ -165,7 +163,7 @@ impl DtbNode {
         &mut self,
         target_prop_name: &[u8],
         dtb: &DtbAnalyser,
-    ) -> Result<Option<usize>, ()> {
+    ) -> Result<Option<(usize, u32)>, ()> {
         let mut pointer = self.base_pointer;
         Self::skip_nop(&mut pointer);
         if unsafe { *(pointer as *const u32) } != FDT_BEGIN_NODE {
@@ -198,7 +196,7 @@ impl DtbNode {
                     } else if Self::match_string(prop_name, PROP_SIZE_CELLS) {
                         self.size_cells = u32::from_be(unsafe { *(pointer as *const u32) });
                     } else if Self::match_string(prop_name, target_prop_name) {
-                        return Ok(Some(pointer));
+                        return Ok(Some((pointer, property_len)));
                     }
 
                     pointer += property_len as usize;
@@ -456,18 +454,8 @@ impl DtbNode {
 
     pub fn is_status_okay(&self, dtb: &DtbAnalyser) -> Result<Option<bool>, ()> {
         let mut s = self.clone();
-        if let Some(p) = s.search_pointer_to_property(PROP_STATUS, dtb)? {
+        if let Some((p, _)) = s.search_pointer_to_property(PROP_STATUS, dtb)? {
             Ok(Some(Self::match_string(p, PROP_STATUS_OKAY)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_reg(&self, dtb: &DtbAnalyser) -> Result<Option<u64>, ()> {
-        let mut s = self.clone();
-        if let Some(mut _p) = s.search_pointer_to_property(PROP_REG, dtb)? {
-            unimplemented!()
         } else {
             Ok(None)
         }
@@ -475,6 +463,33 @@ impl DtbNode {
 
     pub fn get_offset(&self) -> usize {
         self.address_offset
+    }
+
+    #[allow(dead_code)]
+    pub fn get_reg(&self, dtb: &DtbAnalyser, index: usize) -> Result<(usize, usize), ()> {
+        let mut s = self.clone();
+        if let Some((mut p, property_len)) = s.search_pointer_to_property(PROP_REG, dtb)? {
+            let offset = index * ((self.address_cells + self.size_cells) as usize) * TOKEN_SIZE;
+            if offset >= property_len as usize {
+                return Err(());
+            }
+            p += offset;
+            let mut address = 0usize;
+            let mut size = 0usize;
+            for _ in 0..self.address_cells {
+                address <<= u32::BITS;
+                address |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
+                p += TOKEN_SIZE;
+            }
+            for _ in 0..self.size_cells {
+                size <<= u32::BITS;
+                size |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
+                p += TOKEN_SIZE;
+            }
+            return Ok((address, size));
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -568,7 +583,7 @@ impl DtbAnalyser {
     }
 }
 
-#[cfg(feature = "raspberrypi")]
+#[cfg(feature = "edit_dtb_memory")]
 pub fn add_new_memory_reservation_entry_to_dtb(
     original_base_address: usize,
     new_base_address: usize,

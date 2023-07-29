@@ -25,14 +25,14 @@ use common::*;
 
 #[cfg(not(feature = "tftp"))]
 use uefi::file;
-#[cfg(feature = "tftp")]
-use uefi::pxe;
 use uefi::{
-    boot_service, EfiConfigurationTable, EfiHandle, EfiStatus, EfiSystemTable,
-    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
+    boot_service, EfiConfigurationTable, EfiHandle, EfiSystemTable, EFI_ACPI_20_TABLE_GUID,
+    EFI_DTB_TABLE_GUID,
 };
+#[cfg(feature = "tftp")]
+use uefi::{pxe, EfiStatus};
 
-#[cfg(feature = "raspberrypi")]
+#[cfg(feature = "edit_dtb_memory")]
 use crate::dtb::add_new_memory_reservation_entry_to_dtb;
 use core::arch::asm;
 use core::mem::{transmute, MaybeUninit};
@@ -47,10 +47,6 @@ static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
 static mut ACPI_20_TABLE_ADDRESS: Option<usize> = None;
 static mut DTB_ADDRESS: Option<usize> = None;
 static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
-#[cfg(feature = "u_boot")]
-static mut MEMORY_ALLOCATOR_SUB: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
-#[cfg(feature = "u_boot")]
-static mut U_BOOT_ADDR: usize = 0x0;
 #[cfg(feature = "tftp")]
 static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
 
@@ -82,8 +78,6 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     assert_eq!(get_current_el() >> 2, 2, "Expected CurrentEL is EL2");
 
     let allocated_memory_address = init_memory_pool();
-    #[cfg(feature = "u_boot")]
-    let allocated_memory_address_sub = init_sub_memory_pool();
 
     #[cfg(debug_assertions)]
     dump_memory_map();
@@ -94,15 +88,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     paging::dump_page_table();
 
     paging::setup_stage_2_translation().expect("Failed to setup Stage2 Paging");
-    map_memory_pool(allocated_memory_address, ALLOC_SIZE, false);
-    #[cfg(feature = "u_boot")]
-    {
-        map_memory_pool(allocated_memory_address_sub, ALLOC_SIZE_SUB, true);
-        let u_boot_addr = load_u_boot();
-        unsafe {
-            U_BOOT_ADDR = u_boot_addr;
-        }
-    }
+    map_memory_pool(allocated_memory_address, ALLOC_SIZE);
 
     detect_acpi_and_dtb();
 
@@ -142,6 +128,27 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         + (STACK_PAGES << PAGE_SHIFT);
     let memory_save_list = create_memory_save_list();
 
+    #[cfg(feature = "edit_dtb_memory")]
+    if let Some(dtb_address) = unsafe { DTB_ADDRESS } {
+        let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+        let page_num = 4 * 1024;
+        let size = page_num << PAGE_SHIFT;
+        let new_dtb_address =
+            boot_service::alloc_highest_memory(b_s, page_num, MAX_PHYSICAL_ADDRESS)
+                .expect("Failed to allocate memory for u-boot");
+
+        /* Edit DTB's memory region */
+        add_new_memory_reservation_entry_to_dtb(
+            dtb_address,
+            new_dtb_address,
+            size,
+            allocated_memory_address,
+            ALLOC_SIZE,
+        )
+        .expect("Failed to add new reservation entry to DTB");
+        println!("DTB_ADDRESS: {:#X}", new_dtb_address);
+    }
+
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
 
     let mut system_info = SystemInformation {
@@ -157,24 +164,6 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         } as usize,
     };
     unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
-
-    #[cfg(feature = "raspberrypi")]
-    {
-        let dtb_buffer_size = (4 * 1024) << PAGE_SHIFT;
-        let new_dtb_addr = allocate_sub_memory(dtb_buffer_size >> PAGE_SHIFT, None)
-            .expect("Failed to alloc new dtb area");
-        add_new_memory_reservation_entry_to_dtb(
-            unsafe { DTB_ADDRESS.expect("No DTB found") },
-            new_dtb_addr,
-            dtb_buffer_size,
-            allocated_memory_address,
-            ALLOC_SIZE,
-        )
-        .expect("failed to edit dtb");
-        unsafe {
-            DTB_ADDRESS = Some(new_dtb_addr);
-        }
-    }
 
     /* Do not call allocate_memory/free_memory from here */
 
@@ -251,39 +240,6 @@ fn init_memory_pool() -> usize {
     return allocated_address;
 }
 
-/// Allocate memory and setup [`MEMORY_ALLOCATOR_SUB`]
-///
-/// This function allocates [`ALLOC_SIZE_SUB`] and then, set it into [`MEMORY_ALLOCATOR_SUB`]
-/// The attribute of allocated memory area will be changed to EfiUnusableMemory
-///
-/// # Panics
-/// If the allocation is failed, this function will panic.
-///
-/// # Result
-/// Returns the start_address allocated
-#[cfg(feature = "u_boot")]
-fn init_sub_memory_pool() -> usize {
-    let allocate_pages = ALLOC_SIZE_SUB >> PAGE_SHIFT;
-    let allocated_address = boot_service::alloc_highest_memory(
-        unsafe { (*SYSTEM_TABLE).efi_boot_services },
-        allocate_pages,
-        MAX_PHYSICAL_ADDRESS,
-    )
-    .expect("Failed to init memory pool");
-    println!(
-        "Allocated {:#X} ~ {:#X} for sub",
-        allocated_address,
-        allocated_address + ALLOC_SIZE_SUB
-    );
-    //unsafe { MEMORY_ALLOCATOR.write(MemoryAllocator::create(allocated_address, ALLOC_SIZE)) };
-    unsafe {
-        MEMORY_ALLOCATOR_SUB
-            .assume_init_mut()
-            .init(allocated_address, ALLOC_SIZE_SUB)
-    };
-    return allocated_address;
-}
-
 /// Map allocated memory area into TTBR0_EL2 and set up not to be accessible from EL1/EL0
 ///
 /// This function map memory allocated by [`init_memory_pool`] into new TTBR0_EL2.
@@ -293,11 +249,11 @@ fn init_sub_memory_pool() -> usize {
 ///
 /// # Arguments
 /// * `allocated_memory_address` - base address of allocated memory by [`init_memory_pool`]
-/// * `el01_accessible` - allow EL1/EL0 to access this area
+/// * `alloc_size` - allocated memory size
 ///
 /// # Panics
 /// If the mapping into new TTBR0_EL2 or VTTBR_EL2 is failed, this function will panic.
-fn map_memory_pool(allocated_memory_address: usize, alloc_size: usize, el01_accessible: bool) {
+fn map_memory_pool(allocated_memory_address: usize, alloc_size: usize) {
     paging::map_address(
         allocated_memory_address,
         allocated_memory_address,
@@ -310,11 +266,9 @@ fn map_memory_pool(allocated_memory_address: usize, alloc_size: usize, el01_acce
     .expect("Failed to map allocated memory");
     /*paging::unmap_address_from_vttbr_el2(b_s, allocated_memory_address, ALLOC_SIZE)
     .expect("Failed to unmap allocated address.");*/
-    if !el01_accessible {
-        let dummy_page = allocate_memory(1, None).expect("Failed to alloc dummy page");
-        paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, alloc_size, dummy_page)
-            .expect("Failed to map dummy page");
-    }
+    let dummy_page = allocate_memory(1, None).expect("Failed to alloc dummy page");
+    paging::map_dummy_page_into_vttbr_el2(allocated_memory_address, alloc_size, dummy_page)
+        .expect("Failed to map dummy page");
 }
 
 /// Allocate memory from memory pool
@@ -328,18 +282,6 @@ fn map_memory_pool(allocated_memory_address: usize, alloc_size: usize, el01_acce
 pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
     unsafe {
         MEMORY_ALLOCATOR
-            .assume_init_mut()
-            .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT))
-    }
-}
-
-#[cfg(feature = "u_boot")]
-pub fn allocate_sub_memory(
-    pages: usize,
-    align: Option<usize>,
-) -> Result<usize, MemoryAllocationError> {
-    unsafe {
-        MEMORY_ALLOCATOR_SUB
             .assume_init_mut()
             .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT))
     }
@@ -359,59 +301,6 @@ pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationE
             .assume_init_mut()
             .free(address, pages << PAGE_SHIFT)
     }
-}
-
-/// Load u-boot
-///
-/// # Panics
-/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
-///
-/// # Result
-/// Returns the entry point of u-boot
-#[cfg(feature = "u_boot")]
-fn load_u_boot() -> usize {
-    let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
-    let root_protocol = file::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
-    let mut file_name_utf16: [u16; U_BOOT_PATH.len() + 1] = [0; U_BOOT_PATH.len() + 1];
-
-    for (i, e) in U_BOOT_PATH.encode_utf16().enumerate() {
-        file_name_utf16[i] = e;
-    }
-    let u_boot_protocol = file::open_file(root_protocol, &file_name_utf16)
-        .expect("Failed to open the u-boot binary file");
-
-    let u_boot_info =
-        file::get_file_info(u_boot_protocol).expect("Failed to get u-boot file information");
-    let pages = (((u_boot_info.file_size - 1) & PAGE_MASK) >> PAGE_SHIFT) + 1;
-    println!(
-        "u_boot info: {:#X} {:#X} {:#X} {:#X}",
-        u_boot_info.size, u_boot_info.file_size, u_boot_info.physical_size, pages
-    );
-
-    // U-Boot must be loaded at a 4K aligned address
-    let physical_base_address =
-        allocate_sub_memory(pages, Some(12)).expect("Failed to allocate memory for hypervisor");
-
-    let read_size = file::read(
-        u_boot_protocol,
-        physical_base_address as *mut u8,
-        u_boot_info.file_size,
-    )
-    .expect("Failed to read hypervisor segments");
-
-    if read_size != u_boot_info.file_size {
-        panic!("read failure? {}, {}", read_size, u_boot_info.file_size);
-    }
-
-    if let Err(e) = file::close_file(u_boot_protocol) {
-        println!("Failed to clone the U-BootProtocol: {:?}", e);
-    }
-    if let Err(e) = file::close_file(root_protocol) {
-        println!("Failed to clone the RootProtocol: {:?}", e);
-    }
-
-    return physical_base_address;
 }
 
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
@@ -1086,20 +975,6 @@ fn run_payload() -> EfiStatus {
     unsafe { ((*b_s).start_image)(payload_handle, &mut data_size, 0) }
 }
 
-#[cfg(feature = "u_boot")]
-fn exit_bootloader() -> ! {
-    unsafe {
-        asm!("br {x}",
-         x = in(reg) U_BOOT_ADDR,
-         in("x0") DTB_ADDRESS.unwrap_or(0),
-         in("x1") 0,
-         in("x2") 0,
-         in("x3") 0,
-         options(noreturn)
-        )
-    };
-}
-
 #[cfg(feature = "tftp")]
 fn exit_bootloader() -> ! {
     unsafe {
@@ -1113,12 +988,12 @@ fn exit_bootloader() -> ! {
     panic!("Failed to exit");
 }
 
-#[cfg(all(not(feature = "u_boot"), not(feature = "tftp")))]
+#[cfg(not(feature = "tftp"))]
 fn exit_bootloader() -> ! {
     unsafe {
         ((*(*SYSTEM_TABLE).efi_boot_services).exit)(
             IMAGE_HANDLE,
-            EfiStatus::EfiSuccess,
+            uefi::EfiStatus::EfiSuccess,
             0,
             core::ptr::null(),
         );
