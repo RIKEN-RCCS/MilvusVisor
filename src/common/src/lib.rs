@@ -100,6 +100,7 @@ pub struct SystemInformation {
         usize, /* base_address */
         usize, /* number of pages */
     ),
+    pub spin_table_info: Option<(usize /* base_address */, usize /* length */)>,
     pub memory_save_list: *mut [MemorySaveListEntry],
     pub serial_port: Option<SerialPortInfo>,
     pub ecam_info: Option<EcamInfo>,

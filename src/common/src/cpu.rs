@@ -597,6 +597,11 @@ pub fn invalidate_data_cache(virtual_address: usize) {
 }
 
 #[inline(always)]
+pub fn clean_and_invalidate_data_cache(virtual_address: usize) {
+    unsafe { asm!("DC CIVAC, {:x}", in(reg) virtual_address) };
+}
+
+#[inline(always)]
 pub fn send_event_all() {
     unsafe { asm!("SEV") };
 }

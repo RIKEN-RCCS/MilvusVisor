@@ -124,6 +124,10 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         );
     }
 
+    if let Some((spin_table_address, length)) = system_information.spin_table_info {
+        multi_core::setup_spin_table(spin_table_address, length);
+    }
+
     #[cfg(feature = "acpi_table_protection")]
     if let Some(rsdp_address) = unsafe { ACPI_RSDP } {
         acpi_protect::init_table_protection(rsdp_address);
