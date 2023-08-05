@@ -457,7 +457,8 @@ impl DtbNode {
         if let Some((p, _)) = s.search_pointer_to_property(PROP_STATUS, dtb)? {
             Ok(Some(Self::match_string(p, PROP_STATUS_OKAY)))
         } else {
-            Ok(None)
+            // A node is enabled if status property does not exist.
+            Ok(Some(true))
         }
     }
 
