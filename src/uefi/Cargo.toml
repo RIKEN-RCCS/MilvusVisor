@@ -6,7 +6,7 @@
 # http://opensource.org/licenses/mit-license.php
 [package]
 name = "uefi"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 resolver = "2"
 
