@@ -86,6 +86,27 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
     return None;
 }
 
+#[cfg(feature = "raspberrypi")]
+pub fn detect_serial_port() -> Option<SerialPortInfo> {
+    println!("MIDR_EL1; {:#X}", common::cpu::get_midr_el1());
+    match (common::cpu::get_midr_el1() >> 4) & 0xFFF {
+        /* Raspberry Pi 3 */
+        0xD03 => Some(SerialPortInfo {
+            physical_address: 0x3F201000,
+            virtual_address: 0x3F201000,
+            port_type: SerialPortType::ArmPl011,
+        }),
+        /* Raspberry Pi 4 */
+        0xD08 => Some(SerialPortInfo {
+            physical_address: 0xFE201000,
+            virtual_address: 0xFE201000,
+            port_type: SerialPortType::ArmPl011,
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "raspberrypi"))]
 pub fn detect_serial_port() -> Option<SerialPortInfo> {
     if let Some(acpi_table) = unsafe { &ACPI_20_TABLE_ADDRESS } {
         let result = try_to_get_serial_info_from_acpi(*acpi_table);
