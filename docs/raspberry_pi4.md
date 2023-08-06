@@ -2,6 +2,9 @@
 MilvusVisor has support for Raspberry Pi 4 environments.
 We tested "Raspberry Pi 4 Computer Model B"
 
+Note that MilvusVisor with multiple cores is unstable now (See #10 for details).
+Therefore, the following description assumes booting a guest Linux with a single core (i.e. booting with the `nosmp` boot option).
+
 ## Restricts
 We currently support Only single core boot. Please add "nosmp" boot option, Otherwise Linux can boot, but MilvusVisor will not work fine.
 
@@ -48,9 +51,10 @@ Go to https://www.raspberrypi.com/software/operating-systems/ , find "Raspberry 
 3. Copy u-boot.bin: `sudo cp u-boot.bin /mnt/`
 4. Copy MilvusVisor: `sudo cp -r /path/to/MlivusVisor/bin/EFI /mnt`
 5. Modify config.txt: `sudo sed -i '/arm_64bit=1/akernel=u-boot.bin' /mnt/config.txt`
-6. Modify config.txt: `sudo sed -i -e 's/console=serial0,115200 console=tty1//g' /mnt/cmdline.txt`
-7. Enable UART(Optional): `sudo sed -i '/arm_64bit=1/adtoverlay=miniuart-bt\ncore_freq=250' /mnt/config.txt && sudo sed -i -e 's/quiet/console=ttyAMA0/g' /mnt/cmdline.txt`
-8. Unmount: `sudo umount /mnt`
+6. Modify cmdline.txt: `sudo sed -i -e 's/console=serial0,115200 console=tty1//g' /mnt/cmdline.txt`
+7. Modify cmdline.txt(add `nosmp` option): `sudo sed  -i -e '/root=/s/$/ nosmp/' /mnt/cmdline.txt`
+8. Enable UART(Optional): `sudo sed -i '/arm_64bit=1/adtoverlay=miniuart-bt\ncore_freq=250' /mnt/config.txt && sudo sed -i -e 's/quiet/console=ttyAMA0/g' /mnt/cmdline.txt`
+9. Unmount: `sudo umount /mnt`
 
 ### How to Run
 1. insert SD Card into Raspberry Pi 4

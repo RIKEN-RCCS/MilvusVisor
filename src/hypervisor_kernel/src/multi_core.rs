@@ -216,7 +216,12 @@ fn spin_table_store_access_handler(
     };
     cpu::isb();
     cpu::clean_and_invalidate_data_cache(accessing_memory_address);
-    pr_debug!("The initialization completed.");
+    /* FIXME: The current implementation probabilistically fails to boot a guest on Raspberry Pi 4B
+     * with multiple cores. This message printing is a workaround to reduce the probability of
+     * boot failure. A bug related to cache coherency, exclusive control, or other non-deterministic
+     * event is suspected (See #10 for details). */
+    println!("The initialization completed.");
+    //pr_debug!("The initialization completed.");
     Ok(StoreHookResult::Cancel)
 }
 
