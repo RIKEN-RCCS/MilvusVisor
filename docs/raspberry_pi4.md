@@ -48,7 +48,7 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 make rpi_4_defconfig
 make -j`nproc`
 cp u-boot.bin /path/to/bound/
-cat <<EOF > boot.txt
+cat <<"EOF" > boot.txt
 fatload mmc 0:1 ${kernel_addr_r} EFI/BOOT/BOOTAA64.EFI
 bootefi ${kernel_addr_r}
 fatload mmc 0:1 ${fdt_addr_r} EFI/BOOT/dtb
