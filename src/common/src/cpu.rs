@@ -130,6 +130,18 @@ pub const ID_AA64PFR0_EL1_GIC: u64 = 0b1111 << 24;
 /* ID_AA64MMFR0_EL1 */
 pub const ID_AA64MMFR0_EL1_PARANGE: u64 = 0b1111;
 
+/* CLIDR_EL1 */
+pub const CLIDR_EL1_LOC_BITS_OFFSET: u64 = 24;
+pub const CLIDR_EL1_LOC: u64 = 0b111 << CLIDR_EL1_LOC_BITS_OFFSET;
+
+/* CCSIDR_EL1 */
+pub const CCSIDR_EL1_NUM_SETS_BITS_OFFSET: u64 = 13;
+pub const CCSIDR_EL1_NUM_SETS: u64 = 0x7FFF << CCSIDR_EL1_NUM_SETS_BITS_OFFSET;
+pub const CCSIDR_EL1_ASSOCIATIVITY_BITS_OFFSET: u64 = 3;
+pub const CCSIDR_EL1_ASSOCIATIVITY: u64 = 0x3FF << CCSIDR_EL1_ASSOCIATIVITY_BITS_OFFSET;
+pub const CCSIDR_EL1_LINE_SIZE_BITS_OFFSET: u64 = 0;
+pub const CCSIDR_EL1_LINE_SIZE: u64 = 0b111 << CCSIDR_EL1_LINE_SIZE_BITS_OFFSET;
+
 /* ZCR_EL2 */
 pub const MAX_ZCR_EL2_LEN: u64 = 0x1ff;
 
@@ -606,6 +618,56 @@ pub fn invalidate_data_cache(virtual_address: usize) {
 #[inline(always)]
 pub fn clean_and_invalidate_data_cache(virtual_address: usize) {
     unsafe { asm!("DC CIVAC, {:x}", in(reg) virtual_address) };
+}
+
+pub fn clean_data_cache_all() {
+    dsb();
+    let clidr_el1: u64;
+    unsafe { asm!("mrs {:x}, clidr_el1", out(reg) clidr_el1) };
+    let loc = (clidr_el1 & CLIDR_EL1_LOC) >> CLIDR_EL1_LOC_BITS_OFFSET;
+    for cache_level in 0..loc {
+        let cache_type = (clidr_el1 >> (3 * cache_level)) & 0b111;
+        let ccsidr_el1: u64;
+
+        if cache_type <= 1 {
+            /* Data Cache is not available */
+            continue;
+        }
+        unsafe {
+            asm!("
+                    msr csselr_el1, {:x}
+                    isb
+                    mrs {:x}, ccsidr_el1
+                ", in(reg) cache_level << 1, out(reg) ccsidr_el1)
+        };
+
+        let line_size =
+            ((ccsidr_el1 & CCSIDR_EL1_LINE_SIZE) >> CCSIDR_EL1_LINE_SIZE_BITS_OFFSET) + 4;
+        let associativity =
+            ((ccsidr_el1 & CCSIDR_EL1_ASSOCIATIVITY) >> CCSIDR_EL1_ASSOCIATIVITY_BITS_OFFSET) + 1;
+        let num_sets = ((ccsidr_el1 & CCSIDR_EL1_NUM_SETS) >> CCSIDR_EL1_NUM_SETS_BITS_OFFSET) + 1;
+        let set_way_a = (associativity as u32 - 1).leading_zeros();
+
+        for set in 0..num_sets {
+            for way in 0..associativity {
+                /* C5.3.13 DC CISW, Data or unified Cache line Clean and Invalidate by Set/Way (ARM DDI 0487G.a ID011921)
+                 *
+                 * SetWay[31:4]
+                 * * Way, bits[31:32-A], the number of the way to operate on.
+                 * * Set, bits[B-1:L], the number of the set to operate on.
+                 * Bits[L-1:4] are RES0.
+                 * A = Log2(ASSOCIATIVITY), L = Log2(LINELEN), B = (L + S), S = Log2(NSETS).
+                 *
+                 * Level, bits [3:1]
+                 */
+                let set_way = (way << set_way_a) | (set << line_size) | (cache_level << 1);
+                unsafe { asm!("DC CISW, {:x}", in(reg) set_way) };
+            }
+        }
+    }
+    dsb();
+    isb();
+    unsafe { asm!("msr csselr_el1, {:x}", in(reg) 0) }; /* Restore CSSELR_EL1 */
 }
 
 #[inline(always)]

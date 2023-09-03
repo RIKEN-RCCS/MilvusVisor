@@ -60,6 +60,10 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
     register_buffer.el1_entry_point = regs.x2;
     register_buffer.el1_context_id = regs.x3;
 
+    cpu::dsb();
+    /* Flush Memory Cache for Application Processors */
+    cpu::clean_data_cache_all();
+
     let cpu_boot_address_real_address =
         cpu::convert_virtual_address_to_physical_address_el2_read(cpu_boot as *const fn() as usize)
             .expect("Failed to convert virtual address to real address");
@@ -199,14 +203,9 @@ fn spin_table_store_access_handler(
             break;
         }
     }
-    cpu::isb();
-    /* Flush Memory Cache */
-    for i in 0..512 {
-        cpu::clean_and_invalidate_data_cache(spin_table_boot_real_address + i);
-    }
-    for i in 0..core::mem::size_of::<HypervisorRegisters>() {
-        cpu::clean_and_invalidate_data_cache(register_buffer as *mut _ as usize + i);
-    }
+    cpu::dsb();
+    /* Flush Memory Cache for Application Processors */
+    cpu::clean_data_cache_all();
     NUMBER_OF_RUNNING_AP.fetch_add(1, Ordering::SeqCst);
     unsafe {
         core::ptr::write_volatile(
@@ -214,14 +213,9 @@ fn spin_table_store_access_handler(
             spin_table_boot_real_address as u64,
         )
     };
-    cpu::isb();
+    cpu::dsb();
     cpu::clean_and_invalidate_data_cache(accessing_memory_address);
-    /* FIXME: The current implementation probabilistically fails to boot a guest on Raspberry Pi 4B
-     * with multiple cores. This message printing is a workaround to reduce the probability of
-     * boot failure. A bug related to cache coherency, exclusive control, or other non-deterministic
-     * event is suspected (See #10 for details). */
-    println!("The initialization completed.");
-    //pr_debug!("The initialization completed.");
+    pr_debug!("The initialization completed.");
     Ok(StoreHookResult::Cancel)
 }
 
