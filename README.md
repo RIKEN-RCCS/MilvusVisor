@@ -56,13 +56,13 @@ We have tested MilvusVisor on the following machines.
 
 The following table shows which feature worked on which machines.
 
-| Test items \\ Machine                                       | FX700 | FX1000 | E252-P30 | QEMU | Bluefield-2 | RPi4B (nosmp) | RPi4B (smp) |
-|:------------------------------------------------------------|:-----:|:------:|:--------:|:----:|:-----------:|:-------------:|:-----------:|
-| Booting Linux on MilvusVisor (Multi-core)                   | o     |   o    | o        | o    |      o      |       o       |     #10     |
-| Protecting non-volatile data of Intel I210                  | o     |   -    | -        | -    |      -      |       -       |      -      |
-| Protecting firmware update of Mellanox Technologies MT27800 | o     |   -    | -        | -    |      -      |       -       |      -      |
-| Protecting MilvusVisor itself against DMA attack            | o     |   -    | -        | -    |      -      |       -       |      -      |
-| Fast Restore                                                | o     |   o    | -        | -    |      -      |       -       |      -      |
+| Test items \\ Machine                                       | FX700 | FX1000 | E252-P30 | QEMU | Bluefield-2 | RPi4B |
+|:------------------------------------------------------------|:-----:|:------:|:--------:|:----:|:-----------:|:-----:|
+| Booting Linux on MilvusVisor (Multi-core)                   | o     |   o    | o        | o    |      o      |   o   |
+| Protecting non-volatile data of Intel I210                  | o     |   -    | -        | -    |      -      |   -   |
+| Protecting firmware update of Mellanox Technologies MT27800 | o     |   -    | -        | -    |      -      |   -   |
+| Protecting MilvusVisor itself against DMA attack            | o     |   -    | -        | -    |      -      |   -   |
+| Fast Restore                                                | o     |   o    | -        | -    |      -      |   -   |
 
 ## How to build the hypervisor
 
