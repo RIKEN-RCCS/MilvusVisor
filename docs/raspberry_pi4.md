@@ -2,10 +2,6 @@
 MilvusVisor has support for Raspberry Pi 4 environments.
 We tested "Raspberry Pi 4 Computer Model B"
 
-## Restricts
-We currently support Only single core boot (See #10 for details). Please add "nosmp" boot option, Otherwise Linux can boot, but MilvusVisor will not work fine.
-
-
 ## How to build
 To enable Raspberry Pi 4 support, you need to add `raspberrypi` feature flag on building binaries of hypervisor and bootloader.
 
@@ -75,6 +71,5 @@ Go to https://www.raspberrypi.com/software/operating-systems/ , find "Raspberry 
 5. Copy boot.scr: `sudo cp boot.scr /mnt/`
 6. Modify config.txt: `sudo sed -i '/arm_64bit=1/akernel=u-boot.bin' /mnt/config.txt`
 7. Modify cmdline.txt: `sudo sed -i -e 's/console=serial0,115200 console=tty1//g' /mnt/cmdline.txt`
-8. Modify cmdline.txt(add `nosmp` option): `sudo sed  -i -e '/root=/s/$/ nosmp/' /mnt/cmdline.txt`
-9. Enable UART(Optional): `sudo sed -i '/arm_64bit=1/adtoverlay=miniuart-bt\ncore_freq=250' /mnt/config.txt && sudo sed -i -e 's/quiet/console=ttyAMA0/g' /mnt/cmdline.txt`
-10. Unmount: `sudo umount /mnt`
+8. Enable UART(Optional): `sudo sed -i '/arm_64bit=1/adtoverlay=miniuart-bt\ncore_freq=250' /mnt/config.txt && sudo sed -i -e 's/quiet/console=ttyAMA0/g' /mnt/cmdline.txt`
+9. Unmount: `sudo umount /mnt`
