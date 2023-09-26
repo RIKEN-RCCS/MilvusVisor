@@ -1,4 +1,5 @@
 // Copyright (c) 2022 RIKEN
+// Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST)
 // All rights reserved.
 //
 // This software is released under the MIT License.
@@ -7,8 +8,6 @@
 //!
 //! I/O Remapping Table
 //!
-
-const SMMU_V3_NODE_TYPE: u8 = 0x04;
 
 #[repr(C, packed)]
 pub struct IORT {
@@ -32,9 +31,9 @@ pub struct SmmuV3Node {
     length: u16,
     revision: u8,
     id: u32,
-    pub number_of_id_mappings: u32,
+    number_of_id_mappings: u32,
     reference_to_id_array: u32,
-    pub base_address: u64,
+    base_address: u64,
     flag: u32,
     reserved: u32,
     vatos_address: u64,
@@ -53,12 +52,13 @@ pub struct IdMappingIter {
 }
 
 #[derive(Clone)]
+#[repr(C)]
 pub struct IdMapping {
-    pub input_base: u32,
-    pub number_of_ids: u32,
-    pub output_base: u32,
-    pub output_reference: u32,
-    pub flags: u32,
+    input_base: u32,
+    number_of_ids: u32,
+    output_base: u32,
+    output_reference: u32,
+    flags: u32,
 }
 
 impl IORT {
@@ -67,18 +67,26 @@ impl IORT {
     pub fn get_smmu_v3_information(&self) -> Option<&SmmuV3Node> {
         let mut node_address =
             self as *const Self as usize + self.offset_to_array_of_iort_nodes as usize;
-        let num_of_entries = self.number_of_iort_nodes;
-        for _ in 0..num_of_entries {
-            if unsafe { *(node_address as *const u8) } == SMMU_V3_NODE_TYPE {
+        for _ in 0..self.number_of_iort_nodes {
+            if unsafe { *(node_address as *const u8) } == SmmuV3Node::NODE_TYPE {
                 return Some(unsafe { &*(node_address as *const SmmuV3Node) });
             }
             node_address += unsafe { *((node_address + 1) as *const u16) } as usize;
         }
-        return None;
+        None
     }
 }
 
 impl SmmuV3Node {
+    const NODE_TYPE: u8 = 0x04;
+    pub const fn get_base_address(&self) -> usize {
+        self.base_address as usize
+    }
+
+    pub const fn get_number_of_mappings(&self) -> usize {
+        self.number_of_id_mappings as usize
+    }
+
     pub fn get_array_of_id_mappings(&self) -> IdMappingIter {
         IdMappingIter {
             p: self as *const _ as usize + self.reference_to_id_array as usize,
@@ -103,6 +111,18 @@ impl Iterator for IdMappingIter {
 }
 
 impl IdMapping {
+    pub const fn get_output_base(&self) -> usize {
+        self.output_base as usize
+    }
+
+    pub const fn get_output_reference(&self) -> usize {
+        self.output_reference as usize
+    }
+
+    pub const fn get_number_of_ids(&self) -> usize {
+        self.number_of_ids as usize
+    }
+
     pub const fn is_single_map(&self) -> bool {
         (self.flags & 1) != 0
     }

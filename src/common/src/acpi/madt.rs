@@ -10,10 +10,6 @@
 //!
 //! Supported MADT Revision: ~ 5
 
-pub const MADT_SIGNATURE: [u8; 4] = *b"APIC";
-
-const MADT_STRUCT_SIZE: usize = core::mem::size_of::<MADT>();
-
 const STRUCT_TYPE_GICC: u8 = 0x0B;
 const STRUCT_TYPE_GICD: u8 = 0x0C;
 const STRUCT_TYPE_ITS: u8 = 0x0F;
@@ -51,8 +47,8 @@ pub struct GicCpuInterfaceStructure {
     gicv: u64,
     gich: u64,
     vgic_maintenance_interrupt: u32,
-    pub gicr_base_address: u64,
-    pub mpidr: u64,
+    gicr_base_address: u64,
+    mpidr: u64,
     processor_power_efficiency_class: u8,
     reserved_2: u8,
     spe_overflow_interrupt: u16,
@@ -70,9 +66,12 @@ pub struct GicInterruptTranslationServiceStructureList {
 }
 
 impl MADT {
+    pub const SIGNATURE: [u8; 4] = *b"APIC";
+    const STRUCT_SIZE: usize = core::mem::size_of::<MADT>();
+
     pub fn get_gic_list(&self) -> GicCpuInterfaceStructureList {
-        let length = self.length as usize - MADT_STRUCT_SIZE;
-        let pointer = self as *const _ as usize + MADT_STRUCT_SIZE;
+        let length = self.length as usize - Self::STRUCT_SIZE;
+        let pointer = self as *const _ as usize + Self::STRUCT_SIZE;
 
         GicCpuInterfaceStructureList {
             pointer,
@@ -81,8 +80,8 @@ impl MADT {
     }
 
     pub fn get_gic_distributor_address(&self) -> Option<usize> {
-        let mut base_address = self as *const _ as usize + MADT_STRUCT_SIZE;
-        let limit = base_address + (self.length as usize - MADT_STRUCT_SIZE);
+        let mut base_address = self as *const _ as usize + Self::STRUCT_SIZE;
+        let limit = base_address + (self.length as usize - Self::STRUCT_SIZE);
         while base_address < limit {
             let record_type = unsafe { *(base_address as *const u8) };
             let record_length = unsafe { *((base_address + 1) as *const u8) };
@@ -95,8 +94,8 @@ impl MADT {
     }
 
     pub fn get_gic_its_list(&self) -> GicInterruptTranslationServiceStructureList {
-        let length = self.length as usize - MADT_STRUCT_SIZE;
-        let pointer = self as *const _ as usize + MADT_STRUCT_SIZE;
+        let length = self.length as usize - Self::STRUCT_SIZE;
+        let pointer = self as *const _ as usize + Self::STRUCT_SIZE;
 
         GicInterruptTranslationServiceStructureList {
             pointer,
@@ -128,6 +127,12 @@ impl Iterator for GicCpuInterfaceStructureList {
             }
             _ => self.next(),
         }
+    }
+}
+
+impl GicCpuInterfaceStructure {
+    pub const fn get_gic_redistributor_base_address(&self) -> usize {
+        self.gicr_base_address as usize
     }
 }
 

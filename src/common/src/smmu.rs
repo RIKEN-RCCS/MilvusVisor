@@ -449,7 +449,6 @@ pub fn create_bitmask_of_stage2_configurations(ste_offset: usize) -> u64 {
     mask
 }
 
-/// I belive the compiler will make this function more clever...
 const fn _create_bitmask_of_stage2_configurations(
     ste_offset_by_array_base_type: usize,
 ) -> SteArrayBaseType {

@@ -68,7 +68,7 @@ impl MemoryAllocator {
             return Err(MemoryAllocationError::AddressNotAvailable);
         }
         self.available_pages -= pages;
-        return Ok(self.base_address + (self.available_pages << PAGE_SHIFT));
+        Ok(self.base_address + (self.available_pages << PAGE_SHIFT))
     }
 
     pub fn allocate(&mut self, size: usize, align: usize) -> Result<usize, MemoryAllocationError> {
@@ -83,7 +83,7 @@ impl MemoryAllocator {
         while (base & ((1 << align) - 1)) != 0 {
             base = self._allocate_memory(1)?;
         }
-        return Ok(base);
+        Ok(base)
     }
 
     pub fn free(&mut self, _address: usize, _size: usize) -> Result<(), MemoryAllocationError> {

@@ -233,7 +233,7 @@ impl MemoryAllocator {
             self.chain_entry_to_free_list(new_entry, None);
         }
         self.free_memory_size -= size;
-        return Ok(());
+        Ok(())
     }
 
     fn define_free_memory(
@@ -415,7 +415,7 @@ impl MemoryAllocator {
         } else {
             self.define_free_memory(start_address, size)?;
         }
-        return Ok(());
+        Ok(())
     }
 
     fn unchain_entry_from_free_list(&mut self, entry: &mut MemoryEntry) {

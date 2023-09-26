@@ -62,21 +62,18 @@ impl GeneralAddressStructure {
     pub const SPACE_ID_SYSTEM_MEMORY: u8 = 0x00;
     const SPACE_ID_INVALID: u8 = 0x0B;
 
-    fn invalid() -> Self {
-        Self {
-            address: 0,
-            address_type: Self::SPACE_ID_INVALID,
-        }
-    }
-
-    pub fn new(a: &[u8; 12]) -> Self {
+    pub const fn new(a: &[u8; 12]) -> Self {
         let address_type = a[0];
         if address_type >= Self::SPACE_ID_INVALID {
-            return Self::invalid();
-        }
-        Self {
-            address_type,
-            address: u64::from_le_bytes((a[4..12]).try_into().unwrap()),
+            Self {
+                address: 0,
+                address_type: Self::SPACE_ID_INVALID,
+            }
+        } else {
+            Self {
+                address_type,
+                address: u64::from_le_bytes([a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]]),
+            }
         }
     }
 
@@ -117,5 +114,5 @@ pub fn get_acpi_table(rsdp_address: usize, signature: &[u8; 4]) -> Result<usize,
         }
     }
 
-    return Err(AcpiError::TableNotFound);
+    Err(AcpiError::TableNotFound)
 }

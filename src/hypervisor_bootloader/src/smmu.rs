@@ -53,7 +53,7 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
         println!("SMMUv3 is not found");
         return None;
     };
-    let base_address = smmu_v3.base_address as usize;
+    let base_address = smmu_v3.get_base_address();
     println!("SMMUv3 BaseAddress: {:#X}", base_address);
 
     map_address(
@@ -121,16 +121,20 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
     }
 
     /* Find max_stream_id */
-    let mut max_stream_id: u32 = 0;
+    let mut max_stream_id = 0;
     for e in smmu_v3.get_array_of_id_mappings() {
         if e.is_single_map() {
-            println!("Single Map StreamID: {:#X}", e.output_base);
-            if e.output_base > max_stream_id {
-                max_stream_id = e.output_base;
+            println!("Single Map StreamID: {:#X}", e.get_output_base());
+            if e.get_output_base() > max_stream_id {
+                max_stream_id = e.get_output_base();
             }
         } else {
-            let array_max_stream_id = e.output_base + e.number_of_ids - 1;
-            println!("StreamID: {:#X}~{:#X}", e.output_base, array_max_stream_id);
+            let array_max_stream_id = e.get_output_base() + e.get_number_of_ids() - 1;
+            println!(
+                "StreamID: {:#X}~{:#X}",
+                e.get_output_base(),
+                array_max_stream_id
+            );
             if array_max_stream_id > max_stream_id {
                 max_stream_id = array_max_stream_id;
             }
@@ -140,7 +144,7 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
     /* Create Stream Table (Level1)*/
     let number_of_level1_context_descriptors = (max_stream_id + 1) >> STREAM_TABLE_SPLIT;
     let level1_table_address = allocate_memory(
-        page_align_up(number_of_level1_context_descriptors as usize * core::mem::size_of::<u64>())
+        page_align_up(number_of_level1_context_descriptors * core::mem::size_of::<u64>())
             >> PAGE_SHIFT,
         None,
     )
@@ -149,7 +153,7 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
     for e in unsafe {
         core::slice::from_raw_parts_mut(
             level1_table_address as *mut u64,
-            number_of_level1_context_descriptors as usize,
+            number_of_level1_context_descriptors,
         )
     } {
         *e = level2_table_address as u64 | (STREAM_TABLE_SPLIT as u64 - 1);

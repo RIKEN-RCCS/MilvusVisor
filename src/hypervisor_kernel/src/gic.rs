@@ -38,7 +38,7 @@ const GITS_CTLR_QUIESCENT: u32 = 1 << 31;
 
 pub fn restore_gic(acpi_address: usize) {
     // TODO: Discovery Base Address
-    if let Ok(table) = get_acpi_table(acpi_address, b"APIC") {
+    if let Ok(table) = get_acpi_table(acpi_address, &MADT::SIGNATURE) {
         let table = unsafe { &*(table as *const MADT) };
 
         for e in table.get_gic_its_list() {
@@ -59,7 +59,7 @@ pub fn restore_gic(acpi_address: usize) {
         }
 
         for e in table.get_gic_list() {
-            let redistributor_base = e.gicr_base_address as usize;
+            let redistributor_base = e.get_gic_redistributor_base_address();
             if redistributor_base == 0 {
                 todo!()
             }
