@@ -6,7 +6,6 @@
 // http://opensource.org/licenses/mit-license.php
 
 #![no_std]
-#![feature(let_chains)]
 
 pub mod acpi;
 pub mod cpu;
@@ -30,9 +29,9 @@ use crate::serial_port::SerialPortInfo;
 /// The name of this hypervisor
 pub const HYPERVISOR_NAME: &'static str = "MilvusVisor";
 /// The hash value of VCS from the environment variable
-pub const HYPERVISOR_HASH_INFO: Option<&'static str> = if let Some(s) = option_env!("PROJECT_HASH") && s.len() != 0 {Some(s)}else{None};
+pub const HYPERVISOR_HASH_INFO: Option<&'static str> = option_env!("PROJECT_HASH");
 /// The compiler information from the environment variables
-pub const COMPILER_INFO: Option<&'static str> =if let Some(s) = option_env!("RUSTC_VERSION") && s.len() != 0 {Some(s)}else{None};
+pub const COMPILER_INFO: Option<&'static str> = option_env!("RUSTC_VERSION");
 /// The path of hypervisor_kernel
 pub const HYPERVISOR_PATH: &'static str = "\\EFI\\BOOT\\hypervisor_kernel";
 /// The path of DTB written
