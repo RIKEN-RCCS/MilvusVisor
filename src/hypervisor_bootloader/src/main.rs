@@ -20,20 +20,17 @@ mod pci;
 mod serial_port;
 mod smmu;
 
-use common::cpu::*;
-use common::*;
+use common::{cpu::*, *};
 
 use uefi::{
-    boot_service, EfiConfigurationTable, EfiHandle, EfiSystemTable, EFI_ACPI_20_TABLE_GUID,
-    EFI_DTB_TABLE_GUID,
+    boot_service, boot_service::EfiBootServices, EfiConfigurationTable, EfiHandle, EfiSystemTable,
+    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
 };
 #[cfg(feature = "tftp")]
 use uefi::{pxe, EfiStatus};
 
-#[cfg(feature = "edit_dtb_memory")]
-use crate::dtb::add_new_memory_reservation_entry_to_dtb;
 use core::arch::asm;
-use core::mem::{transmute, MaybeUninit};
+use core::mem::MaybeUninit;
 
 static mut ORIGINAL_PAGE_TABLE: usize = 0;
 static mut ORIGINAL_VECTOR_BASE: u64 = 0;
@@ -50,6 +47,8 @@ static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
 
 #[no_mangle]
 extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) -> ! {
+    let system_table = unsafe { &*system_table };
+    let b_s = unsafe { &*system_table.efi_boot_services };
     unsafe {
         IMAGE_HANDLE = image_handle;
         SYSTEM_TABLE = system_table;
@@ -75,12 +74,12 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     assert_eq!(get_current_el() >> 2, 2, "Expected CurrentEL is EL2");
 
-    let allocated_memory_address = init_memory_pool();
+    let allocated_memory_address = init_memory_pool(b_s);
 
     #[cfg(debug_assertions)]
-    dump_memory_map();
+    dump_memory_map(b_s);
 
-    let entry_point = load_hypervisor();
+    let entry_point = load_hypervisor(image_handle, b_s);
 
     #[cfg(debug_assertions)]
     paging::dump_page_table();
@@ -88,7 +87,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     paging::setup_stage_2_translation().expect("Failed to setup Stage2 Paging");
     map_memory_pool(allocated_memory_address, ALLOC_SIZE);
 
-    detect_acpi_and_dtb();
+    detect_acpi_and_dtb(system_table);
 
     let mut serial = serial_port::detect_serial_port();
     if let Some(s) = &mut serial {
@@ -130,11 +129,10 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     /* Stack for BSP */
     let stack_address = allocate_memory(STACK_PAGES, None).expect("Failed to alloc stack")
         + (STACK_PAGES << PAGE_SHIFT);
-    let memory_save_list = create_memory_save_list();
+    let memory_save_list = create_memory_save_list(b_s);
 
     #[cfg(feature = "edit_dtb_memory")]
     if let Some(dtb_address) = unsafe { DTB_ADDRESS } {
-        let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
         let page_num = 4 * 1024;
         let size = page_num << PAGE_SHIFT;
         let new_dtb_address = b_s
@@ -142,7 +140,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
             .expect("Failed to allocate memory for u-boot");
 
         /* Edit DTB's memory region */
-        let dtb_total_size = add_new_memory_reservation_entry_to_dtb(
+        let dtb_total_size = dtb::add_new_memory_reservation_entry_to_dtb(
             dtb_address,
             new_dtb_address,
             size,
@@ -151,7 +149,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         )
         .expect("Failed to add new reservation entry to DTB");
         #[cfg(feature = "save_dtb")]
-        save_dtb(new_dtb_address, dtb_total_size);
+        save_dtb(new_dtb_address, dtb_total_size, image_handle, b_s);
         #[cfg(not(feature = "save_dtb"))]
         println!(
             "DTB_ADDRESS: {:#X} (Size: {:#X})",
@@ -174,7 +172,9 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
             (*(*SYSTEM_TABLE).efi_boot_services).exit_boot_services
         } as usize,
     };
-    unsafe { (transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info) };
+    unsafe {
+        (core::mem::transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info)
+    };
 
     /* Do not call allocate_memory/free_memory from here */
 
@@ -199,12 +199,14 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 }
 
 /// Analyze EfiSystemTable and store [`ACPI_20_TABLE_ADDRESS`] and [`DTB_ADDRESS`]
-fn detect_acpi_and_dtb() {
-    let system_table = unsafe { SYSTEM_TABLE };
-    let num_of_entries = unsafe { (*system_table).num_table_entries };
-    for i in 0..num_of_entries {
+///
+/// # Arguments
+/// * system_table: Efi System Table
+/// * b_s: EfiBootService
+fn detect_acpi_and_dtb(system_table: &EfiSystemTable) {
+    for i in 0..system_table.num_table_entries {
         let table = unsafe {
-            &*(((*system_table).configuration_table
+            &*((system_table.configuration_table
                 + i * core::mem::size_of::<EfiConfigurationTable>())
                 as *const EfiConfigurationTable)
         };
@@ -224,14 +226,17 @@ fn detect_acpi_and_dtb() {
 /// This function allocates [`ALLOC_SIZE`] and then, set it into [`MEMORY_ALLOCATOR`]
 /// The attribute of allocated memory area will be changed to EfiUnusableMemory
 ///
+/// # Arguments
+/// * b_s: EfiBootService
+///
 /// # Panics
 /// If the allocation is failed, this function will panic.
 ///
 /// # Result
 /// Returns the start_address allocated
-fn init_memory_pool() -> usize {
+fn init_memory_pool(b_s: &EfiBootServices) -> usize {
     let allocate_pages = ALLOC_SIZE >> PAGE_SHIFT;
-    let allocated_address = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) }
+    let allocated_address = b_s
         .alloc_highest_memory(allocate_pages, MAX_PHYSICAL_ADDRESS)
         .expect("Failed to init memory pool");
     println!(
@@ -239,13 +244,12 @@ fn init_memory_pool() -> usize {
         allocated_address,
         allocated_address + ALLOC_SIZE
     );
-    //unsafe { MEMORY_ALLOCATOR.write(MemoryAllocator::create(allocated_address, ALLOC_SIZE)) };
     unsafe {
         MEMORY_ALLOCATOR
             .assume_init_mut()
             .init(allocated_address, ALLOC_SIZE)
     };
-    return allocated_address;
+    allocated_address
 }
 
 /// Map allocated memory area into TTBR0_EL2 and set up not to be accessible from EL1/EL0
@@ -357,13 +361,15 @@ fn detect_spin_table(dtb_address: usize) -> Option<(usize /* Base Address */, us
 /// # Panics
 /// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
 ///
+/// # Arguments
+/// * image_handle: EFI Image Handle
+/// * b_s: EfiBootService
+///
 /// # Result
 /// Returns the entry point of hypervisor_kernel
 #[cfg(not(feature = "tftp"))]
-fn load_hypervisor() -> usize {
+fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     use uefi::file;
-    let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
     let root_protocol =
         file::EfiFileProtocol::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
     let mut file_name_utf16: [u16; HYPERVISOR_PATH.len() + 1] = [0; HYPERVISOR_PATH.len() + 1];
@@ -491,7 +497,7 @@ fn load_hypervisor() -> usize {
         println!("Failed to clone the RootProtocol: {:?}", e);
     }
 
-    return entry_point;
+    entry_point
 }
 
 /// Save DTB
@@ -505,11 +511,11 @@ fn load_hypervisor() -> usize {
 /// # Arguments
 /// * `dtb_address` - The address to save
 /// * `dtb_size` - The total size of DTB
+/// * image_handle: EFI Image Handle
+/// * b_s: EfiBootService
 #[cfg(feature = "save_dtb")]
-fn save_dtb(dtb_address: usize, dtb_size: usize) {
+fn save_dtb(dtb_address: usize, dtb_size: usize, image_handle: EfiHandle, b_s: &EfiBootServices) {
     use uefi::file;
-    let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { &*(*SYSTEM_TABLE).efi_boot_services };
     let root_protocol =
         file::EfiFileProtocol::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
     let mut file_name_utf16: [u16; DTB_WRITTEN_PATH.len() + 1] = [0; DTB_WRITTEN_PATH.len() + 1];
@@ -544,12 +550,14 @@ fn save_dtb(dtb_address: usize, dtb_size: usize) {
 /// # Panics
 /// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
 ///
+/// # Arguments
+/// * image_handle: EFI Image Handle
+/// * b_s: EfiBootService
+///
 /// # Result
 /// Returns the entry point of hypervisor_kernel
 #[cfg(feature = "tftp")]
-fn load_hypervisor() -> usize {
-    let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
+fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     let pxe_protocol = pxe::EfiPxeBaseCodeProtocol::open_pxe_handler(image_handle, b_s)
         .expect("Failed to open PXE Handler");
     unsafe { PXE_PROTOCOL = pxe_protocol };
@@ -693,8 +701,7 @@ fn load_hypervisor() -> usize {
     return entry_point;
 }
 
-fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
-    let b_s = unsafe { &*(*SYSTEM_TABLE).efi_boot_services };
+fn create_memory_save_list(b_s: &EfiBootServices) -> &'static mut [MemorySaveListEntry] {
     const MEMORY_SAVE_LIST_PAGES: usize = 3;
     const MEMORY_SAVE_LIST_SIZE: usize = MEMORY_SAVE_LIST_PAGES << PAGE_SHIFT;
     let memory_map_info = b_s.get_memory_map().expect("Failed to get the memory map");
@@ -760,9 +767,8 @@ fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
     return list;
 }
 
-#[allow(dead_code)]
-fn dump_memory_map() {
-    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
+#[cfg(debug_assertions)]
+fn dump_memory_map(b_s: &EfiBootServices) {
     let memory_map_info = match b_s.get_memory_map() {
         Ok(info) => info,
         Err(e) => {

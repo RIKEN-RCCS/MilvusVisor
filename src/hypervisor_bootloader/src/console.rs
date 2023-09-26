@@ -9,8 +9,6 @@
 //! Console with UEFI Output Protocol
 //!
 
-//use common::spin_flag::SpinLockFlag;
-
 use uefi::{output::EfiOutputProtocol, EfiStatus};
 
 use core::fmt;
@@ -27,25 +25,17 @@ impl Console {
     pub const fn new() -> Self {
         Self {
             uefi_output_console: MaybeUninit::uninit(),
-            //write_lock: SpinLockFlag::new(),
         }
     }
 
     pub fn init(&mut self, efi_output_protocol: *const EfiOutputProtocol) {
         self.uefi_output_console = MaybeUninit::new(unsafe { &*efi_output_protocol });
     }
-
-    /// For panic_handler
-    pub unsafe fn force_release_write_lock(&self) {
-        //self.write_lock.unlock();
-    }
 }
 
 impl fmt::Write for Console {
     fn write_str(&mut self, string: &str) -> fmt::Result {
-        //self.write_lock.lock();
         let result = unsafe { self.uefi_output_console.assume_init().output(string) };
-        //self.write_lock.unlock();
         if result == EfiStatus::EfiSuccess {
             Ok(())
         } else {

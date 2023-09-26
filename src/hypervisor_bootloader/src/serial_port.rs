@@ -125,5 +125,5 @@ pub fn detect_serial_port() -> Option<SerialPortInfo> {
 
     println!("SerialPort is not found.");
 
-    return None;
+    None
 }
