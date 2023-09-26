@@ -56,7 +56,7 @@ const EFI_FILE_INFO_ID: Guid = Guid {
 };
 
 #[repr(C)]
-pub struct EfiSimpleFileProtocol {
+struct EfiSimpleFileProtocol {
     revision: u64,
     open_volume:
         extern "efiapi" fn(this: *const Self, root: *mut *const EfiFileProtocol) -> EfiStatus,
@@ -126,150 +126,138 @@ pub struct EfiFileProtocol {
     flush_ex: extern "efiapi" fn(this: *const Self, token: usize) -> EfiStatus,
 }
 
-pub fn open_root_dir(
-    image_handle: EfiHandle,
-    b_s: *const EfiBootServices,
-) -> Result<*const EfiFileProtocol, EfiStatus> {
-    let mut root_dir_protocol: *const EfiFileProtocol = core::ptr::null();
-    let mut loaded_image_protocol: *const EfiLoadedImageProtocol = core::ptr::null();
-    let mut simple_file_protocol: *const EfiSimpleFileProtocol = core::ptr::null();
+impl EfiFileProtocol {
+    pub fn open_root_dir(
+        image_handle: EfiHandle,
+        b_s: &EfiBootServices,
+    ) -> Result<&'static EfiFileProtocol, EfiStatus> {
+        let mut root_dir_protocol: *const EfiFileProtocol = core::ptr::null();
+        let mut loaded_image_protocol: *const EfiLoadedImageProtocol = core::ptr::null();
+        let mut simple_file_protocol: *const EfiSimpleFileProtocol = core::ptr::null();
 
-    let status = unsafe {
-        ((*b_s).open_protocol)(
+        let status = (b_s.open_protocol)(
             image_handle,
             &EFI_LOADED_IMAGE_PROTOCOL_GUID,
             &mut loaded_image_protocol as *mut _ as usize as *mut *const usize,
             image_handle,
             0,
             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    };
-    let status = unsafe {
-        ((*b_s).open_protocol)(
-            (*loaded_image_protocol).device_handle,
+        );
+
+        if status != EfiStatus::EfiSuccess || loaded_image_protocol.is_null() {
+            return Err(status);
+        };
+        let status = (b_s.open_protocol)(
+            unsafe { (*loaded_image_protocol).device_handle },
             &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
             &mut simple_file_protocol as *mut _ as usize as *mut *const usize,
             image_handle,
             0,
             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    };
-    let status = unsafe {
-        ((*simple_file_protocol).open_volume)(
-            simple_file_protocol,
-            &mut root_dir_protocol as *mut _,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    };
-    Ok(root_dir_protocol)
-}
+        );
 
-pub fn open_file(
-    root_file_protocol: *const EfiFileProtocol,
-    utf16_file_name: &[u16],
-) -> Result<*const EfiFileProtocol, EfiStatus> {
-    let mut file_handle: *const EfiFileProtocol = core::ptr::null();
+        if status != EfiStatus::EfiSuccess || simple_file_protocol.is_null() {
+            return Err(status);
+        };
+        let status = unsafe {
+            ((*simple_file_protocol).open_volume)(
+                simple_file_protocol,
+                &mut root_dir_protocol as *mut _,
+            )
+        };
+        if status != EfiStatus::EfiSuccess || root_dir_protocol.is_null() {
+            return Err(status);
+        };
+        Ok(unsafe { &*root_dir_protocol })
+    }
 
-    let status = unsafe {
-        ((*root_file_protocol).open)(
+    pub fn open_file(
+        root_file_protocol: &EfiFileProtocol,
+        utf16_file_name: &[u16],
+    ) -> Result<&'static EfiFileProtocol, EfiStatus> {
+        let mut file_handle: *const EfiFileProtocol = core::ptr::null();
+
+        let status = (root_file_protocol.open)(
             root_file_protocol,
             &mut file_handle,
             utf16_file_name.as_ptr(),
             EFI_FILE_MODE_READ,
             0,
-        )
-    };
-    if status != EfiStatus::EfiSuccess || file_handle.is_null() {
-        return Err(status);
+        );
+
+        if status != EfiStatus::EfiSuccess || file_handle.is_null() {
+            return Err(status);
+        }
+        Ok(unsafe { &*file_handle })
     }
-    Ok(file_handle)
-}
 
-pub fn create_file(
-    root_file_protocol: *const EfiFileProtocol,
-    utf16_file_name: &[u16],
-) -> Result<*const EfiFileProtocol, EfiStatus> {
-    let mut file_handle: *const EfiFileProtocol = core::ptr::null();
+    pub fn create_file(
+        root_file_protocol: &EfiFileProtocol,
+        utf16_file_name: &[u16],
+    ) -> Result<&'static EfiFileProtocol, EfiStatus> {
+        let mut file_handle: *const EfiFileProtocol = core::ptr::null();
 
-    let status = unsafe {
-        ((*root_file_protocol).open)(
+        let status = (root_file_protocol.open)(
             root_file_protocol,
             &mut file_handle,
             utf16_file_name.as_ptr(),
             EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
             0,
-        )
-    };
-    if status != EfiStatus::EfiSuccess || file_handle.is_null() {
-        return Err(status);
-    }
-    Ok(file_handle)
-}
+        );
 
-pub fn get_file_info(file: *const EfiFileProtocol) -> Result<EfiFileInfo, EfiStatus> {
-    let mut result = MaybeUninit::<EfiFileInfo>::uninit();
-    let mut read_size = core::mem::size_of::<EfiFileInfo>();
-    let status = unsafe {
-        ((*file).get_info)(
-            file,
+        if status != EfiStatus::EfiSuccess || file_handle.is_null() {
+            return Err(status);
+        }
+        Ok(unsafe { &*file_handle })
+    }
+
+    pub fn get_file_info(&self) -> Result<EfiFileInfo, EfiStatus> {
+        let mut result = MaybeUninit::<EfiFileInfo>::uninit();
+        let mut read_size = core::mem::size_of::<EfiFileInfo>();
+        let status = (self.get_info)(
+            self,
             &EFI_FILE_INFO_GUID,
             &mut read_size,
             result.as_mut_ptr() as *mut _,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
+        );
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
+        Ok(unsafe { result.assume_init() })
     }
-    Ok(unsafe { result.assume_init() })
-}
 
-pub fn read(
-    file: *const EfiFileProtocol,
-    buffer: *mut u8,
-    buffer_size: usize,
-) -> Result<usize, EfiStatus> {
-    let mut read_size = buffer_size;
-    let status = unsafe { ((*file).read)(file, &mut read_size as *mut _, buffer) };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
+    pub fn read(&self, buffer: *mut u8, buffer_size: usize) -> Result<usize, EfiStatus> {
+        let mut read_size = buffer_size;
+        let status = (self.read)(self, &mut read_size as *mut _, buffer);
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
+        Ok(read_size)
     }
-    Ok(read_size)
-}
 
-pub fn write(
-    file: *const EfiFileProtocol,
-    buffer: *mut u8,
-    buffer_size: usize,
-) -> Result<usize, EfiStatus> {
-    let mut write_size = buffer_size;
-    let status = unsafe { ((*file).write)(file, &mut write_size as *mut _, buffer) };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
+    pub fn write(&self, buffer: *mut u8, buffer_size: usize) -> Result<usize, EfiStatus> {
+        let mut write_size = buffer_size;
+        let status = (self.write)(self, &mut write_size as *mut _, buffer);
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
+        Ok(write_size)
     }
-    Ok(write_size)
-}
 
-pub fn seek(file: *const EfiFileProtocol, position: usize) -> Result<(), EfiStatus> {
-    let status = unsafe { ((*file).set_position)(file, position as u64) };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    }
-    Ok(())
-}
-
-pub fn close_file(file: *const EfiFileProtocol) -> Result<(), EfiStatus> {
-    let s = unsafe { ((*file).close)(file) };
-    if s == EfiStatus::EfiSuccess {
+    pub fn seek(&self, position: usize) -> Result<(), EfiStatus> {
+        let status = (self.set_position)(self, position as u64);
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
         Ok(())
-    } else {
-        Err(s)
+    }
+
+    pub fn close_file(&'static self) -> Result<(), EfiStatus> {
+        let s = ((*self).close)(self);
+        if s == EfiStatus::EfiSuccess {
+            Ok(())
+        } else {
+            Err(s)
+        }
     }
 }

@@ -122,64 +122,64 @@ pub struct EfiPxeBaseCodeProtocol {
     mode: *mut EfiPxeBaseCodeMode,
 }
 
-pub fn open_pxe_handler(
-    image_handle: EfiHandle,
-    b_s: *const EfiBootServices,
-) -> Result<*const EfiPxeBaseCodeProtocol, EfiStatus> {
-    let mut loaded_image_protocol: *const EfiLoadedImageProtocol = core::ptr::null();
-    let mut pxe_protocol: *const EfiPxeBaseCodeProtocol = core::ptr::null();
+impl EfiPxeBaseCodeProtocol {
+    pub fn open_pxe_handler(
+        image_handle: EfiHandle,
+        b_s: &EfiBootServices,
+    ) -> Result<&'static EfiPxeBaseCodeProtocol, EfiStatus> {
+        let mut loaded_image_protocol: *const EfiLoadedImageProtocol = core::ptr::null();
+        let mut pxe_protocol: *const EfiPxeBaseCodeProtocol = core::ptr::null();
 
-    let status = unsafe {
-        ((*b_s).open_protocol)(
+        let status = (b_s.open_protocol)(
             image_handle,
             &EFI_LOADED_IMAGE_PROTOCOL_GUID,
             &mut loaded_image_protocol as *mut _ as usize as *mut *const usize,
             image_handle,
             0,
             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    };
-    let status = unsafe {
-        ((*b_s).open_protocol)(
-            (*loaded_image_protocol).device_handle,
+        );
+
+        if status != EfiStatus::EfiSuccess || loaded_image_protocol.is_null() {
+            return Err(status);
+        };
+        let status = (b_s.open_protocol)(
+            unsafe { (*loaded_image_protocol).device_handle },
             &EFI_PXE_BASE_CODE_PROTOCOL_GUID,
             &mut pxe_protocol as *mut _ as usize as *mut *const usize,
             image_handle,
             0,
             EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    };
-    Ok(pxe_protocol)
-}
-
-pub fn get_server_ip_v4(pxe_p: *const EfiPxeBaseCodeProtocol) -> Result<[u8; 4], ()> {
-    if unsafe { (*(*pxe_p).mode).dhcp_discover_valid } {
-        Ok(unsafe {
-            &*(&(*(*pxe_p).mode).dhcp_ack as *const _ as usize as *const EfiPxeBaseCodeDhcpv4Packet)
-        }
-        .bootp_si_addr)
-    } else {
-        Err(())
+        );
+        if status != EfiStatus::EfiSuccess || pxe_protocol.is_null() {
+            return Err(status);
+        };
+        Ok(unsafe { &*pxe_protocol })
     }
-}
 
-pub fn get_file(
-    pxe_p: *const EfiPxeBaseCodeProtocol,
-    buffer: *mut u8,
-    buffer_size: *mut u64,
-    server_ip: [u8; 4],
-    file_name: *const u8,
-) -> Result<(), EfiStatus> {
-    let mut block_size = DEFAULT_BLOCK_SIZE;
-    let status = unsafe {
-        ((*pxe_p).mtftp)(
-            pxe_p,
+    pub fn get_server_ip_v4(&self) -> Result<[u8; 4], ()> {
+        if self.mode.is_null() {
+            return Err(());
+        }
+        if unsafe { (*(self.mode)).dhcp_discover_valid } {
+            Ok(unsafe {
+                &*(&(*self.mode).dhcp_ack as *const _ as usize as *const EfiPxeBaseCodeDhcpv4Packet)
+            }
+            .bootp_si_addr)
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn get_file(
+        &self,
+        buffer: *mut u8,
+        buffer_size: *mut u64,
+        server_ip: [u8; 4],
+        file_name: *const u8,
+    ) -> Result<(), EfiStatus> {
+        let mut block_size = DEFAULT_BLOCK_SIZE;
+        let status = (self.mtftp)(
+            self,
             EfiPxeBaseCodeTftpOpcode::EfiPxeBaseCodeTftpReadFile,
             buffer,
             false,
@@ -189,10 +189,11 @@ pub fn get_file(
             file_name,
             0,
             false,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
-    };
-    Ok(())
+        );
+
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        };
+        Ok(())
+    }
 }

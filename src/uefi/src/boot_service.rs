@@ -34,9 +34,9 @@ pub struct EfiBootServices {
         descriptor_size: *mut usize,
         descriptor_version: *mut u32,
     ) -> EfiStatus,
-    allocate_pool:
+    _allocate_pool:
         extern "efiapi" fn(pool_type: EfiMemoryType, size: usize, memory: *mut usize) -> EfiStatus,
-    free_pool: extern "efiapi" fn(memory: usize) -> EfiStatus,
+    _free_pool: extern "efiapi" fn(memory: usize) -> EfiStatus,
     create_event: usize,
     set_timer: usize,
     wait_for_event: usize,

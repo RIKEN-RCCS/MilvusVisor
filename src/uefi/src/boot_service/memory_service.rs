@@ -80,107 +80,103 @@ pub struct MemoryMapInfo {
     pub descriptor_address: usize,
 }
 
-pub fn alloc_pool(b_s: *const EfiBootServices, size: usize) -> Result<usize, EfiStatus> {
-    let mut address: usize = 0usize;
-    let status = unsafe {
-        ((*b_s).allocate_pool)(EfiMemoryType::EfiLoaderData, size, &mut address as *mut _)
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
+impl EfiBootServices {
+    pub fn alloc_pool(&self, size: usize) -> Result<usize, EfiStatus> {
+        let mut address: usize = 0usize;
+        let status =
+            (self._allocate_pool)(EfiMemoryType::EfiLoaderData, size, &mut address as *mut _);
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
+        Ok(address)
     }
-    Ok(address)
-}
 
-pub fn free_pool(b_s: *const EfiBootServices, address: usize) -> Result<(), EfiStatus> {
-    let status = unsafe { ((*b_s).free_pool)(address) };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
+    pub fn free_pool(&self, address: usize) -> Result<(), EfiStatus> {
+        let status = (self._free_pool)(address);
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
+        Ok(())
     }
-    Ok(())
-}
 
-/// Allocate highest memory which matches the demanded size and `border_address`
-///
-/// # Arguments
-/// * `b_s` - EfiBootService
-/// * `pages` - the number of needed pages
-/// * `border_address` - the upper border address to restrict to be allocating address  
-///
-/// # Result
-/// If the allocation is succeeded, Ok(start_address), otherwise Err(EfiStatus)
-pub fn alloc_highest_memory(
-    b_s: *const EfiBootServices,
-    pages: usize,
-    border_address: usize,
-) -> Result<usize, EfiStatus> {
-    let mut memory_address = border_address;
-    let status = unsafe {
-        ((*b_s).allocate_pages)(
+    /// Allocate highest memory which matches the demanded size and `border_address`
+    ///
+    /// # Arguments
+    /// * `b_s` - EfiBootService
+    /// * `pages` - the number of needed pages
+    /// * `border_address` - the upper border address to restrict to be allocating address
+    ///
+    /// # Result
+    /// If the allocation is succeeded, Ok(start_address), otherwise Err(EfiStatus)
+    pub fn alloc_highest_memory(
+        &self,
+        pages: usize,
+        border_address: usize,
+    ) -> Result<usize, EfiStatus> {
+        let mut memory_address = border_address;
+        let status = (self.allocate_pages)(
             EfiAllocateType::AllocateMaxAddress,
             EfiMemoryType::EfiUnusableMemory,
             pages,
             &mut memory_address as *mut _,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
-        return Err(status);
+        );
+
+        if status != EfiStatus::EfiSuccess {
+            return Err(status);
+        }
+        Ok(memory_address)
     }
-    Ok(memory_address)
-}
 
-/// Get memory map
-///
-/// This function will allocate memory pool to store memory map by calling [`alloc_pool`]
-///
-/// # Arguments
-/// * `b_s` - EfiBootService
-///
-/// # Result
-/// If the allocation is succeeded, returns Ok(MemoryMapInfo), otherwise Err(EfiStatus)
-///
-/// # Attention
-/// After processed memory map, you must free [`MemoryMapInfo::descriptor_address`] with [`free_pool`]
-pub fn get_memory_map(b_s: *const EfiBootServices) -> Result<MemoryMapInfo, EfiStatus> {
-    let mut memory_map_size = 0;
-    let mut map_key = 0usize;
-    let mut actual_memory_descriptor_size = 0usize;
-    let mut descriptor_version = 0u32;
+    /// Get memory map
+    ///
+    /// This function will allocate memory pool to store memory map by calling [`alloc_pool`]
+    ///
+    /// # Arguments
+    /// * `b_s` - EfiBootService
+    ///
+    /// # Result
+    /// If the allocation is succeeded, returns Ok(MemoryMapInfo), otherwise Err(EfiStatus)
+    ///
+    /// # Attention
+    /// After processed memory map, you must free [`MemoryMapInfo::descriptor_address`] with [`free_pool`]
+    pub fn get_memory_map(&self) -> Result<MemoryMapInfo, EfiStatus> {
+        let mut memory_map_size = 0;
+        let mut map_key = 0usize;
+        let mut actual_memory_descriptor_size = 0usize;
+        let mut descriptor_version = 0u32;
 
-    let result = unsafe {
-        ((*b_s).get_memory_map)(
+        let result = (self.get_memory_map)(
             &mut memory_map_size,
             core::ptr::null_mut(),
             &mut map_key,
             &mut actual_memory_descriptor_size,
             &mut descriptor_version,
-        )
-    };
-    if result != EfiStatus::EfiBufferTooSmall {
-        return Err(result);
-    }
-    /* MemoryMap may get bigger after alloc_pool */
-    memory_map_size += actual_memory_descriptor_size << 2;
-    let buffer = alloc_pool(b_s, memory_map_size)?;
+        );
+        if result != EfiStatus::EfiBufferTooSmall {
+            return Err(result);
+        }
+        /* MemoryMap may get bigger after alloc_pool */
+        memory_map_size += actual_memory_descriptor_size << 2;
+        let buffer = self.alloc_pool(memory_map_size)?;
 
-    let result = unsafe {
-        ((*b_s).get_memory_map)(
+        let result = (self.get_memory_map)(
             &mut memory_map_size,
             buffer as *mut _,
             &mut map_key,
             &mut actual_memory_descriptor_size,
             &mut descriptor_version,
-        )
-    };
-    if result != EfiStatus::EfiSuccess {
-        let _ = free_pool(b_s, buffer);
-        return Err(result);
+        );
+        if result != EfiStatus::EfiSuccess {
+            let _ = self.free_pool(buffer);
+            return Err(result);
+        }
+        Ok(MemoryMapInfo {
+            key: map_key,
+            num_of_entries: memory_map_size / actual_memory_descriptor_size,
+            actual_descriptor_size: actual_memory_descriptor_size,
+            descriptor_address: buffer,
+        })
     }
-    return Ok(MemoryMapInfo {
-        key: map_key,
-        num_of_entries: memory_map_size / actual_memory_descriptor_size,
-        actual_descriptor_size: actual_memory_descriptor_size,
-        descriptor_address: buffer,
-    });
 }
 
 impl core::fmt::Debug for EfiMemoryDescriptor {

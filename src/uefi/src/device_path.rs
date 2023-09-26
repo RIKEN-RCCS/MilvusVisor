@@ -67,34 +67,32 @@ struct EfiDevicePathUtilitiesProtocol {
 
 pub fn get_full_path_of_current_device(
     image_handle: EfiHandle,
-    b_s: *const boot_service::EfiBootServices,
+    b_s: &boot_service::EfiBootServices,
 ) -> Result<*const EfiDevicePathProtocol, EfiStatus> {
     let mut loaded_image_protocol: *const EfiLoadedImageProtocol = core::ptr::null();
     let mut device_path_protocol: *const EfiDevicePathProtocol = core::ptr::null();
 
-    let status = unsafe {
-        ((*b_s).open_protocol)(
-            image_handle,
-            &EFI_LOADED_IMAGE_PROTOCOL_GUID,
-            &mut loaded_image_protocol as *mut _ as usize as *mut *const usize,
-            image_handle,
-            0,
-            boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
+    let status = (b_s.open_protocol)(
+        image_handle,
+        &EFI_LOADED_IMAGE_PROTOCOL_GUID,
+        &mut loaded_image_protocol as *mut _ as usize as *mut *const usize,
+        image_handle,
+        0,
+        boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
+    );
+
+    if status != EfiStatus::EfiSuccess || loaded_image_protocol.is_null() {
         return Err(status);
     }
-    let status = unsafe {
-        ((*b_s).open_protocol)(
-            (*loaded_image_protocol).device_handle,
-            &EFI_DEVICE_PATH_PROTOCOL_GUID,
-            &mut device_path_protocol as *mut _ as usize as *mut *const usize,
-            image_handle,
-            0,
-            boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
-        )
-    };
+    let status = (b_s.open_protocol)(
+        unsafe { (*loaded_image_protocol).device_handle },
+        &EFI_DEVICE_PATH_PROTOCOL_GUID,
+        &mut device_path_protocol as *mut _ as usize as *mut *const usize,
+        image_handle,
+        0,
+        boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
+    );
+
     if status != EfiStatus::EfiSuccess {
         return Err(status);
     };
@@ -103,7 +101,7 @@ pub fn get_full_path_of_current_device(
 
 pub fn create_full_path_of_device(
     image_handle: EfiHandle,
-    b_s: *const boot_service::EfiBootServices,
+    b_s: &boot_service::EfiBootServices,
     null_terminated_file_name: &[u16],
 ) -> Result<*const EfiDevicePathProtocol, EfiStatus> {
     let mut loaded_image_protocol: *const EfiLoadedImageProtocol = core::ptr::null();
@@ -113,50 +111,43 @@ pub fn create_full_path_of_device(
     let mut device_path_from_text_protocol: *const EfiDevicePathFromTextProtocol =
         core::ptr::null();
 
-    let status = unsafe {
-        ((*b_s).open_protocol)(
-            image_handle,
-            &EFI_LOADED_IMAGE_PROTOCOL_GUID,
-            &mut loaded_image_protocol as *mut _ as usize as *mut *const usize,
-            image_handle,
-            0,
-            boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
+    let status = (b_s.open_protocol)(
+        image_handle,
+        &EFI_LOADED_IMAGE_PROTOCOL_GUID,
+        &mut loaded_image_protocol as *mut _ as usize as *mut *const usize,
+        image_handle,
+        0,
+        boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
+    );
+    if status != EfiStatus::EfiSuccess || loaded_image_protocol.is_null() {
         return Err(status);
     }
-    let status = unsafe {
-        ((*b_s).open_protocol)(
-            (*loaded_image_protocol).device_handle,
-            &EFI_DEVICE_PATH_PROTOCOL_GUID,
-            &mut device_path_protocol as *mut _ as usize as *mut *const usize,
-            image_handle,
-            0,
-            boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
+    let status = (b_s.open_protocol)(
+        unsafe { (*loaded_image_protocol).device_handle },
+        &EFI_DEVICE_PATH_PROTOCOL_GUID,
+        &mut device_path_protocol as *mut _ as usize as *mut *const usize,
+        image_handle,
+        0,
+        boot_service::EFI_OPEN_PROTOCOL_GET_PROTOCOL,
+    );
+    if status != EfiStatus::EfiSuccess || device_path_protocol.is_null() {
         return Err(status);
     };
-    let status = unsafe {
-        ((*b_s).locate_protocol)(
-            &EFI_DEVICE_PATH_UTILITIES_PROTOCOL_GUID,
-            core::ptr::null(),
-            &mut device_path_utilities_protocol as *mut _ as usize as *mut *const usize,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
+    let status = (b_s.locate_protocol)(
+        &EFI_DEVICE_PATH_UTILITIES_PROTOCOL_GUID,
+        core::ptr::null(),
+        &mut device_path_utilities_protocol as *mut _ as usize as *mut *const usize,
+    );
+    if status != EfiStatus::EfiSuccess || device_path_utilities_protocol.is_null() {
         return Err(status);
     }
-    let status = unsafe {
-        ((*b_s).locate_protocol)(
-            &EFI_DEVICE_PATH_FROM_TEXT_PROTOCOL_GUID,
-            core::ptr::null(),
-            &mut device_path_from_text_protocol as *mut _ as usize as *mut *const usize,
-        )
-    };
-    if status != EfiStatus::EfiSuccess {
+    let status = (b_s.locate_protocol)(
+        &EFI_DEVICE_PATH_FROM_TEXT_PROTOCOL_GUID,
+        core::ptr::null(),
+        &mut device_path_from_text_protocol as *mut _ as usize as *mut *const usize,
+    );
+
+    if status != EfiStatus::EfiSuccess || device_path_from_text_protocol.is_null() {
         return Err(status);
     };
     let file_path = unsafe {
@@ -173,5 +164,5 @@ pub fn create_full_path_of_device(
     if full_path.is_null() {
         return Err(EfiStatus::EfiInvalidParameter);
     }
-    return Ok(full_path);
+    Ok(full_path)
 }

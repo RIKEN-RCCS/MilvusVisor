@@ -23,8 +23,6 @@ mod smmu;
 use common::cpu::*;
 use common::*;
 
-#[cfg(not(feature = "tftp"))]
-use uefi::file;
 use uefi::{
     boot_service, EfiConfigurationTable, EfiHandle, EfiSystemTable, EFI_ACPI_20_TABLE_GUID,
     EFI_DTB_TABLE_GUID,
@@ -136,12 +134,12 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     #[cfg(feature = "edit_dtb_memory")]
     if let Some(dtb_address) = unsafe { DTB_ADDRESS } {
-        let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+        let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
         let page_num = 4 * 1024;
         let size = page_num << PAGE_SHIFT;
-        let new_dtb_address =
-            boot_service::alloc_highest_memory(b_s, page_num, MAX_PHYSICAL_ADDRESS)
-                .expect("Failed to allocate memory for u-boot");
+        let new_dtb_address = b_s
+            .alloc_highest_memory(page_num, MAX_PHYSICAL_ADDRESS)
+            .expect("Failed to allocate memory for u-boot");
 
         /* Edit DTB's memory region */
         let dtb_total_size = add_new_memory_reservation_entry_to_dtb(
@@ -233,12 +231,9 @@ fn detect_acpi_and_dtb() {
 /// Returns the start_address allocated
 fn init_memory_pool() -> usize {
     let allocate_pages = ALLOC_SIZE >> PAGE_SHIFT;
-    let allocated_address = boot_service::alloc_highest_memory(
-        unsafe { (*SYSTEM_TABLE).efi_boot_services },
-        allocate_pages,
-        MAX_PHYSICAL_ADDRESS,
-    )
-    .expect("Failed to init memory pool");
+    let allocated_address = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) }
+        .alloc_highest_memory(allocate_pages, MAX_PHYSICAL_ADDRESS)
+        .expect("Failed to init memory pool");
     println!(
         "Allocated {:#X} ~ {:#X}",
         allocated_address,
@@ -366,26 +361,25 @@ fn detect_spin_table(dtb_address: usize) -> Option<(usize /* Base Address */, us
 /// Returns the entry point of hypervisor_kernel
 #[cfg(not(feature = "tftp"))]
 fn load_hypervisor() -> usize {
+    use uefi::file;
     let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
-    let root_protocol = file::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
+    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
+    let root_protocol =
+        file::EfiFileProtocol::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
     let mut file_name_utf16: [u16; HYPERVISOR_PATH.len() + 1] = [0; HYPERVISOR_PATH.len() + 1];
 
     for (i, e) in HYPERVISOR_PATH.encode_utf16().enumerate() {
         file_name_utf16[i] = e;
     }
-    let hypervisor_protocol = file::open_file(root_protocol, &file_name_utf16)
+    let hypervisor_protocol = file::EfiFileProtocol::open_file(root_protocol, &file_name_utf16)
         .expect("Failed to open the hypervisor binary file");
 
     /* Read ElfHeader */
     let mut elf_header: MaybeUninit<elf::Elf64Header> = MaybeUninit::uninit();
     const ELF64_HEADER_SIZE: usize = core::mem::size_of::<elf::Elf64Header>();
-    let read_size = file::read(
-        hypervisor_protocol,
-        elf_header.as_mut_ptr() as *mut u8,
-        ELF64_HEADER_SIZE,
-    )
-    .expect("Failed to read Elf header");
+    let read_size = hypervisor_protocol
+        .read(elf_header.as_mut_ptr() as *mut u8, ELF64_HEADER_SIZE)
+        .expect("Failed to read Elf header");
     if read_size != core::mem::size_of_val(&elf_header) {
         panic!(
             "Expected {} bytes, but read {} bytes",
@@ -399,16 +393,15 @@ fn load_hypervisor() -> usize {
     }
     let program_header_entries_size =
         elf_header.get_program_header_entry_size() * elf_header.get_num_of_program_header_entries();
-    let program_header_pool = boot_service::alloc_pool(b_s, program_header_entries_size)
+    let program_header_pool = b_s
+        .alloc_pool(program_header_entries_size)
         .expect("Failed to allocate the pool for the program header");
-    file::seek(hypervisor_protocol, elf_header.get_program_header_offset())
+    hypervisor_protocol
+        .seek(elf_header.get_program_header_offset())
         .expect("Failed to seek for the program header");
-    let read_size = file::read(
-        hypervisor_protocol,
-        program_header_pool as *mut u8,
-        program_header_entries_size,
-    )
-    .expect("Failed to read hypervisor");
+    let read_size = hypervisor_protocol
+        .read(program_header_pool as *mut u8, program_header_entries_size)
+        .expect("Failed to read hypervisor");
     if read_size != program_header_entries_size {
         panic!(
             "Expected {} bytes, but read {} bytes",
@@ -440,14 +433,12 @@ fn load_hypervisor() -> usize {
                 allocate_memory(pages, None).expect("Failed to allocate memory for hypervisor");
 
             if info.file_size > 0 {
-                file::seek(hypervisor_protocol, info.file_offset)
+                hypervisor_protocol
+                    .seek(info.file_offset)
                     .expect("Failed to seek for hypervisor segments");
-                let read_size = file::read(
-                    hypervisor_protocol,
-                    physical_base_address as *mut u8,
-                    info.file_size,
-                )
-                .expect("Failed to read hypervisor segments");
+                let read_size = hypervisor_protocol
+                    .read(physical_base_address as *mut u8, info.file_size)
+                    .expect("Failed to read hypervisor segments");
                 if read_size != info.file_size {
                     panic!(
                         "Expected {} bytes, but read {} bytes",
@@ -490,13 +481,13 @@ fn load_hypervisor() -> usize {
     }
 
     let entry_point = elf_header.get_entry_point();
-    if let Err(e) = boot_service::free_pool(b_s, program_header_pool) {
+    if let Err(e) = b_s.free_pool(program_header_pool) {
         println!("Failed to free the pool: {:?}", e);
     }
-    if let Err(e) = file::close_file(hypervisor_protocol) {
+    if let Err(e) = hypervisor_protocol.close_file() {
         println!("Failed to clone the HypervisorProtocol: {:?}", e);
     }
-    if let Err(e) = file::close_file(root_protocol) {
+    if let Err(e) = root_protocol.close_file() {
         println!("Failed to clone the RootProtocol: {:?}", e);
     }
 
@@ -516,25 +507,28 @@ fn load_hypervisor() -> usize {
 /// * `dtb_size` - The total size of DTB
 #[cfg(feature = "save_dtb")]
 fn save_dtb(dtb_address: usize, dtb_size: usize) {
+    use uefi::file;
     let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
-    let root_protocol = file::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
+    let b_s = unsafe { &*(*SYSTEM_TABLE).efi_boot_services };
+    let root_protocol =
+        file::EfiFileProtocol::open_root_dir(image_handle, b_s).expect("Failed to open the volume");
     let mut file_name_utf16: [u16; DTB_WRITTEN_PATH.len() + 1] = [0; DTB_WRITTEN_PATH.len() + 1];
 
     for (i, e) in DTB_WRITTEN_PATH.encode_utf16().enumerate() {
         file_name_utf16[i] = e;
     }
-    let dtb_protocol = file::create_file(root_protocol, &file_name_utf16)
+    let dtb_protocol = file::EfiFileProtocol::create_file(root_protocol, &file_name_utf16)
         .expect("Failed to create the DTB binary file");
 
-    let written_size =
-        file::write(dtb_protocol, dtb_address as *mut u8, dtb_size).expect("Failed to write DTB");
+    let written_size = dtb_protocol
+        .write(dtb_address as *mut u8, dtb_size)
+        .expect("Failed to write DTB");
     assert_eq!(dtb_size, written_size);
 
-    if let Err(e) = file::close_file(dtb_protocol) {
+    if let Err(e) = dtb_protocol.close_file() {
         println!("Failed to clone the HypervisorProtocol: {:?}", e);
     }
-    if let Err(e) = file::close_file(root_protocol) {
+    if let Err(e) = root_protocol.close_file() {
         println!("Failed to clone the RootProtocol: {:?}", e);
     }
 }
@@ -555,9 +549,9 @@ fn save_dtb(dtb_address: usize, dtb_size: usize) {
 #[cfg(feature = "tftp")]
 fn load_hypervisor() -> usize {
     let image_handle = unsafe { IMAGE_HANDLE };
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
-    let pxe_protocol =
-        pxe::open_pxe_handler(image_handle, b_s).expect("Failed to open PXE Handler");
+    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
+    let pxe_protocol = pxe::EfiPxeBaseCodeProtocol::open_pxe_handler(image_handle, b_s)
+        .expect("Failed to open PXE Handler");
     unsafe { PXE_PROTOCOL = pxe_protocol };
     let mut file_name_ascii: [u8; HYPERVISOR_TFTP_PATH.len() + 1] =
         [0; HYPERVISOR_TFTP_PATH.len() + 1];
@@ -565,13 +559,14 @@ fn load_hypervisor() -> usize {
         file_name_ascii[i] = *e;
     }
 
-    let server_ip = pxe::get_server_ip_v4(pxe_protocol).expect("Failed to get Server IP");
+    let server_ip = pxe_protocol
+        .get_server_ip_v4()
+        .expect("Failed to get Server IP");
     pr_debug!("Server IP: {:?}", server_ip);
 
     let mut kernel_size = 0;
     let mut dummy_buffer = [0u8; 4];
-    let result = pxe::get_file(
-        pxe_protocol,
+    let result = pxe_protocol.get_file(
         dummy_buffer.as_mut_ptr(),
         &mut kernel_size,
         server_ip,
@@ -590,19 +585,20 @@ fn load_hypervisor() -> usize {
     pr_debug!("Kernel Size: {:#X}", kernel_size);
 
     /* Allocate pool */
-    let kernel_pool = boot_service::alloc_pool(b_s, kernel_size as usize)
+    let kernel_pool = b_s
+        .alloc_pool(kernel_size as usize)
         .expect("Failed to allocate memory pool");
 
     /* Read Hypervisor Binary */
     let mut read_size = kernel_size;
-    pxe::get_file(
-        pxe_protocol,
-        kernel_pool as *mut u8,
-        &mut read_size,
-        server_ip,
-        file_name_ascii.as_ptr(),
-    )
-    .expect("Failed to receive file from server");
+    pxe_protocol
+        .get_file(
+            kernel_pool as *mut u8,
+            &mut read_size,
+            server_ip,
+            file_name_ascii.as_ptr(),
+        )
+        .expect("Failed to receive file from server");
     if read_size != kernel_size {
         panic!(
             "Expected {:#X} Bytes, but read size is {:#X} Bytes.",
@@ -691,17 +687,17 @@ fn load_hypervisor() -> usize {
     }
 
     let entry_point = elf_header.get_entry_point();
-    if let Err(e) = boot_service::free_pool(b_s, kernel_pool) {
+    if let Err(e) = b_s.free_pool(kernel_pool) {
         println!("Failed to free the pool: {:?}", e);
     }
     return entry_point;
 }
 
 fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let b_s = unsafe { &*(*SYSTEM_TABLE).efi_boot_services };
     const MEMORY_SAVE_LIST_PAGES: usize = 3;
     const MEMORY_SAVE_LIST_SIZE: usize = MEMORY_SAVE_LIST_PAGES << PAGE_SHIFT;
-    let memory_map_info = boot_service::get_memory_map(b_s).expect("Failed to get the memory map");
+    let memory_map_info = b_s.get_memory_map().expect("Failed to get the memory map");
     let list = unsafe {
         core::slice::from_raw_parts_mut(
             allocate_memory(MEMORY_SAVE_LIST_PAGES, None)
@@ -758,7 +754,7 @@ fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
         num_of_pages: 0,
     };
 
-    if let Err(e) = boot_service::free_pool(b_s, memory_map_info.descriptor_address) {
+    if let Err(e) = b_s.free_pool(memory_map_info.descriptor_address) {
         println!("Failed to free pool for the memory map: {:?}", e);
     }
     return list;
@@ -766,8 +762,8 @@ fn create_memory_save_list() -> &'static mut [MemorySaveListEntry] {
 
 #[allow(dead_code)]
 fn dump_memory_map() {
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
-    let memory_map_info = match boot_service::get_memory_map(b_s) {
+    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
+    let memory_map_info = match b_s.get_memory_map() {
         Ok(info) => info,
         Err(e) => {
             println!("Failed to get memory_map: {:?}", e);
@@ -795,7 +791,7 @@ fn dump_memory_map() {
         base_address += memory_map_info.actual_descriptor_size;
     }
 
-    if let Err(e) = boot_service::free_pool(b_s, memory_map_info.descriptor_address) {
+    if let Err(e) = b_s.free_pool(memory_map_info.descriptor_address) {
         println!("Failed to free pool for the memory map: {:?}", e);
     }
 }
@@ -986,21 +982,22 @@ fn set_up_el1() {
 fn run_payload() -> EfiStatus {
     let image_handle = unsafe { IMAGE_HANDLE };
     let mut payload_handle = 0;
-    let b_s = unsafe { (*SYSTEM_TABLE).efi_boot_services };
+    let b_s = unsafe { &*((*SYSTEM_TABLE).efi_boot_services) };
     let device_path = uefi::device_path::get_full_path_of_current_device(image_handle, b_s)
         .expect("Failed to get payload path");
-    let pxe_protocol = unsafe { PXE_PROTOCOL };
+    let pxe_protocol = unsafe { &*PXE_PROTOCOL };
     let mut file_name_ascii: [u8; UEFI_PAYLOAD_PATH.len() + 1] = [0; UEFI_PAYLOAD_PATH.len() + 1];
     for (i, e) in UEFI_PAYLOAD_PATH.as_bytes().iter().enumerate() {
         file_name_ascii[i] = *e;
     }
-    let server_ip = pxe::get_server_ip_v4(pxe_protocol).expect("Failed to get Server IP");
+    let server_ip = pxe_protocol
+        .get_server_ip_v4()
+        .expect("Failed to get Server IP");
 
     /* Get Payload Binary via TFTP */
     let mut file_size = 0;
     let mut dummy_buffer = [0u8; 4];
-    let result = pxe::get_file(
-        pxe_protocol,
+    let result = pxe_protocol.get_file(
         dummy_buffer.as_mut_ptr(),
         &mut file_size,
         server_ip,
@@ -1019,19 +1016,20 @@ fn run_payload() -> EfiStatus {
     pr_debug!("Kernel Size: {:#X}", file_size);
 
     /* Allocate pool */
-    let file_pool =
-        boot_service::alloc_pool(b_s, file_size as usize).expect("Failed to allocate memory pool");
+    let file_pool = b_s
+        .alloc_pool(file_size as usize)
+        .expect("Failed to allocate memory pool");
 
     /* Receive Binary */
     let mut read_size = file_size;
-    pxe::get_file(
-        pxe_protocol,
-        file_pool as *mut u8,
-        &mut read_size,
-        server_ip,
-        file_name_ascii.as_ptr(),
-    )
-    .expect("Failed to receive file from server");
+    pxe_protocol
+        .get_file(
+            file_pool as *mut u8,
+            &mut read_size,
+            server_ip,
+            file_name_ascii.as_ptr(),
+        )
+        .expect("Failed to receive file from server");
     if read_size != file_size {
         panic!(
             "Expected {:#X} Bytes, but read size is {:#X} Bytes.",
@@ -1040,23 +1038,22 @@ fn run_payload() -> EfiStatus {
     }
 
     /* Load Binary into UEFI */
-    let status = unsafe {
-        ((*b_s).load_image)(
-            false,
-            image_handle,
-            device_path,
-            file_pool,
-            file_size as usize,
-            &mut payload_handle,
-        )
-    };
-    let _ = boot_service::free_pool(b_s, file_pool);
+    let status = (b_s.load_image)(
+        false,
+        image_handle,
+        device_path,
+        file_pool,
+        file_size as usize,
+        &mut payload_handle,
+    );
+
+    let _ = b_s.free_pool(file_pool);
     if status != EfiStatus::EfiSuccess {
         panic!("Failed to load image: {:?}", status);
     }
     let mut data_size = 0usize;
     /* Run */
-    unsafe { ((*b_s).start_image)(payload_handle, &mut data_size, 0) }
+    (b_s.start_image)(payload_handle, &mut data_size, 0)
 }
 
 #[cfg(feature = "tftp")]
