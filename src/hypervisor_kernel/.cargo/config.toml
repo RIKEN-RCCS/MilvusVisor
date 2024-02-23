@@ -1,6 +1,7 @@
 [build]
 target = "aarch64-unknown-none"
 rustflags = ["-C", "link-arg=-Thypervisor_kernel/config/linkerscript.ld"]
+target-dir = "../target/"
 
 [unstable]
 build-std = ["core", "compiler_builtins"]
