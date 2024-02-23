@@ -12,6 +12,7 @@ resolver = "2"
 
 [features]
 default = ["smmu", "i210", "mt27800", "fast_restore", "acpi_table_protection", "contiguous_bit", "advanced_memory_manager"]
+minimum = []
 smmu = []
 i210 = []
 mt27800 = []

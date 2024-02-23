@@ -1,0 +1,46 @@
+name: Check compile errors and miss formatting
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          rustup default nightly
+          rustup component add rust-src
+          rustup component add rustfmt
+
+      - name: Run cargo fmt
+        id: fmt
+        continue-on-error: true
+        run: |
+          cd src
+          echo -e "\`cargo fmt --check\` is failed.\n\`\`\`diff" > /tmp/message
+          cargo fmt --all --check -- --color never >> /tmp/message
+      - name: Report format error
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ github.event.pull_request.html_url }}
+        run: |
+          echo "\`\`\`" >> /tmp/message
+          gh pr comment -F /tmp/message "$REF"
+        if: steps.fmt.outcome != 'success'
+      - name: Build UEFI bootloader
+        run: |
+          cd src/hypervisor_bootloader
+          cargo build
+
+      - name: Build kernel
+        run: |
+          cd src/hypervisor_kernel
+          cargo build

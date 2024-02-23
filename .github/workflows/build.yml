@@ -1,0 +1,40 @@
+name: Build Hypervisor
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+  schedule:
+    - cron: '15 4 */1 * *'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          rustup default nightly
+          rustup component add rust-src
+
+      - name: Build Bootloader and Kernel
+        run: |
+          cd src
+          if [[ $(git branch --show-current) == "main" ]]; then
+            ./builder.rs build -r -p
+          else
+            ./builder.rs build
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MilvusVisor
+          path: src/bin/
+          compression-level: 9
