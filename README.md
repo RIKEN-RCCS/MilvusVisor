@@ -40,9 +40,14 @@ If you want to build with extra features, you can build by `make custom_all FEAT
 - A64FX specific registers' initialization (Feature Name: `a64fx`)
     - Control some A64FX specific registers
 - PXE Boot (Feature Name: `tftp`)
-    - download hypervisor_kernel and payload(usually, bootloader) via TFTP
+    - Download hypervisor_kernel and payload(usually, bootloader) via TFTP
 - Raspberry Pi (Feature Name: `raspberrypi`)
     - For running MilvusVisor on a Raspberry pi. See [the document](./docs/raspberry_pi4.md) for details.
+- Virtio Network (Feature Name: `virtio_net`)
+    - Add virtual devices to communicate with OS
+    - This is the interface, you must implement a protocol stack
+    - For more detail, see [virtio_net.rs](./src/hypervisor_kernel/src/drivers/virtio_net.rs)
+    - This is an experimental feature, this may not work on some devices
 
 ## Tested machines
 

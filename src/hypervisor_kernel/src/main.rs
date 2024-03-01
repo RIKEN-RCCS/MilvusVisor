@@ -113,6 +113,11 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(ecam_info) = &system_information.ecam_info {
         pci::init_pci(ecam_info.address, ecam_info.start_bus, ecam_info.end_bus);
     }
+
+    if let Some(rsdp_address) = system_information.acpi_rsdp_address {
+        gic::init_gic(rsdp_address);
+    }
+
     #[cfg(feature = "smmu")]
     if let Some(smmu_base_address) = system_information.smmu_v3_base_address {
         smmu::init_smmu(
@@ -188,6 +193,8 @@ fn show_kernel_info() {
     print_is_feature_enabled!("a64fx");
     print_is_feature_enabled!("advanced_memory_manager");
     print_is_feature_enabled!("mrs_msr_emulation");
+    print_is_feature_enabled!("virtio");
+    print_is_feature_enabled!("virtio_net");
 }
 
 /// Allocate memory from memory pool

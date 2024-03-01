@@ -13,3 +13,7 @@
 pub mod serial_port;
 pub mod i210;
 pub mod mt27800;
+#[cfg(feature = "virtio")]
+mod virtio;
+#[cfg(feature = "virtio_net")]
+pub mod virtio_net;

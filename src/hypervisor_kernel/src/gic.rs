@@ -27,10 +27,40 @@ const GICR_PROPBASER: usize = 0x0070;
 const GICR_PROPBASER_PTZ: u64 = 1 << 62;
 
 const GICD_CTLR: usize = 0x00;
+#[cfg(feature = "virtio")]
+const GICD_ISPENDR: usize = 0x0200;
 
 const GITS_CTLR: usize = 0x00;
 const GITS_CTLR_ENABLED: u32 = 0x01;
 const GITS_CTLR_QUIESCENT: u32 = 1 << 31;
+
+static mut GIC_DISTRIBUTOR_BASE_ADDRESS: usize = 0;
+
+pub fn init_gic(acpi_address: usize) {
+    if let Ok(table) = get_acpi_table(acpi_address, &MADT::SIGNATURE) {
+        let table = unsafe { &*(table as *const MADT) };
+        if let Some(distributor) = table.get_gic_distributor_address() {
+            unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS = distributor };
+        }
+    }
+}
+
+#[cfg(feature = "virtio")]
+pub fn set_interrupt_pending(int_id: u32) {
+    let distributor = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };
+    if distributor == 0 {
+        println!("Distributor is not available.");
+        return;
+    }
+    let register_index = ((int_id / u32::BITS) as usize) * core::mem::size_of::<u32>();
+    let register_offset = int_id & (u32::BITS - 1);
+    unsafe {
+        write_volatile(
+            (distributor + GICD_ISPENDR + register_index) as *mut u32,
+            1 << register_offset,
+        )
+    };
+}
 
 pub fn restore_gic(acpi_address: usize) {
     // TODO: Discovery Base Address
