@@ -5,18 +5,17 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-mod arm_pl011;
-mod arm_sbsa_generic_uart;
-mod meson_gx_uart;
+use core::fmt;
 
 use arm_pl011::SerialArmPl011;
 use arm_sbsa_generic_uart::SerialSbsaUart;
-use meson_gx_uart::SerialMesonGxUart;
-
 use common::serial_port::{SerialPortInfo, SerialPortType};
 use common::spin_flag::SpinLockFlag;
+use meson_gx_uart::SerialMesonGxUart;
 
-use core::fmt;
+mod arm_pl011;
+mod arm_sbsa_generic_uart;
+mod meson_gx_uart;
 
 trait SerialPortDevice {
     fn new(address: usize) -> Self;
@@ -99,6 +98,12 @@ pub unsafe fn init_default_serial_port(info: SerialPortInfo) {
     DEFAULT_SERIAL_PORT = Some(SerialPort::new(info));
 }
 
+pub unsafe fn force_release_serial_port_lock() {
+    if let Some(e) = &mut *core::ptr::addr_of_mut!(DEFAULT_SERIAL_PORT) {
+        e.force_release_write_lock();
+    }
+}
+
 impl fmt::Write for SerialPort {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_lock.lock();
@@ -122,10 +127,10 @@ impl fmt::Write for SerialPort {
     }
 }
 
-pub(super) static mut DEFAULT_SERIAL_PORT: Option<SerialPort> = None;
+static mut DEFAULT_SERIAL_PORT: Option<SerialPort> = None;
 
 pub fn print(args: fmt::Arguments) {
-    if let Some(s) = unsafe { &mut DEFAULT_SERIAL_PORT } {
+    if let Some(s) = unsafe { &mut *core::ptr::addr_of_mut!(DEFAULT_SERIAL_PORT) } {
         use fmt::Write;
         let _ = s.write_fmt(args);
     }
@@ -134,14 +139,14 @@ pub fn print(args: fmt::Arguments) {
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        $crate::serial_port::print(format_args!($($arg)*))
+        $crate::drivers::serial_port::print(format_args!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! println {
-    ($fmt:expr) => ($crate::serial_port::print(format_args!("{}\n", format_args!($fmt))));
-    ($fmt:expr, $($arg:tt)*) => ($crate::serial_port::print(format_args!("{}\n", format_args!($fmt, $($arg)*))));
+    ($fmt:expr) => ($crate::drivers::serial_port::print(format_args!("{}\n", format_args!($fmt))));
+    ($fmt:expr, $($arg:tt)*) => ($crate::drivers::serial_port::print(format_args!("{}\n", format_args!($fmt, $($arg)*))));
 }
 
 #[cfg(debug_assertions)]

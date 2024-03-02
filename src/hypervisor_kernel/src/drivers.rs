@@ -9,5 +9,7 @@
 //! MemoryMapped I/O Interrupt Handlers
 //!
 
+#[macro_use]
+pub mod serial_port;
 pub mod i210;
 pub mod mt27800;

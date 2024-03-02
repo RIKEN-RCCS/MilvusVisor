@@ -12,11 +12,21 @@
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 
+use core::arch::global_asm;
+use core::mem::MaybeUninit;
+
+use common::cpu::*;
+use common::spin_flag::SpinLockFlag;
+use common::{
+    acpi, bitmask, MemoryAllocationError, MemoryAllocator, SystemInformation, COMPILER_INFO,
+    HYPERVISOR_HASH_INFO, HYPERVISOR_NAME, PAGE_SHIFT,
+};
+
 #[macro_use]
-mod serial_port;
-mod acpi_protect;
 mod drivers;
+mod acpi_protect;
 mod emulation;
+#[cfg(feature = "fast_restore")]
 mod fast_restore;
 mod gic;
 mod memory_hook;
@@ -26,19 +36,6 @@ mod panic;
 mod pci;
 mod psci;
 mod smmu;
-
-use common::cpu::{
-    advance_elr_el2, get_elr_el2, get_esr_el2, get_far_el2, get_hpfar_el2, get_mpidr_el1,
-    get_spsr_el2, secure_monitor_call,
-};
-use common::spin_flag::SpinLockFlag;
-use common::{
-    acpi, bitmask, MemoryAllocationError, MemoryAllocator, SystemInformation, COMPILER_INFO,
-    HYPERVISOR_HASH_INFO, HYPERVISOR_NAME, PAGE_SHIFT,
-};
-
-use core::arch::global_asm;
-use core::mem::MaybeUninit;
 
 const EC_HVC: u8 = 0b010110;
 const EC_SMC_AA64: u8 = 0b010111;
@@ -98,7 +95,7 @@ macro_rules! handler_panic {
 #[no_mangle]
 fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(s_info) = &system_information.serial_port {
-        unsafe { serial_port::init_default_serial_port(s_info.clone()) };
+        unsafe { drivers::serial_port::init_default_serial_port(s_info.clone()) };
     }
 
     show_kernel_info();
@@ -343,9 +340,7 @@ fn interrupt_handler_panic(s_r: &StoredRegisters, f: core::fmt::Arguments) -> ! 
     let hpfar_el2 = get_hpfar_el2();
     let mpidr_el1 = get_mpidr_el1();
 
-    if let Some(s) = unsafe { serial_port::DEFAULT_SERIAL_PORT.as_ref() } {
-        unsafe { s.force_release_write_lock() };
-    }
+    unsafe { drivers::serial_port::force_release_serial_port_lock() };
     println!("ESR_EL2: {:#X}", esr_el2);
     println!("ELR_EL2: {:#X}", elr_el2);
     println!("FAR_EL2: {:#X}", far_el2);

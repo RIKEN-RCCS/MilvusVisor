@@ -10,6 +10,17 @@
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 
+use core::arch::asm;
+use core::mem::MaybeUninit;
+
+use common::{cpu::*, *};
+use uefi::{
+    boot_service, boot_service::EfiBootServices, EfiConfigurationTable, EfiHandle, EfiSystemTable,
+    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
+};
+#[cfg(feature = "tftp")]
+use uefi::{pxe, EfiStatus};
+
 #[macro_use]
 mod console;
 mod dtb;
@@ -19,18 +30,6 @@ mod panic;
 mod pci;
 mod serial_port;
 mod smmu;
-
-use common::{cpu::*, *};
-
-use uefi::{
-    boot_service, boot_service::EfiBootServices, EfiConfigurationTable, EfiHandle, EfiSystemTable,
-    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
-};
-#[cfg(feature = "tftp")]
-use uefi::{pxe, EfiStatus};
-
-use core::arch::asm;
-use core::mem::MaybeUninit;
 
 static mut ORIGINAL_PAGE_TABLE: usize = 0;
 static mut ORIGINAL_VECTOR_BASE: u64 = 0;
@@ -89,7 +88,8 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     detect_acpi_and_dtb(system_table);
 
-    let mut serial = serial_port::detect_serial_port();
+    let mut serial =
+        serial_port::detect_serial_port(unsafe { ACPI_20_TABLE_ADDRESS }, unsafe { DTB_ADDRESS });
     if let Some(s) = &mut serial {
         let aligned_address = s.physical_address & PAGE_MASK;
         paging::map_address(

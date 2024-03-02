@@ -8,15 +8,11 @@
 //! Intel(R) Ethernet Controller I210
 //!
 
-use crate::memory_hook::{
-    add_memory_load_hook_handler, add_memory_store_hook_handler, remove_memory_load_hook_handler,
-    remove_memory_store_hook_handler, LoadAccessHandlerEntry, LoadHookResult,
-    StoreAccessHandlerEntry, StoreHookResult,
-};
+use common::{bitmask, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+
+use crate::memory_hook::*;
 use crate::pci::{get_configuration_space_data, get_ecam_target_address};
 use crate::{paging, StoredRegisters};
-
-use common::{bitmask, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 pub const VENDOR_ID: u16 = 0x8086;
 pub const DEVICE_ID: u16 = 0x1533;
@@ -37,19 +33,20 @@ const I_NVM_DATA: usize = 0x12120;
 const I_NVM_DATA_LEN: usize = (0x1221C - I_NVM_DATA) + 1;
 
 static I210_LOAD_HANDLERS: [LoadAccessHandlerEntry; 2] = [
-    LoadAccessHandlerEntry::new(EEWR, 4, i210_eeprom_write_register_load_handler),
-    LoadAccessHandlerEntry::new(EEWR_ALIAS, 4, i210_eeprom_write_register_load_handler),
+    LoadAccessHandlerEntry::new(EEWR, 4, 0, i210_eeprom_write_register_load_handler),
+    LoadAccessHandlerEntry::new(EEWR_ALIAS, 4, 0, i210_eeprom_write_register_load_handler),
 ];
 
 static I210_STORE_HANDLERS: [StoreAccessHandlerEntry; 4] = [
-    StoreAccessHandlerEntry::new(EEWR, 4, i210_eeprom_write_register_store_handler),
-    StoreAccessHandlerEntry::new(EEWR_ALIAS, 4, i210_eeprom_write_register_store_handler),
+    StoreAccessHandlerEntry::new(EEWR, 4, 0, i210_eeprom_write_register_store_handler),
+    StoreAccessHandlerEntry::new(EEWR_ALIAS, 4, 0, i210_eeprom_write_register_store_handler),
     StoreAccessHandlerEntry::new(
         FLSWCTL,
         FLSWDATA - FLSWCTL,
+        0,
         i210_i_flash_burst_registers_store_handler,
     ),
-    StoreAccessHandlerEntry::new(I_NVM_DATA, I_NVM_DATA_LEN, i210_i_nvm_data_store_handler),
+    StoreAccessHandlerEntry::new(I_NVM_DATA, I_NVM_DATA_LEN, 0, i210_i_nvm_data_store_handler),
 ];
 
 pub fn setup_device(ecam_address: usize, bus: u8, device: u8, function: u8) {
@@ -69,9 +66,10 @@ pub fn setup_device(ecam_address: usize, bus: u8, device: u8, function: u8) {
     }
     unsafe { IS_64BIT_BAR = is_64bit_bar };
 
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
         get_ecam_target_address(ecam_address, bus, device, function) + 0x10,
         4 * 2,
+        0,
         i210_pci_bar_address_store_handler,
     ))
     .expect("Failed to add the handler for memory bar");
@@ -119,9 +117,10 @@ pub fn setup_device(ecam_address: usize, bus: u8, device: u8, function: u8) {
         );
         unsafe { FLBAR_SIZE = flbar_size };
         setup_expansion_rom_memory_trap(expansion_rom_bar);
-        add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+        add_memory_store_access_handler(StoreAccessHandlerEntry::new(
             get_ecam_target_address(ecam_address, bus, device, function) + 0x30,
             4,
+            0,
             i210_pci_expansion_rom_bar_address_store_handler,
         ))
         .expect("Failed to add the handler for expansion rom bar");
@@ -178,14 +177,14 @@ fn setup_memory_trap(new_memory_bar: usize) {
     for e in &I210_LOAD_HANDLERS {
         let mut e = e.clone();
         e.set_target_address(e.get_target_address() + new_memory_bar);
-        add_memory_load_hook_handler(e).expect("Failed to set up the load handler");
+        add_memory_load_access_handler(e).expect("Failed to set up the load handler");
     }
 
     /* Set up store access handlers */
     for e in &I210_STORE_HANDLERS {
         let mut e = e.clone();
         e.set_target_address(e.get_target_address() + new_memory_bar);
-        add_memory_store_hook_handler(e).expect("Failed to set up the store handler");
+        add_memory_store_access_handler(e).expect("Failed to set up the store handler");
     }
 }
 
@@ -208,23 +207,24 @@ fn remove_memory_trap(bar_address: usize) {
     for e in &I210_LOAD_HANDLERS {
         let mut e = e.clone();
         e.set_target_address(e.get_target_address() + bar_address);
-        remove_memory_load_hook_handler(e).expect("Failed to remove the load handler");
+        remove_memory_load_access_handler(e).expect("Failed to remove the load handler");
     }
 
     /* Remove store access handlers */
     for e in &I210_STORE_HANDLERS {
         let mut e = e.clone();
         e.set_target_address(e.get_target_address() + bar_address);
-        remove_memory_store_hook_handler(e).expect("Failed to remove the store handler");
+        remove_memory_store_access_handler(e).expect("Failed to remove the store handler");
     }
 }
 
 fn setup_expansion_rom_memory_trap(expansion_rom_bar: usize) {
     paging::add_memory_access_trap(expansion_rom_bar, unsafe { FLBAR_SIZE }, true, false)
         .expect("Failed to add the trap for Expansion ROM");
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
         expansion_rom_bar,
         unsafe { FLBAR_SIZE },
+        0,
         i210_expansion_rom_store_handler,
     ))
     .expect("Failed to add the handler for Expansion ROM");
@@ -233,9 +233,10 @@ fn setup_expansion_rom_memory_trap(expansion_rom_bar: usize) {
 fn remove_expansion_rom_memory_trap(expansion_rom_bar: usize) {
     paging::remove_memory_access_trap(expansion_rom_bar, unsafe { FLBAR_SIZE })
         .expect("Failed to add the trap for Expansion ROM");
-    remove_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    remove_memory_store_access_handler(StoreAccessHandlerEntry::new(
         expansion_rom_bar,
         unsafe { FLBAR_SIZE },
+        0,
         i210_expansion_rom_store_handler,
     ))
     .expect("Failed to add the handler for Expansion ROM");
@@ -243,10 +244,11 @@ fn remove_expansion_rom_memory_trap(expansion_rom_bar: usize) {
 
 fn i210_pci_bar_address_store_handler(
     accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     let offset = accessing_memory_address & 0xFFF;
     if offset == 0x10 {
         pr_debug!("Writing I210 BAR0: {:#X}", data);
@@ -275,15 +277,16 @@ fn i210_pci_bar_address_store_handler(
         setup_memory_trap(new_bar);
         unsafe { CURRENT_MEMORY_BAR = new_bar };
     }
-    return Ok(StoreHookResult::PassThrough);
+    StoreHookResult::PassThrough
 }
 
 fn i210_pci_expansion_rom_bar_address_store_handler(
-    _accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: usize,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     let new_expansion_rom_bar = (data & bitmask!(31, 11)) as usize;
     pr_debug!(
         "Change I210 Expansion ROM BAR: {:#X} => {:#X}",
@@ -292,28 +295,30 @@ fn i210_pci_expansion_rom_bar_address_store_handler(
     );
     remove_expansion_rom_memory_trap(unsafe { CURRENT_EXPANSION_ROM_BAR });
     setup_expansion_rom_memory_trap(new_expansion_rom_bar);
-    return Ok(StoreHookResult::PassThrough);
+    StoreHookResult::PassThrough
 }
 
 fn i210_eeprom_write_register_load_handler(
-    _accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
-    _is_64bit_register: bool,
-    _is_sign_extend_required: bool,
-) -> Result<LoadHookResult, ()> {
+    _: usize,
+    _: &mut StoredRegisters,
+    _: u8,
+    _: bool,
+    _: bool,
+    _: &LoadAccessHandlerEntry,
+) -> LoadHookResult {
     pr_debug!("EEPROM Write Register Load Access");
     let data: u64 = 1 << 1;
     pr_debug!("Return the alternative data: {:#X}", data);
-    return Ok(LoadHookResult::Data(data));
+    LoadHookResult::Data(data)
 }
 
 fn i210_eeprom_write_register_store_handler(
-    _accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: usize,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     println!("EEPROM Write Register Store Access");
     let address = ((data & bitmask!(12, 2)) >> 2) as u32;
     pr_debug!("EEPROM Address: {:#X}, Data: {:#X}", address, data >> 16);
@@ -327,30 +332,31 @@ fn i210_eeprom_write_register_store_handler(
     } else if eeprom_2nd_block_start != 0 && address >= eeprom_2nd_block_start {
         pr_debug!("EEPROM 2nd Block Access");
     }
-    return Ok(StoreHookResult::Cancel);
+    StoreHookResult::Cancel
 }
 
 fn i210_i_nvm_data_store_handler(
     accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     println!(
         "iNVM Data Register Store Access: Offset: {:#X}, Data: {:#X}",
         accessing_memory_address - unsafe { CURRENT_MEMORY_BAR } - I_NVM_DATA,
         data
     );
-
-    return Ok(StoreHookResult::Cancel);
+    StoreHookResult::Cancel
 }
 
 fn i210_i_flash_burst_registers_store_handler(
     accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     println!(
         "iNVM Flash Burst Registers Store Access: Register: {}, Data: {:#X}",
         if accessing_memory_address - unsafe { CURRENT_MEMORY_BAR } == FLSWCTL {
@@ -360,16 +366,16 @@ fn i210_i_flash_burst_registers_store_handler(
         },
         data
     );
-
-    return Ok(StoreHookResult::Cancel);
+    StoreHookResult::Cancel
 }
 
 fn i210_expansion_rom_store_handler(
-    _accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: usize,
+    _: &mut StoredRegisters,
+    _: u8,
     _data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     println!("i210 Expansion ROM Store Access");
-    return Ok(StoreHookResult::Cancel);
+    StoreHookResult::Cancel
 }

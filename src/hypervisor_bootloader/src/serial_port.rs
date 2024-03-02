@@ -5,8 +5,6 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-use crate::{dtb, ACPI_20_TABLE_ADDRESS, DTB_ADDRESS};
-
 use common::acpi::{get_acpi_table, GeneralAddressStructure};
 use common::serial_port::{SerialPortInfo, SerialPortType};
 
@@ -43,7 +41,7 @@ fn try_to_get_serial_info_from_acpi(rsdp_address: usize) -> Option<SerialPortInf
 }
 
 fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo> {
-    let dtb_analyser = dtb::DtbAnalyser::new(dtb_address);
+    let dtb_analyser = crate::dtb::DtbAnalyser::new(dtb_address);
     if let Err(_) = dtb_analyser {
         println!("Invalid DTB");
         return None;
@@ -87,7 +85,7 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
 }
 
 #[cfg(feature = "raspberrypi")]
-pub fn detect_serial_port() -> Option<SerialPortInfo> {
+pub fn detect_serial_port(_: Option<usize>, _: Option<usize>) -> Option<SerialPortInfo> {
     println!("MIDR_EL1; {:#X}", common::cpu::get_midr_el1());
     match (common::cpu::get_midr_el1() >> 4) & 0xFFF {
         /* Raspberry Pi 3 */
@@ -107,16 +105,19 @@ pub fn detect_serial_port() -> Option<SerialPortInfo> {
 }
 
 #[cfg(not(feature = "raspberrypi"))]
-pub fn detect_serial_port() -> Option<SerialPortInfo> {
-    if let Some(acpi_table) = unsafe { &ACPI_20_TABLE_ADDRESS } {
-        let result = try_to_get_serial_info_from_acpi(*acpi_table);
+pub fn detect_serial_port(
+    acpi_table: Option<usize>,
+    dtb_address: Option<usize>,
+) -> Option<SerialPortInfo> {
+    if let Some(acpi_table) = acpi_table {
+        let result = try_to_get_serial_info_from_acpi(acpi_table);
 
         if result.is_some() {
             return result;
         }
     }
-    if let Some(dtb_address) = unsafe { &DTB_ADDRESS } {
-        let result = try_to_get_serial_info_from_dtb(*dtb_address);
+    if let Some(dtb_address) = dtb_address {
+        let result = try_to_get_serial_info_from_dtb(dtb_address);
 
         if result.is_some() {
             return result;

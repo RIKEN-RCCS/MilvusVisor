@@ -8,11 +8,9 @@
 //! Panic Handler
 //!
 
-use crate::serial_port::DEFAULT_SERIAL_PORT;
+use core::panic;
 
 use common::cpu::halt_loop;
-
-use core::panic;
 
 #[panic_handler]
 #[no_mangle]
@@ -20,11 +18,7 @@ pub fn panic(info: &panic::PanicInfo) -> ! {
     let location = info.location();
     let message = info.message();
 
-    unsafe {
-        DEFAULT_SERIAL_PORT
-            .as_ref()
-            .and_then(|f| Some(f.force_release_write_lock()))
-    };
+    unsafe { crate::drivers::serial_port::force_release_serial_port_lock() };
     println!("\n\n=====Hypervisor Panic=====");
     println!(
         "Line {} in {}: {}",
