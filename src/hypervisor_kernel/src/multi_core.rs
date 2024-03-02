@@ -140,9 +140,10 @@ pub fn setup_spin_table(base_address: usize, length: usize) {
     .expect("Failed to map spin table");
     add_memory_access_trap(aligned_base_address, aligned_length, true, false)
         .expect("Failed to add trap of spin table");
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
         base_address,
         length,
+        0,
         spin_table_store_access_handler,
     ))
     .expect("Failed to add store access handler");
@@ -150,10 +151,11 @@ pub fn setup_spin_table(base_address: usize, length: usize) {
 
 fn spin_table_store_access_handler(
     accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     const SPIN_TABLE_STACK_ADDRESS_OFFSET: usize = cpu::AA64_INSTRUCTION_SIZE * 6;
     let stack_address = (allocate_memory(STACK_PAGES, Some(STACK_PAGES))
         .expect("Failed to allocate stack")
@@ -218,7 +220,7 @@ fn spin_table_store_access_handler(
     cpu::dsb();
     cpu::clean_and_invalidate_data_cache(accessing_memory_address);
     pr_debug!("The initialization completed.");
-    Ok(StoreHookResult::Cancel)
+    StoreHookResult::Cancel
 }
 
 /* cpu_boot must use position-relative code */

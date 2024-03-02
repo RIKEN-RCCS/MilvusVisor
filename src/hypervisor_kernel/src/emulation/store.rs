@@ -11,15 +11,15 @@
 //! Supported: str, stp (except Atomic, SIMD)
 //!
 
-use super::{
-    faulting_va_to_ipa_store, get_register_reference_mut, get_virtual_address_to_access_ipa,
-    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
-};
+use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
 
 use crate::memory_hook::{memory_store_hook_handler, StoreHookResult};
 use crate::{handler_panic, StoredRegisters};
 
-use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
+use super::{
+    faulting_va_to_ipa_store, get_register_reference_mut, get_virtual_address_to_access_ipa,
+    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
+};
 
 pub fn emulate_store_register(
     s_r: &mut StoredRegisters,
@@ -206,16 +206,16 @@ fn store_register_into_address(
     } else {
         *get_register_reference_mut(s_r, target_register)
     };
-    let hook_result =
-        memory_store_hook_handler(intermediate_physical_store_address, s_r, size, reg_data)?;
-    let data = match hook_result {
-        StoreHookResult::PassThrough => reg_data,
-        StoreHookResult::AlternativeData(d) => d,
-        StoreHookResult::Cancel => {
-            pr_debug!("The store instruction is cancelled.");
-            return Ok(());
-        }
-    };
+
+    let data =
+        match memory_store_hook_handler(intermediate_physical_store_address, s_r, size, reg_data) {
+            StoreHookResult::PassThrough => reg_data,
+            StoreHookResult::Data(d) => d,
+            StoreHookResult::Cancel => {
+                pr_debug!("The store instruction is cancelled.");
+                return Ok(());
+            }
+        };
 
     pr_debug!("Data: {:#X}", data);
     _write_memory(virtual_address_to_store, size, data);

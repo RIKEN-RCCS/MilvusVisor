@@ -513,8 +513,8 @@ fn map_address_recursive_stage2(
 /// This will modify the stage2 page table to trap the access of (`address` ~ (`address` + `size`))
 /// from EL1/EL0.
 ///
-/// This function should be called after calling [`crate::memory_hook::add_memory_load_hook_handler`]
-/// and/or [`crate::memory_hook::add_memory_store_hook_handler`].
+/// This function should be called after calling [`crate::memory_hook::add_memory_load_access_handler`]
+/// and/or [`crate::memory_hook::add_memory_store_access_handler`].
 ///
 /// # Arguments
 /// * `address` - The physical address to trap
@@ -582,8 +582,8 @@ pub fn add_memory_access_trap(
 /// This will modify the stage2 page table to remove the access trap of (`address` ~ (`address` + `size`))
 /// from EL1/EL0.
 ///
-/// This function should be called before calling [`crate::memory_hook::remove_memory_load_hook_handler`]
-/// and/or [`crate::memory_hook::remove_memory_store_hook_handler`].
+/// This function should be called before calling [`crate::memory_hook::remove_memory_load_access_handler`]
+/// and/or [`crate::memory_hook::remove_memory_store_access_handler`].
 ///
 /// # Arguments
 /// * `address` - The physical address to remove trapping

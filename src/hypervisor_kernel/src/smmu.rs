@@ -9,28 +9,28 @@
 //! System Memory Management Unit
 //!
 
-use crate::memory_hook::*;
-use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
-use crate::{emulation, StoredRegisters};
+use core::mem::size_of;
 
 use common::cpu::{dsb, get_vtcr_el2, get_vttbr_el2};
 use common::paging::{page_align_up, stage2_page_align_up};
 use common::smmu::*;
 use common::{bitmask, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
-use core::mem::size_of;
+use crate::memory_hook::*;
+use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
+use crate::{emulation, StoredRegisters};
 
-static mut SMMU_BASE_ADDRESS: usize = 0;
-
-fn read_smmu_register<T>(offset: usize) -> T {
+#[inline(always)]
+fn read_smmu_register<T>(base: usize, offset: usize) -> T {
     assert!(offset < SMMU_MEMORY_MAP_SIZE);
     dsb();
-    unsafe { core::ptr::read_volatile((SMMU_BASE_ADDRESS + offset) as *const T) }
+    unsafe { core::ptr::read_volatile((base + offset) as *const T) }
 }
 
-fn write_smmu_register<T>(offset: usize, data: T) {
+#[inline(always)]
+fn write_smmu_register<T>(base: usize, offset: usize, data: T) {
     assert!(offset < SMMU_MEMORY_MAP_SIZE);
-    unsafe { core::ptr::write_volatile((SMMU_BASE_ADDRESS + offset) as *mut T, data) }
+    unsafe { core::ptr::write_volatile((base + offset) as *mut T, data) }
     dsb();
 }
 
@@ -69,6 +69,8 @@ impl SmmuSavedRegisters {
 
 static mut DEFAULT_SMMU_STATUS: SmmuSavedRegisters = SmmuSavedRegisters::new();
 static mut CURRENT_SMMU_STATUS: SmmuSavedRegisters = SmmuSavedRegisters::new();
+#[cfg(feature = "fast_restore")]
+static mut SMMU_BASE_ADDRESS: usize = 0;
 
 /// Set up SMMU registers, and mapping of it.
 ///
@@ -81,46 +83,45 @@ static mut CURRENT_SMMU_STATUS: SmmuSavedRegisters = SmmuSavedRegisters::new();
 /// # Arguments
 /// * `smmu_registers_base_address` - The base address of SMMU registers([`common::smmu::SMMU_MEMORY_MAP_SIZE`] must be mapped and accessible)
 /// * `iort_address` - The address of IORT(Optional)
-pub fn init_smmu(smmu_registers_base_address: usize, _iort_address: Option<usize>) {
-    /* smmu_registers_base_address must be mapped, accessible, and enabled. */
-    unsafe { SMMU_BASE_ADDRESS = smmu_registers_base_address };
+pub fn init_smmu(smmu_base_address: usize, _iort_address: Option<usize>) {
+    #[cfg(feature = "fast_restore")]
+    unsafe {
+        SMMU_BASE_ADDRESS = smmu_base_address
+    };
 
-    backup_default_smmu_settings();
+    backup_default_smmu_settings(smmu_base_address);
 
-    add_memory_access_trap(
-        smmu_registers_base_address,
+    add_memory_access_trap(smmu_base_address, SMMU_MEMORY_MAP_SIZE, false, false)
+        .expect("Failed to trap the memory access to SMMU");
+
+    add_memory_load_access_handler(LoadAccessHandlerEntry::new(
+        smmu_base_address,
         SMMU_MEMORY_MAP_SIZE,
-        false,
-        false,
-    )
-    .expect("Failed to trap the memory access to SMMU");
-
-    add_memory_load_hook_handler(LoadAccessHandlerEntry::new(
-        smmu_registers_base_address,
-        SMMU_MEMORY_MAP_SIZE,
+        0,
         smmu_registers_load_handler,
     ))
     .expect("Failed to add the load handler");
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
-        smmu_registers_base_address,
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        smmu_base_address,
         SMMU_MEMORY_MAP_SIZE,
+        0,
         smmu_registers_store_handler,
     ))
     .expect("Failed to add the store handler");
 }
 
-fn backup_default_smmu_settings() {
+fn backup_default_smmu_settings(base_address: usize) {
     let default_smmu_settings = SmmuSavedRegisters {
-        cr0: read_smmu_register(SMMU_CR0),
-        cr1: read_smmu_register(SMMU_CR1),
-        cr2: read_smmu_register(SMMU_CR2),
-        gbpa: read_smmu_register(SMMU_GBPA),
-        agbpa: read_smmu_register(SMMU_AGBPA),
-        irq_ctrl: read_smmu_register(SMMU_IRQ_CTRL),
-        gerrorn: read_smmu_register(SMMU_GERRORN),
-        strtab_base: read_smmu_register(SMMU_STRTAB_BASE),
-        strtab_base_cfg: read_smmu_register(SMMU_STRTAB_BASE_CFG),
-        gatos_ctrl: read_smmu_register(SMMU_GATOS_CTRL),
+        cr0: read_smmu_register(base_address, SMMU_CR0),
+        cr1: read_smmu_register(base_address, SMMU_CR1),
+        cr2: read_smmu_register(base_address, SMMU_CR2),
+        gbpa: read_smmu_register(base_address, SMMU_GBPA),
+        agbpa: read_smmu_register(base_address, SMMU_AGBPA),
+        irq_ctrl: read_smmu_register(base_address, SMMU_IRQ_CTRL),
+        gerrorn: read_smmu_register(base_address, SMMU_GERRORN),
+        strtab_base: read_smmu_register(base_address, SMMU_STRTAB_BASE),
+        strtab_base_cfg: read_smmu_register(base_address, SMMU_STRTAB_BASE_CFG),
+        gatos_ctrl: read_smmu_register(base_address, SMMU_GATOS_CTRL),
     };
 
     unsafe { DEFAULT_SMMU_STATUS = default_smmu_settings };
@@ -128,44 +129,36 @@ fn backup_default_smmu_settings() {
 
 fn smmu_registers_load_handler(
     accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
-    _is_64bit_register: bool,
-    _is_sign_extend_required: bool,
-) -> Result<LoadHookResult, ()> {
-    let register_offset = accessing_memory_address - unsafe { SMMU_BASE_ADDRESS };
+    _: &mut StoredRegisters,
+    _: u8,
+    _: bool,
+    _: bool,
+    entry: &LoadAccessHandlerEntry,
+) -> LoadHookResult {
+    let base_address = entry.get_target_address();
+    let register_offset = accessing_memory_address - base_address;
     pr_debug!("SMMU Load Access Handler: Offset: {:#X}", register_offset);
     match register_offset {
-        SMMU_IDR0 => Ok(LoadHookResult::Data(
-            (read_smmu_register::<u32>(SMMU_IDR0)
+        SMMU_IDR0 => LoadHookResult::Data(
+            (read_smmu_register::<u32>(base_address, SMMU_IDR0)
                 & (!(SMMU_IDR0_S2P
                     | SMMU_IDR0_HYP
                     | SMMU_IDR0_CD2L
                     | SMMU_IDR0_VMID16
                     | SMMU_IDR0_VATOS))) as u64,
-        )),
-        SMMU_IDR2 => Ok(LoadHookResult::Data(0)),
-        SMMU_CR0 | SMMU_CR0ACK => Ok(LoadHookResult::Data(
-            unsafe { CURRENT_SMMU_STATUS.cr0 } as u64
-        )),
-        SMMU_CR1 => Ok(LoadHookResult::Data(
-            unsafe { CURRENT_SMMU_STATUS.cr1 } as u64
-        )),
-        SMMU_CR2 => Ok(LoadHookResult::Data(
-            unsafe { CURRENT_SMMU_STATUS.cr2 } as u64
-        )),
-        SMMU_STRTAB_BASE => Ok(LoadHookResult::Data(unsafe {
-            CURRENT_SMMU_STATUS.strtab_base
-        })),
-        SMMU_STRTAB_BASE_HIGH => Ok(LoadHookResult::Data(
-            unsafe { CURRENT_SMMU_STATUS.strtab_base } >> 32,
-        )),
-        SMMU_STRTAB_BASE_CFG => {
-            Ok(LoadHookResult::Data(
-                unsafe { CURRENT_SMMU_STATUS.strtab_base_cfg } as u64,
-            ))
+        ),
+        SMMU_IDR2 => LoadHookResult::Data(0),
+        SMMU_CR0 | SMMU_CR0ACK => LoadHookResult::Data(unsafe { CURRENT_SMMU_STATUS.cr0 } as u64),
+        SMMU_CR1 => LoadHookResult::Data(unsafe { CURRENT_SMMU_STATUS.cr1 } as u64),
+        SMMU_CR2 => LoadHookResult::Data(unsafe { CURRENT_SMMU_STATUS.cr2 } as u64),
+        SMMU_STRTAB_BASE => LoadHookResult::Data(unsafe { CURRENT_SMMU_STATUS.strtab_base }),
+        SMMU_STRTAB_BASE_HIGH => {
+            LoadHookResult::Data(unsafe { CURRENT_SMMU_STATUS.strtab_base } >> 32)
         }
-        _ => Ok(LoadHookResult::PassThrough),
+        SMMU_STRTAB_BASE_CFG => {
+            LoadHookResult::Data(unsafe { CURRENT_SMMU_STATUS.strtab_base_cfg } as u64)
+        }
+        _ => LoadHookResult::PassThrough,
     }
 }
 
@@ -174,8 +167,10 @@ fn smmu_registers_store_handler(
     _stored_registers: &mut StoredRegisters,
     access_size: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
-    let register_offset = accessing_memory_address - unsafe { SMMU_BASE_ADDRESS };
+    entry: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
+    let base_address = entry.get_target_address();
+    let register_offset = accessing_memory_address - base_address;
     pr_debug!(
         "SMMU Store Access Handler: Offset: {:#X}, Data: {:#X}",
         register_offset,
@@ -198,7 +193,7 @@ fn smmu_registers_store_handler(
         && register_offset != (vatos_offset + SMMU_VATOS_PAR)*/)
     {
         println!("Invalid Access size: {:#X}", access_size);
-        return Ok(StoreHookResult::Cancel);
+        return StoreHookResult::Cancel;
     }
 
     match register_offset {
@@ -218,44 +213,44 @@ fn smmu_registers_store_handler(
                 {
                     let mask = SMMU_CR1_QUEUE_IC | SMMU_CR1_QUEUE_OC | SMMU_CR1_QUEUE_SH;
                     write_smmu_register(
+                        base_address,
                         SMMU_CR1,
-                        ((data as u32) & mask) | (read_smmu_register::<u32>(SMMU_CR1) & !mask),
+                        ((data as u32) & mask)
+                            | (read_smmu_register::<u32>(base_address, SMMU_CR1) & !mask),
                     );
                 }
-                return Ok(StoreHookResult::AlternativeData(
-                    data | (SMMU_CR0_SMMUEN as u64),
-                ));
+                return StoreHookResult::Data(data | (SMMU_CR0_SMMUEN as u64));
             }
             if !new_smmu_en {
                 /*Check SMMU_GBPA Status*/
-                while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+                while (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
                     core::hint::spin_loop();
                 }
-                if (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_ABORT) != 0 {
+                if (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_ABORT) != 0 {
                     /* Disable SMMUEN */
-                    disable_smmu(old_smmu_en, true);
+                    disable_smmu(base_address, old_smmu_en, true);
                     unsafe { CURRENT_SMMU_STATUS.cr0 = data as u32 };
-                    return Ok(StoreHookResult::PassThrough);
+                    return StoreHookResult::PassThrough;
                 }
-                set_default_smmu_settings(old_smmu_en, true, Some(data as u32));
+                set_default_smmu_settings(base_address, old_smmu_en, true, Some(data as u32));
             } else {
-                apply_current_smmu_settings(Some(data as u32));
+                apply_current_smmu_settings(base_address, Some(data as u32));
             }
             /* Set CR0 (SMMU_CR0ACK will return the new value) */
             unsafe { CURRENT_SMMU_STATUS.cr0 = data as u32 };
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
         SMMU_GBPA => {
             let data = data as u32;
             if (data & SMMU_GBPA_UPDATE) != 0 {
                 if (data & SMMU_GBPA_ABORT) == 0
-                    && ((read_smmu_register::<u32>(SMMU_CR0) & SMMU_CR0_SMMUEN) == 0)
+                    && ((read_smmu_register::<u32>(base_address, SMMU_CR0) & SMMU_CR0_SMMUEN) == 0)
                 {
                     /* When Abort will be disabled and SMMUEN is disabled, all translations will be bypassed.
                     To avoid it, we must set default smmu settings */
-                    set_default_smmu_settings(false, false, None);
+                    set_default_smmu_settings(base_address, false, false, None);
                 } else if (data & SMMU_GBPA_ABORT) != 0
-                    && ((read_smmu_register::<u32>(SMMU_CR0) & SMMU_CR0_SMMUEN) != 0)
+                    && ((read_smmu_register::<u32>(base_address, SMMU_CR0) & SMMU_CR0_SMMUEN) != 0)
                 {
                     /*
                       When Abort will be enabled and SMMUEN is enabled, all translations will not be bypassed.
@@ -263,26 +258,32 @@ fn smmu_registers_store_handler(
                     */
 
                     /* To avoid bypass translation while disabling smmu, write abort at first. */
-                    write_smmu_register(SMMU_GBPA, SMMU_GBPA_UPDATE | SMMU_GBPA_ABORT);
-                    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+                    write_smmu_register(
+                        base_address,
+                        SMMU_GBPA,
+                        SMMU_GBPA_UPDATE | SMMU_GBPA_ABORT,
+                    );
+                    while (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_UPDATE)
+                        != 0
+                    {
                         core::hint::spin_loop();
                     }
-                    disable_smmu(false, false);
+                    disable_smmu(base_address, false, false);
                 }
             }
-            Ok(StoreHookResult::PassThrough)
+            StoreHookResult::PassThrough
         }
         SMMU_CR1 => {
             if (unsafe { CURRENT_SMMU_STATUS.cr0 } & SMMU_CR0_SMMUEN) == 0 {
                 unsafe { CURRENT_SMMU_STATUS.cr1 = data as u32 }
             }
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
         SMMU_CR2 => {
             if (unsafe { CURRENT_SMMU_STATUS.cr0 } & SMMU_CR0_SMMUEN) == 0 {
                 unsafe { CURRENT_SMMU_STATUS.cr2 = (data as u32) & !SMMU_CR2_E2H }
             }
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
         SMMU_STRTAB_BASE => {
             if (unsafe { CURRENT_SMMU_STATUS.cr0 } & SMMU_CR0_SMMUEN) == 0 {
@@ -296,7 +297,7 @@ fn smmu_registers_store_handler(
                     unsafe { CURRENT_SMMU_STATUS.strtab_base = data };
                 }
             }
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
         SMMU_STRTAB_BASE_HIGH => {
             if (unsafe { CURRENT_SMMU_STATUS.cr0 } & SMMU_CR0_SMMUEN) == 0 {
@@ -305,15 +306,15 @@ fn smmu_registers_store_handler(
                         (data << 32) | (CURRENT_SMMU_STATUS.strtab_base & u32::MAX as u64)
                 }
             }
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
         SMMU_STRTAB_BASE_CFG => {
             if (unsafe { CURRENT_SMMU_STATUS.cr0 } & SMMU_CR0_SMMUEN) == 0 {
                 unsafe { CURRENT_SMMU_STATUS.strtab_base_cfg = data as u32 }
             }
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
-        _ => Ok(StoreHookResult::PassThrough),
+        _ => StoreHookResult::PassThrough,
     }
 }
 
@@ -323,7 +324,7 @@ fn remove_current_stream_table_traps() {
         unsafe { DEFAULT_SMMU_STATUS.strtab_base } & SMMU_STRTAB_BASE_ADDRESS
     );
 
-    let smmu_status = unsafe { &CURRENT_SMMU_STATUS };
+    let smmu_status = unsafe { &*core::ptr::addr_of!(CURRENT_SMMU_STATUS) };
     let split = (smmu_status.strtab_base_cfg & SMMU_STRTAB_BASE_CFG_SPLIT)
         >> SMMU_STRTAB_BASE_CFG_SPLIT_BITS_OFFSET;
     let log2_size = (smmu_status.strtab_base_cfg & SMMU_STRTAB_BASE_CFG_LOG2SIZE)
@@ -338,9 +339,10 @@ fn remove_current_stream_table_traps() {
 
     remove_memory_access_trap(table_base_address, stage2_page_align_up(level1_table_size))
         .expect("Failed to remove trap of SMMU table");
-    remove_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    remove_memory_store_access_handler(StoreAccessHandlerEntry::new(
         table_base_address,
         level1_table_size,
+        0,
         level1_table_store_handler,
     ))
     .expect("Failed to remove store handler");
@@ -368,15 +370,17 @@ fn remove_trap_of_level1_entry(entry: u64, split: u32) {
         stage2_page_align_up(level2_table_size),
     )
     .expect("Failed to remove trap of SMMU table");
-    remove_memory_load_hook_handler(LoadAccessHandlerEntry::new(
+    remove_memory_load_access_handler(LoadAccessHandlerEntry::new(
         level2_table_address,
         level2_table_size,
+        0,
         level2_table_load_handler,
     ))
     .expect("Failed to remove load handler");
-    remove_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    remove_memory_store_access_handler(StoreAccessHandlerEntry::new(
         level2_table_address,
         level2_table_size,
+        0,
         level2_table_store_handler,
     ))
     .expect("Failed to remove store handler");
@@ -384,17 +388,22 @@ fn remove_trap_of_level1_entry(entry: u64, split: u32) {
     .expect("Failed to unmap address");*/
 }
 
-fn disable_smmu(should_remove_current_trap: bool, should_apply_current_smmu_settings: bool) {
+fn disable_smmu(
+    base_address: usize,
+    should_remove_current_trap: bool,
+    should_apply_current_smmu_settings: bool,
+) {
     if should_apply_current_smmu_settings {
-        write_smmu_register(SMMU_CR1, unsafe { CURRENT_SMMU_STATUS.cr1 });
-        write_smmu_register(SMMU_CR2, unsafe { CURRENT_SMMU_STATUS.cr2 });
+        write_smmu_register(base_address, SMMU_CR1, unsafe { CURRENT_SMMU_STATUS.cr1 });
+        write_smmu_register(base_address, SMMU_CR2, unsafe { CURRENT_SMMU_STATUS.cr2 });
     }
     write_smmu_register(
+        base_address,
         SMMU_CR0,
-        read_smmu_register::<u32>(SMMU_CR0) & !SMMU_CR0_SMMUEN,
+        read_smmu_register::<u32>(base_address, SMMU_CR0) & !SMMU_CR0_SMMUEN,
     );
 
-    while (read_smmu_register::<u32>(SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
         core::hint::spin_loop();
     }
 
@@ -404,39 +413,44 @@ fn disable_smmu(should_remove_current_trap: bool, should_apply_current_smmu_sett
 }
 
 fn set_default_smmu_settings(
+    base_address: usize,
     should_remove_current_trap: bool,
     should_apply_current_smmu_settings: bool,
     new_smmu_cr0: Option<u32>,
 ) {
     /* To avoid bypass translation while disabling smmu, write abort at first. */
-    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
         core::hint::spin_loop();
     }
-    let default_gbpa: u32 = read_smmu_register(SMMU_GBPA);
-    write_smmu_register(SMMU_GBPA, SMMU_GBPA_UPDATE | SMMU_GBPA_ABORT);
-    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+    let default_gbpa: u32 = read_smmu_register(base_address, SMMU_GBPA);
+    write_smmu_register(base_address, SMMU_GBPA, SMMU_GBPA_UPDATE | SMMU_GBPA_ABORT);
+    while (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
         core::hint::spin_loop();
     }
 
     /* Disable SMMUEN */
     write_smmu_register(
+        base_address,
         SMMU_CR0,
-        read_smmu_register::<u32>(SMMU_CR0) & !SMMU_CR0_SMMUEN,
+        read_smmu_register::<u32>(base_address, SMMU_CR0) & !SMMU_CR0_SMMUEN,
     );
-    while (read_smmu_register::<u32>(SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
         core::hint::spin_loop();
     }
 
     /* Set default value */
-    write_smmu_register(SMMU_STRTAB_BASE_CFG, unsafe {
+    write_smmu_register(base_address, SMMU_STRTAB_BASE_CFG, unsafe {
         DEFAULT_SMMU_STATUS.strtab_base_cfg
     });
-    write_smmu_register(SMMU_STRTAB_BASE, unsafe { DEFAULT_SMMU_STATUS.strtab_base });
+    write_smmu_register(base_address, SMMU_STRTAB_BASE, unsafe {
+        DEFAULT_SMMU_STATUS.strtab_base
+    });
 
     if should_apply_current_smmu_settings {
-        write_smmu_register(SMMU_CR1, unsafe { CURRENT_SMMU_STATUS.cr1 });
-        write_smmu_register(SMMU_CR2, unsafe { CURRENT_SMMU_STATUS.cr2 });
+        write_smmu_register(base_address, SMMU_CR1, unsafe { CURRENT_SMMU_STATUS.cr1 });
+        write_smmu_register(base_address, SMMU_CR2, unsafe { CURRENT_SMMU_STATUS.cr2 });
         write_smmu_register(
+            base_address,
             SMMU_CR0,
             new_smmu_cr0.unwrap_or(unsafe { CURRENT_SMMU_STATUS.cr0 }),
         );
@@ -444,65 +458,70 @@ fn set_default_smmu_settings(
 
     /* Enable SMMUEN */
     write_smmu_register(
+        base_address,
         SMMU_CR0,
-        read_smmu_register::<u32>(SMMU_CR0) | SMMU_CR0_SMMUEN,
+        read_smmu_register::<u32>(base_address, SMMU_CR0) | SMMU_CR0_SMMUEN,
     );
-    while (read_smmu_register::<u32>(SMMU_CR0ACK) & SMMU_CR0_SMMUEN) == 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_CR0ACK) & SMMU_CR0_SMMUEN) == 0 {
         core::hint::spin_loop();
     }
 
     /* Restore GBPA */
-    write_smmu_register(SMMU_GBPA, default_gbpa | SMMU_GBPA_UPDATE);
+    write_smmu_register(base_address, SMMU_GBPA, default_gbpa | SMMU_GBPA_UPDATE);
 
     if should_remove_current_trap {
         remove_current_stream_table_traps()
     }
 }
 
-fn apply_current_smmu_settings(new_smmu_cr0: Option<u32>) {
+fn apply_current_smmu_settings(base_address: usize, new_smmu_cr0: Option<u32>) {
     /* To avoid bypass translation while disabling smmu, write abort at first. */
-    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
         core::hint::spin_loop();
     }
-    let default_gbpa: u32 = read_smmu_register(SMMU_GBPA);
-    write_smmu_register(SMMU_GBPA, SMMU_GBPA_UPDATE | SMMU_GBPA_ABORT);
-    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+    let default_gbpa: u32 = read_smmu_register(base_address, SMMU_GBPA);
+    write_smmu_register(base_address, SMMU_GBPA, SMMU_GBPA_UPDATE | SMMU_GBPA_ABORT);
+    while (read_smmu_register::<u32>(base_address, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
         core::hint::spin_loop();
     }
 
     /* Disable SMMUEN */
     write_smmu_register(
+        base_address,
         SMMU_CR0,
-        read_smmu_register::<u32>(SMMU_CR0) & !SMMU_CR0_SMMUEN,
+        read_smmu_register::<u32>(base_address, SMMU_CR0) & !SMMU_CR0_SMMUEN,
     );
-    while (read_smmu_register::<u32>(SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
         core::hint::spin_loop();
     }
 
     /* Set default value */
-    write_smmu_register(SMMU_STRTAB_BASE_CFG, unsafe {
+    write_smmu_register(base_address, SMMU_STRTAB_BASE_CFG, unsafe {
         CURRENT_SMMU_STATUS.strtab_base_cfg
     });
-    write_smmu_register(SMMU_STRTAB_BASE, unsafe { CURRENT_SMMU_STATUS.strtab_base });
-    write_smmu_register(SMMU_CR1, unsafe { CURRENT_SMMU_STATUS.cr1 });
-    write_smmu_register(SMMU_CR2, unsafe { CURRENT_SMMU_STATUS.cr2 });
+    write_smmu_register(base_address, SMMU_STRTAB_BASE, unsafe {
+        CURRENT_SMMU_STATUS.strtab_base
+    });
+    write_smmu_register(base_address, SMMU_CR1, unsafe { CURRENT_SMMU_STATUS.cr1 });
+    write_smmu_register(base_address, SMMU_CR2, unsafe { CURRENT_SMMU_STATUS.cr2 });
     /* Analysis new settings */
     add_trap_of_current_stream_table();
 
     write_smmu_register(
+        base_address,
         SMMU_CR0,
         new_smmu_cr0.unwrap_or(unsafe { CURRENT_SMMU_STATUS.cr0 }),
     );
-    while (read_smmu_register::<u32>(SMMU_CR0ACK) & SMMU_CR0_SMMUEN) == 0 {
+    while (read_smmu_register::<u32>(base_address, SMMU_CR0ACK) & SMMU_CR0_SMMUEN) == 0 {
         core::hint::spin_loop();
     }
 
     /* Restore GBPA */
-    write_smmu_register(SMMU_GBPA, default_gbpa | SMMU_GBPA_UPDATE);
+    write_smmu_register(base_address, SMMU_GBPA, default_gbpa | SMMU_GBPA_UPDATE);
 }
 
 fn add_trap_of_current_stream_table() {
-    let smmu_status = unsafe { &CURRENT_SMMU_STATUS };
+    let smmu_status = unsafe { &*core::ptr::addr_of!(CURRENT_SMMU_STATUS) };
     let fmt = (smmu_status.strtab_base_cfg & SMMU_STRTAB_BASE_CFG_FMT)
         >> SMMU_STRTAB_BASE_CFG_FMT_BITS_OFFSET;
     let split = (smmu_status.strtab_base_cfg & SMMU_STRTAB_BASE_CFG_SPLIT)
@@ -554,9 +573,10 @@ fn add_trap_of_current_stream_table() {
         false,
     )
     .expect("Failed to map address");
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
         level1_table_address,
         level1_table_size,
+        0,
         level1_table_store_handler,
     ))
     .expect("Failed to add store handler");
@@ -607,15 +627,17 @@ fn process_level1_table_entry(entry: u64, base_id: u32, split: u32) {
         false,
     )
     .expect("Failed to map address");
-    add_memory_load_hook_handler(LoadAccessHandlerEntry::new(
+    add_memory_load_access_handler(LoadAccessHandlerEntry::new(
         table_address,
         table_size,
+        0,
         level2_table_load_handler,
     ))
     .expect("Failed to add load handler");
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
         table_address,
         table_size,
+        0,
         level2_table_store_handler,
     ))
     .expect("Failed to add store handler");
@@ -658,10 +680,11 @@ fn process_level2_table_entry(entry_base: usize, _id: u32, should_check_entry: b
 
 fn level1_table_store_handler(
     accessing_address: usize,
-    _stored_registers: &mut StoredRegisters,
+    _: &mut StoredRegisters,
     access_size: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     assert_eq!(STAGE_2_PAGE_SIZE, 0x1000);
     if access_size != 0b11 {
         panic!("unsupported Access Size: {:#b}", access_size);
@@ -676,29 +699,31 @@ fn level1_table_store_handler(
     remove_trap_of_level1_entry(unsafe { *(accessing_address as *mut u64) }, smmu_split);
     process_level1_table_entry(data, (id << smmu_split) as u32, smmu_split);
 
-    Ok(StoreHookResult::PassThrough)
+    StoreHookResult::PassThrough
 }
 
 fn level2_table_load_handler(
     accessing_address: usize,
-    _stored_registers: &mut StoredRegisters,
+    _: &mut StoredRegisters,
     access_size: u8,
-    _is_64bit_register: bool,
-    _is_sign_extend_required: bool,
-) -> Result<LoadHookResult, ()> {
+    _: bool,
+    _: bool,
+    _: &LoadAccessHandlerEntry,
+) -> LoadHookResult {
     let ste_base = accessing_address & !(size_of::<StreamTableEntry>() - 1);
     let ste_offset = accessing_address - ste_base;
     let read_mask = !create_bitmask_of_stage2_configurations(ste_offset);
     let original_data = emulation::read_memory(accessing_address, access_size);
-    Ok(LoadHookResult::Data((original_data & read_mask) as u64))
+    LoadHookResult::Data(original_data & read_mask)
 }
 
 fn level2_table_store_handler(
     accessing_address: usize,
-    _stored_registers: &mut StoredRegisters,
+    _: &mut StoredRegisters,
     access_size: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     let ste_base_address = accessing_address & !(size_of::<StreamTableEntry>() - 1);
     let ste_offset = accessing_address - ste_base_address;
     let ste_offset_per_ste_base_type = ste_offset / size_of::<SteArrayBaseType>();
@@ -730,7 +755,7 @@ fn level2_table_store_handler(
         data
     };
     //dump_level2_table_entry(ste_base_address, stream_id);
-    Ok(StoreHookResult::AlternativeData(data))
+    StoreHookResult::Data(data)
 }
 
 fn get_stream_id(
@@ -758,35 +783,38 @@ fn get_stream_id(
     panic!("Not Found");
 }
 
+#[cfg(feature = "fast_restore")]
 pub fn restore_smmu_status() {
-    let default_smmu_status = unsafe { &DEFAULT_SMMU_STATUS };
+    let status = unsafe { &*core::ptr::addr_of!(DEFAULT_SMMU_STATUS) };
+    let base = unsafe { SMMU_BASE_ADDRESS };
+    if base == 0 {
+        return;
+    }
     /* Restore GBPA */
-    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+    while (read_smmu_register::<u32>(base, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
         core::hint::spin_loop();
     }
-    write_smmu_register(SMMU_GBPA, default_smmu_status.gbpa | SMMU_GBPA_UPDATE);
-    while (read_smmu_register::<u32>(SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
+    write_smmu_register(base, SMMU_GBPA, status.gbpa | SMMU_GBPA_UPDATE);
+    while (read_smmu_register::<u32>(base, SMMU_GBPA) & SMMU_GBPA_UPDATE) != 0 {
         core::hint::spin_loop();
     }
 
-    write_smmu_register(SMMU_CR0, 0u32);
-    while (read_smmu_register::<u32>(SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
+    write_smmu_register(base, SMMU_CR0, 0u32);
+    while (read_smmu_register::<u32>(base, SMMU_CR0ACK) & SMMU_CR0_SMMUEN) != 0 {
         core::hint::spin_loop();
     }
 
     /* Restore SMMU settings */
-    let default_smmu_status = unsafe { &DEFAULT_SMMU_STATUS };
-    write_smmu_register(SMMU_CR1, default_smmu_status.cr1);
-    write_smmu_register(SMMU_CR2, default_smmu_status.cr2);
-    write_smmu_register(SMMU_AGBPA, default_smmu_status.agbpa);
-    write_smmu_register(SMMU_IRQ_CTRL, default_smmu_status.irq_ctrl);
-    write_smmu_register(SMMU_GERRORN, default_smmu_status.gerrorn);
-    write_smmu_register(SMMU_STRTAB_BASE, default_smmu_status.strtab_base);
-    write_smmu_register(SMMU_STRTAB_BASE_CFG, default_smmu_status.strtab_base_cfg);
-    write_smmu_register(SMMU_GATOS_CTRL, default_smmu_status.gatos_ctrl);
-
-    write_smmu_register(SMMU_GBPA, default_smmu_status.gbpa | SMMU_GBPA_UPDATE);
-    write_smmu_register(SMMU_CR0, default_smmu_status.cr0);
+    write_smmu_register(base, SMMU_CR1, status.cr1);
+    write_smmu_register(base, SMMU_CR2, status.cr2);
+    write_smmu_register(base, SMMU_AGBPA, status.agbpa);
+    write_smmu_register(base, SMMU_IRQ_CTRL, status.irq_ctrl);
+    write_smmu_register(base, SMMU_GERRORN, status.gerrorn);
+    write_smmu_register(base, SMMU_STRTAB_BASE, status.strtab_base);
+    write_smmu_register(base, SMMU_STRTAB_BASE_CFG, status.strtab_base_cfg);
+    write_smmu_register(base, SMMU_GATOS_CTRL, status.gatos_ctrl);
+    write_smmu_register(base, SMMU_GBPA, status.gbpa | SMMU_GBPA_UPDATE);
+    write_smmu_register(base, SMMU_CR0, status.cr0);
 
     if unsafe { CURRENT_SMMU_STATUS.cr0 & SMMU_CR0_SMMUEN } != 0 {
         remove_current_stream_table_traps();
@@ -795,10 +823,10 @@ pub fn restore_smmu_status() {
 }
 
 #[allow(dead_code)]
-pub fn dump_stream_table() {
-    let table_base_address =
-        (read_smmu_register::<u64>(SMMU_STRTAB_BASE) & SMMU_STRTAB_BASE_ADDRESS) as usize;
-    let strtab_base_cfg = read_smmu_register::<u32>(SMMU_STRTAB_BASE_CFG);
+pub fn dump_stream_table(smmu_base_address: usize) {
+    let table_base_address = (read_smmu_register::<u64>(smmu_base_address, SMMU_STRTAB_BASE)
+        & SMMU_STRTAB_BASE_ADDRESS) as usize;
+    let strtab_base_cfg = read_smmu_register::<u32>(smmu_base_address, SMMU_STRTAB_BASE_CFG);
     let split =
         (strtab_base_cfg & SMMU_STRTAB_BASE_CFG_SPLIT) >> SMMU_STRTAB_BASE_CFG_SPLIT_BITS_OFFSET;
     let log2size = (strtab_base_cfg & SMMU_STRTAB_BASE_CFG_LOG2SIZE)

@@ -8,12 +8,14 @@
 //! ACPI Table Protection from store access
 //!
 
-use crate::memory_hook::{add_memory_store_hook_handler, StoreAccessHandlerEntry, StoreHookResult};
-use crate::paging::add_memory_access_trap;
-use crate::StoredRegisters;
-
 use common::acpi::{RSDP, XSDT, XSDT_STRUCT_SIZE};
 use common::{STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+
+use crate::memory_hook::{
+    add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
+};
+use crate::paging::add_memory_access_trap;
+use crate::StoredRegisters;
 
 const EXCEPT_TABLE: [&[u8; 4]; 0] = [];
 
@@ -74,9 +76,10 @@ fn register_acpi_table(table_address: usize, table_length: Option<u32>) {
 
     add_memory_access_trap(aligned_table_address, aligned_table_length, true, false)
         .expect("Failed to add memory trap");
-    add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
         table_address,
         table_length as usize,
+        0,
         acpi_table_store_handler,
     ))
     .expect("Failed to add ACPI table store handler");
@@ -89,10 +92,11 @@ fn register_acpi_table(table_address: usize, table_length: Option<u32>) {
 }
 
 pub fn acpi_table_store_handler(
-    _accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
-    _data: u64,
-) -> Result<StoreHookResult, ()> {
-    Ok(StoreHookResult::Cancel)
+    _: usize,
+    _: &mut StoredRegisters,
+    _: u8,
+    _: u64,
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
+    StoreHookResult::Cancel
 }

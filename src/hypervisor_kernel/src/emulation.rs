@@ -9,13 +9,7 @@
 //! A64 Instructions' Emulator
 //!
 
-mod load;
-mod store;
-
-pub use load::read_memory;
-pub use store::write_memory;
-
-use crate::{handler_panic, paging::map_address, StoredRegisters};
+use core::arch::asm;
 
 use common::cpu::{
     convert_virtual_address_to_intermediate_physical_address_el0_read,
@@ -25,8 +19,12 @@ use common::cpu::{
     convert_virtual_address_to_physical_address_el2_write, SPSR_EL2_M, SPSR_EL2_M_EL0T,
 };
 use common::{bitmask, PAGE_MASK, PAGE_SIZE};
+pub use load::read_memory;
 
-use core::arch::asm;
+use crate::{handler_panic, paging::map_address, StoredRegisters};
+
+mod load;
+mod store;
 
 const REGISTER_NUMBER_XZR: u8 = 31;
 

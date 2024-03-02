@@ -108,6 +108,8 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         ACPI_RSDP = system_information.acpi_rsdp_address;
     }
 
+    memory_hook::init_memory_access_handler();
+
     if let Some(ecam_info) = &system_information.ecam_info {
         pci::init_pci(ecam_info.address, ecam_info.start_bus, ecam_info.end_bus);
     }

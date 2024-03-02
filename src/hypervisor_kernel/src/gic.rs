@@ -83,15 +83,17 @@ pub fn restore_gic(acpi_address: usize) {
                     "GICR_CTLR::EnableLPIs became RES1(this behavior is IMPLEMENTATION DEFINED).\
                      Therefore, add trap to mask this bit until EL1 writes this bit 1."
                 );
-                add_memory_load_hook_handler(LoadAccessHandlerEntry::new(
+                add_memory_load_access_handler(LoadAccessHandlerEntry::new(
                     redistributor_base,
                     stage2_page_align_up(GICR_MAP_SIZE),
+                    0,
                     gic_redistributor_fast_restore_load_handler,
                 ))
                 .expect("Failed to add load handler");
-                add_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+                add_memory_store_access_handler(StoreAccessHandlerEntry::new(
                     redistributor_base,
                     stage2_page_align_up(GICR_MAP_SIZE),
+                    0,
                     gic_redistributor_fast_restore_store_handler,
                 ))
                 .expect("Failed to add store handler");
@@ -116,27 +118,29 @@ pub fn restore_gic(acpi_address: usize) {
 
 fn gic_redistributor_fast_restore_load_handler(
     accessing_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
-    _is_64bit_register: bool,
-    _is_sign_extend_required: bool,
-) -> Result<LoadHookResult, ()> {
+    _: &mut StoredRegisters,
+    _: u8,
+    _: bool,
+    _: bool,
+    _: &LoadAccessHandlerEntry,
+) -> LoadHookResult {
     let offset = accessing_address & (GICR_MAP_SIZE - 1);
     match offset {
-        GICR_CTLR => Ok(LoadHookResult::Data(
+        GICR_CTLR => LoadHookResult::Data(
             (unsafe { read_volatile(accessing_address as *const u32) } & !GICR_CTLR_ENABLE_LPIS)
                 as u64,
-        )),
-        _ => Ok(LoadHookResult::PassThrough),
+        ),
+        _ => LoadHookResult::PassThrough,
     }
 }
 
 fn gic_redistributor_fast_restore_store_handler(
     accessing_address: usize,
-    _stored_registers: &mut StoredRegisters,
-    _access_size: u8,
+    _: &mut StoredRegisters,
+    _: u8,
     data: u64,
-) -> Result<StoreHookResult, ()> {
+    _: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
     let base = accessing_address & !(GICR_MAP_SIZE - 1);
     let offset = accessing_address & (GICR_MAP_SIZE - 1);
     match offset {
@@ -145,26 +149,28 @@ fn gic_redistributor_fast_restore_store_handler(
                 pr_debug!("Remove the trap of GIC Redistributor");
                 remove_memory_access_trap(base, stage2_page_align_up(GICR_MAP_SIZE))
                     .expect("Failed to remove the trap GIC Register");
-                remove_memory_load_hook_handler(LoadAccessHandlerEntry::new(
+                remove_memory_load_access_handler(LoadAccessHandlerEntry::new(
                     base,
                     stage2_page_align_up(GICR_MAP_SIZE),
+                    0,
                     gic_redistributor_fast_restore_load_handler,
                 ))
                 .expect("Failed to remove load handler");
-                remove_memory_store_hook_handler(StoreAccessHandlerEntry::new(
+                remove_memory_store_access_handler(StoreAccessHandlerEntry::new(
                     base,
                     stage2_page_align_up(GICR_MAP_SIZE),
+                    0,
                     gic_redistributor_fast_restore_store_handler,
                 ))
                 .expect("Failed to remove store handler");
             }
-            Ok(StoreHookResult::PassThrough)
+            StoreHookResult::PassThrough
         }
         GICR_PROPBASER => {
             let original_data = unsafe { read_volatile(accessing_address as *const u64) };
             assert_eq!(original_data & !GICR_PROPBASER_PTZ, data);
-            Ok(StoreHookResult::Cancel)
+            StoreHookResult::Cancel
         }
-        _ => Ok(StoreHookResult::PassThrough),
+        _ => StoreHookResult::PassThrough,
     }
 }

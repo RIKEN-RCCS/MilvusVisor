@@ -11,15 +11,15 @@
 //! Supported: ldr, ldp (except Atomic, SIMD)
 //!
 
-use super::{
-    faulting_va_to_ipa_load, get_register_reference_mut, get_virtual_address_to_access_ipa,
-    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
-};
+use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
 
 use crate::memory_hook::{memory_load_hook_handler, LoadHookResult};
 use crate::StoredRegisters;
 
-use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
+use super::{
+    faulting_va_to_ipa_load, get_register_reference_mut, get_virtual_address_to_access_ipa,
+    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
+};
 
 pub fn emulate_load_register(
     s_r: &mut StoredRegisters,
@@ -267,18 +267,17 @@ fn load_from_address_and_store_into_register(
         return Err(());
     }
 
-    let hook_result =
-        memory_load_hook_handler(intermediate_physical_load_address, s_r, size, sf, sse)?;
-    let data = match hook_result {
-        LoadHookResult::PassThrough => {
-            if sse {
-                unimplemented!();
-            } else {
-                _read_memory(virtual_address_to_load, size)
+    let data =
+        match memory_load_hook_handler(intermediate_physical_load_address, s_r, size, sf, sse) {
+            LoadHookResult::PassThrough => {
+                if sse {
+                    unimplemented!();
+                } else {
+                    _read_memory(virtual_address_to_load, size)
+                }
             }
-        }
-        LoadHookResult::Data(d) => d,
-    };
+            LoadHookResult::Data(d) => d,
+        };
 
     pr_debug!("Data: {:#X}", data);
     if target_register != REGISTER_NUMBER_XZR {
