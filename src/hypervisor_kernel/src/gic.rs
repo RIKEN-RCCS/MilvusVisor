@@ -4,19 +4,15 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-use crate::memory_hook::{
-    add_memory_load_hook_handler, add_memory_store_hook_handler, remove_memory_load_hook_handler,
-    remove_memory_store_hook_handler, LoadAccessHandlerEntry, LoadHookResult,
-    StoreAccessHandlerEntry, StoreHookResult,
-};
-use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
-use crate::StoredRegisters;
+use core::ptr::{read_volatile, write_volatile};
 
 use common::acpi::{get_acpi_table, madt::MADT};
 use common::paging::{page_align_up, stage2_page_align_up};
 use common::PAGE_SIZE;
 
-use core::ptr::{read_volatile, write_volatile};
+use crate::memory_hook::*;
+use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
+use crate::StoredRegisters;
 
 const GICR_MAP_SIZE: usize = 0x1000;
 

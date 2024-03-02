@@ -10,11 +10,10 @@
 //!
 //! Supported Version: ~2.0
 
-use crate::fast_restore::enter_restore_process;
+use common::cpu::{get_mpidr_el1, secure_monitor_call};
+
 use crate::multi_core::{power_off_cpu, setup_new_cpu};
 use crate::{handler_panic, StoredRegisters};
-
-use common::cpu::{get_mpidr_el1, secure_monitor_call};
 
 /// PSCI Function ID List
 ///
@@ -136,7 +135,7 @@ pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut Stor
             || function_id == PsciFunctionId::SystemReset2
         {
             println!("Trap power_off/reboot");
-            enter_restore_process();
+            crate::fast_restore::enter_restore_process();
         }
         secure_monitor_call(
             &mut stored_registers.x0,

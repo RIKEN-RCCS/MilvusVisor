@@ -9,11 +9,11 @@
 //! Paging
 //!
 
-use crate::{allocate_memory, free_memory};
-
 use common::cpu::*;
 use common::paging::*;
 use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
+
+use crate::{allocate_memory, free_memory};
 
 fn _remake_stage2_page_table(
     table_address: usize,

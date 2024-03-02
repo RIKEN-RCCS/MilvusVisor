@@ -185,6 +185,7 @@ fn show_kernel_info() {
     print_is_feature_enabled!("contiguous_bit");
     print_is_feature_enabled!("a64fx");
     print_is_feature_enabled!("advanced_memory_manager");
+    print_is_feature_enabled!("mrs_msr_emulation");
 }
 
 /// Allocate memory from memory pool
@@ -256,12 +257,12 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
 
     match ec {
         EC_HVC => match (esr_el2 & bitmask!(15, 0)) as u16 {
+            #[cfg(feature = "fast_restore")]
             fast_restore::HVC_EXIT_BOOT_SERVICE_TRAP => {
-                #[cfg(feature = "fast_restore")]
                 fast_restore::exit_boot_service_trap_main(regs, elr_el2);
             }
+            #[cfg(feature = "fast_restore")]
             fast_restore::HVC_AFTER_EXIT_BOOT_SERVICE_TRAP => {
-                #[cfg(feature = "fast_restore")]
                 fast_restore::after_exit_boot_service_trap_main(regs, elr_el2);
             }
             hvc_number => {

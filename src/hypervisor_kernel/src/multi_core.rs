@@ -9,14 +9,16 @@
 //! MultiCore Handling Functions
 //!
 
-use crate::memory_hook::{add_memory_store_hook_handler, StoreAccessHandlerEntry, StoreHookResult};
-use crate::paging::{add_memory_access_trap, map_address};
-use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
-use crate::{allocate_memory, free_memory, StoredRegisters};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{cpu, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES};
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::memory_hook::{
+    add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
+};
+use crate::paging::{add_memory_access_trap, map_address};
+use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
+use crate::{allocate_memory, free_memory, StoredRegisters};
 
 pub static NUMBER_OF_RUNNING_AP: AtomicUsize = AtomicUsize::new(0);
 pub static STACK_TO_FREE_LATER: AtomicUsize = AtomicUsize::new(0);
