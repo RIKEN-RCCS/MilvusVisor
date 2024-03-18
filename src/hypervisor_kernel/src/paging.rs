@@ -11,7 +11,9 @@
 
 use common::cpu::*;
 use common::paging::*;
-use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
+use common::{
+    PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE,
+};
 
 use crate::{allocate_memory, free_memory};
 
@@ -273,7 +275,7 @@ pub fn map_address(
     executable: bool,
     is_device: bool,
 ) -> Result<(), ()> {
-    if (physical_address & ((1usize << PAGE_SHIFT) - 1)) != 0 {
+    if (physical_address & !PAGE_MASK) != 0 {
         println!("Physical Address({:#X}) is not aligned.", physical_address);
         return Err(());
     }
@@ -534,7 +536,7 @@ pub fn add_memory_access_trap(
     allow_read_access: bool,
     allow_write_access: bool,
 ) -> Result<(), ()> {
-    if (size & ((1usize << STAGE_2_PAGE_SHIFT) - 1)) != 0 {
+    if (size & !STAGE_2_PAGE_MASK) != 0 {
         println!("Size({:#X}) is not aligned.", size);
         return Err(());
     }
@@ -592,7 +594,7 @@ pub fn add_memory_access_trap(
 /// # Result
 /// If the setting is succeeded, returns Ok(()), otherwise returns Err(())
 pub fn remove_memory_access_trap(mut address: usize, size: usize) -> Result<(), ()> {
-    if (size & ((1usize << STAGE_2_PAGE_SHIFT) - 1)) != 0 {
+    if (size & !STAGE_2_PAGE_MASK) != 0 {
         println!("Size({:#X}) is not aligned.", size);
         return Err(());
     }

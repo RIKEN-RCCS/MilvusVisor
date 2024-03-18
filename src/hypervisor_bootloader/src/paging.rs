@@ -13,7 +13,9 @@ use crate::{allocate_memory, free_memory};
 
 use common::cpu::*;
 use common::paging::*;
-use common::{PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE};
+use common::{
+    PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SHIFT, STAGE_2_PAGE_SIZE,
+};
 
 fn _clone_page_table(table_address: usize, current_level: i8) -> usize {
     let cloned_table_address = allocate_memory(1, None).expect("Failed to allocate page table");
@@ -234,12 +236,12 @@ pub fn map_address(
     executable: bool,
     is_device: bool,
 ) -> Result<(), ()> {
-    if (physical_address & ((1usize << PAGE_SHIFT) - 1)) != 0 {
+    if (physical_address & !PAGE_MASK) != 0 {
         println!("Physical Address is not aligned.");
         return Err(());
     }
-    let aligned_size = if (size & ((1usize << PAGE_SHIFT) - 1)) != 0 {
-        (size & ((1usize << PAGE_SHIFT) - 1)) + PAGE_SIZE
+    let aligned_size = if (size & !PAGE_MASK) != 0 {
+        (size & !PAGE_MASK) + PAGE_SIZE
     } else {
         size
     };
@@ -489,7 +491,7 @@ pub fn map_dummy_page_into_vttbr_el2(
     size: usize,
     mut dummy_page: usize, /*4 KiB Page Physical Address*/
 ) -> Result<(), ()> {
-    if (size & ((1usize << STAGE_2_PAGE_SHIFT) - 1)) != 0 {
+    if (size & !STAGE_2_PAGE_MASK) != 0 {
         println!("Size({:#X}) is not aligned.", size);
         return Err(());
     }

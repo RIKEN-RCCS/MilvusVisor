@@ -12,7 +12,7 @@
 use crate::drivers;
 
 pub fn init_pci(ecam_address: usize, start_bus_number: u8, end_bus_number: u8) {
-    for bus in start_bus_number..=end_bus_number {
+    for bus in start_bus_number..end_bus_number {
         for device in 0..32 {
             let vendor_id = get_configuration_space_data(ecam_address, bus, device, 0, 0, 2) as u16;
             if vendor_id == 0xffff {

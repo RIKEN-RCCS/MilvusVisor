@@ -8,7 +8,7 @@
 use crate::paging::map_address;
 
 use common::acpi::get_acpi_table;
-use common::EcamInfo;
+use common::{EcamInfo, PAGE_MASK};
 
 pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
     let mcfg = get_acpi_table(rsdp, b"MCFG");
@@ -25,7 +25,7 @@ pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
         "ECAM: BaseAddress: {:#X}, Bus: {:#X} ~ {:#X}",
         ecam_address, start_bus, end_bus
     );
-    assert_eq!(ecam_address & (8 * 1024 * 1024 - 1), 0);
+    assert_eq!(ecam_address & !PAGE_MASK, 0);
     map_address(
         ecam_address,
         ecam_address,
