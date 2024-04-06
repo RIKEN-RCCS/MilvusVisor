@@ -1,6 +1,6 @@
 [build]
 target = "aarch64-unknown-none"
-rustflags = ["-C", "link-arg=-Thypervisor_kernel/config/linkerscript.ld"]
+rustflags = ["-C", "link-arg=-Thypervisor_kernel/config/linkerscript.ld", "-C", "target-feature=-neon,-sve", "-C", "soft-float=yes"]
 target-dir = "../target/"
 
 [unstable]
