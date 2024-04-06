@@ -86,7 +86,10 @@ impl MADT {
             let record_type = unsafe { *(base_address as *const u8) };
             let record_length = unsafe { *((base_address + 1) as *const u8) };
             if record_type == STRUCT_TYPE_GICD {
-                return Some(unsafe { *((base_address + 8) as *const u64) } as usize);
+                let version = unsafe { *((base_address + 0x20) as *const u8) };
+                if version == 0x03 || version == 0x04 {
+                    return Some(unsafe { *((base_address + 8) as *const u64) } as usize);
+                }
             }
             base_address += record_length as usize;
         }

@@ -56,6 +56,7 @@ struct Elf64ProgramHeader {
     p_align: Elf64Xword,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SegmentInfo {
     pub virtual_base_address: usize,

@@ -87,7 +87,7 @@ pub fn restore_gic(acpi_address: usize) {
         for e in table.get_gic_list() {
             let redistributor_base = e.get_gic_redistributor_base_address();
             if redistributor_base == 0 {
-                todo!()
+                continue;
             }
             map_address(
                 redistributor_base,
