@@ -8,7 +8,7 @@ use core::ptr::{read_volatile, write_volatile};
 
 use common::acpi::{get_acpi_table, madt::MADT};
 use common::paging::{page_align_up, stage2_page_align_up};
-use common::PAGE_SIZE;
+use common::{cpu, PAGE_SIZE};
 
 use crate::memory_hook::*;
 use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
@@ -29,18 +29,31 @@ const GICR_PROPBASER_PTZ: u64 = 1 << 62;
 const GICD_CTLR: usize = 0x00;
 #[cfg(feature = "virtio")]
 const GICD_ISPENDR: usize = 0x0200;
+#[cfg(feature = "fast_restore")]
+const GICD_SGIR: usize = 0xF00;
+#[cfg(feature = "fast_restore")]
+const GICD_CPENDSGIR: usize = 0xF10;
+const GICD_ICPIDR2: usize = 0xFE8;
 
 const GITS_CTLR: usize = 0x00;
 const GITS_CTLR_ENABLED: u32 = 0x01;
 const GITS_CTLR_QUIESCENT: u32 = 1 << 31;
 
 static mut GIC_DISTRIBUTOR_BASE_ADDRESS: usize = 0;
+static mut GIC_VERSION: u8 = 0;
 
 pub fn init_gic(acpi_address: usize) {
     if let Ok(table) = get_acpi_table(acpi_address, &MADT::SIGNATURE) {
         let table = unsafe { &*(table as *const MADT) };
-        if let Some(distributor) = table.get_gic_distributor_address() {
-            unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS = distributor };
+        if let Some((mut version, base)) = table.get_gic_distributor_address() {
+            if base != 0 && version == 0 {
+                version = ((unsafe { read_volatile((base + GICD_ICPIDR2) as *const u32) } >> 4)
+                    & 0b1111) as u8;
+            }
+            unsafe {
+                GIC_VERSION = version;
+                GIC_DISTRIBUTOR_BASE_ADDRESS = base;
+            }
         }
     }
 }
@@ -62,6 +75,66 @@ pub fn set_interrupt_pending(int_id: u32) {
     };
 }
 
+#[cfg(feature = "fast_restore")]
+pub fn broadcast_sgi() {
+    let distributor = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };
+    let version = unsafe { GIC_VERSION };
+    if distributor == 0 {
+        println!("Distributor is not available.");
+        return;
+    } else if version == 0 {
+        println!("Failed to detect the GIC version");
+        return;
+    }
+
+    match version {
+        1 | 2 => {
+            unsafe { write_volatile((distributor + GICD_CTLR) as *mut u32, 0b11) };
+            unsafe {
+                write_volatile(
+                    (distributor + GICD_SGIR) as *mut u32,
+                    1 << 24, /* Broadcast */
+                )
+            };
+        }
+        3 | 4 => {
+            /* TODO: check if register access was enabled. */
+            cpu::set_icc_sgi1r_el1(1 << 40 /* Broadcast */);
+            cpu::set_icc_sgi0r_el1(1 << 40 /* Broadcast */);
+        }
+        _ => {
+            println!("Unsupported GIC version: {version}");
+        }
+    }
+}
+
+#[cfg(feature = "fast_restore")]
+pub fn remove_sgi() {
+    let distributor = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };
+    let version = unsafe { GIC_VERSION };
+    if distributor == 0 {
+        println!("Distributor is not available.");
+        return;
+    } else if version == 0 {
+        println!("Failed to detect the GIC version");
+        return;
+    }
+
+    match version {
+        2 | 3 | 4 => {
+            for i in 0..4 {
+                let r =
+                    (distributor + GICD_CPENDSGIR + i * core::mem::size_of::<u32>()) as *mut u32;
+                unsafe { write_volatile(r, read_volatile(r)) };
+            }
+        }
+        _ => {
+            println!("Unsupported GIC version: {version}");
+        }
+    }
+}
+
+#[cfg(feature = "fast_restore")]
 pub fn restore_gic(acpi_address: usize) {
     // TODO: Discovery Base Address
     if let Ok(table) = get_acpi_table(acpi_address, &MADT::SIGNATURE) {
@@ -76,10 +149,8 @@ pub fn restore_gic(acpi_address: usize) {
             unsafe { write_volatile((e + GITS_CTLR) as *mut u32, GITS_CTLR_QUIESCENT) };
         }
 
-        if let Some(distributor) = table.get_gic_distributor_address() {
-            if distributor != 0 {
-                unsafe { write_volatile((distributor + GICD_CTLR) as *mut u32, 0) };
-            }
+        if unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS } != 0 {
+            unsafe { write_volatile((GIC_DISTRIBUTOR_BASE_ADDRESS + GICD_CTLR) as *mut u32, 0) };
         } else {
             println!("DistributorBase is zero");
         }

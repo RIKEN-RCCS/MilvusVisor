@@ -79,17 +79,19 @@ impl MADT {
         }
     }
 
-    pub fn get_gic_distributor_address(&self) -> Option<usize> {
+    pub fn get_gic_distributor_address(&self) -> Option<(u8, usize)> {
         let mut base_address = self as *const _ as usize + Self::STRUCT_SIZE;
         let limit = base_address + (self.length as usize - Self::STRUCT_SIZE);
         while base_address < limit {
             let record_type = unsafe { *(base_address as *const u8) };
             let record_length = unsafe { *((base_address + 1) as *const u8) };
             if record_type == STRUCT_TYPE_GICD {
-                let version = unsafe { *((base_address + 0x20) as *const u8) };
-                if version == 0x03 || version == 0x04 {
-                    return Some(unsafe { *((base_address + 8) as *const u64) } as usize);
-                }
+                return unsafe {
+                    Some((
+                        *((base_address + 20) as *const u8),
+                        *((base_address + 8) as *const u64) as usize,
+                    ))
+                };
             }
             base_address += record_length as usize;
         }

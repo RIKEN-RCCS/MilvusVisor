@@ -5,16 +5,11 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
+use crate::paging::{
+    add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
+};
 use crate::{
-    allocate_memory, free_memory,
-    gic::restore_gic,
-    multi_core::{power_off_cpu, NUMBER_OF_RUNNING_AP, STACK_TO_FREE_LATER},
-    paging::{
-        add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
-    },
-    psci::PsciReturnCode,
-    smmu::restore_smmu_status,
-    StoredRegisters, BSP_MPIDR,
+    allocate_memory, free_memory, gic, multi_core, psci, smmu, StoredRegisters, BSP_MPIDR,
 };
 
 use common::{
@@ -118,13 +113,8 @@ fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> 
 #[inline(never)]
 fn add_memory_area_to_memory_save_list(far_el2: u64) {
     let fault_address =
-        cpu::convert_virtual_address_to_intermediate_physical_address_el1_read(far_el2 as usize)
-            .unwrap_or_else(|_| {
-                cpu::convert_virtual_address_to_intermediate_physical_address_el1_write(
-                    far_el2 as usize,
-                )
-                .unwrap_or_else(|_| panic!("Failed to convert FAR_EL2({:#X})", far_el2))
-            })
+        cpu::convert_virtual_address_to_intermediate_physical_address_el1_write(far_el2 as usize)
+            .unwrap_or_else(|_| panic!("Failed to convert FAR_EL2({:#X})", far_el2))
             & PAGE_MASK;
 
     pr_debug!("Fault Address: {:#X}", fault_address);
@@ -235,6 +225,7 @@ fn restore_memory(list: &[MemorySaveListEntry]) {
 }
 
 static mut ORIGINAL_INSTRUCTION: u32 = 0;
+
 pub fn save_original_instruction_and_insert_hvc(address: usize, hvc_number: u16) {
     if cpu::convert_virtual_address_to_physical_address_el2_write(address & PAGE_MASK).is_err() {
         map_address(
@@ -250,8 +241,8 @@ pub fn save_original_instruction_and_insert_hvc(address: usize, hvc_number: u16)
     }
     let hvc_instruction = 0b11010100000 << 21 | (hvc_number as u32) << 5 | 0b00010;
     unsafe {
-        ORIGINAL_INSTRUCTION = *(address as usize as *const u32);
-        *(address as usize as *mut u32) = hvc_instruction;
+        ORIGINAL_INSTRUCTION = *(address as *const u32);
+        *(address as *mut u32) = hvc_instruction;
     }
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
@@ -359,13 +350,13 @@ pub fn enter_restore_process() -> ! {
         including add_memory_access_trap/remove_memory_access_trap
     */
 
+    cpu::clean_data_cache_all();
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
-    /* TODO: check if register access is enabled. */
-    cpu::set_icc_sgi1r_el1(1 << 40); /* Broad Cast */
-    cpu::set_icc_sgi0r_el1(1 << 40); /* Broad Cast */
+
+    /* wake all CPUs up from WFI/WFE */
+    gic::broadcast_sgi();
     cpu::send_event_all();
-    /* TODO: broadcast NMI to wake the processors up from wfi/wfe */
 
     restore_main()
 }
@@ -382,40 +373,41 @@ fn restore_main() -> ! {
     cpu::local_irq_fiq_save();
     if unsafe { BSP_MPIDR } != cpu::get_mpidr_el1() {
         pr_debug!("This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)", cpu::get_mpidr_el1());
-        let result = power_off_cpu();
+        let result = multi_core::power_off_cpu();
         panic!(
             "Failed to call CPU_OFF: {:#X?}",
-            PsciReturnCode::try_from(result)
+            psci::PsciReturnCode::try_from(result)
         );
     }
     println!("BSP entered the restore process.");
     println!("Wait until all APs are powered off...");
     cpu::dsb();
     cpu::isb();
-    while NUMBER_OF_RUNNING_AP.load(Ordering::Relaxed) != 0 {
+    while multi_core::NUMBER_OF_RUNNING_AP.load(Ordering::Relaxed) != 0 {
         core::hint::spin_loop();
     }
     println!("All APs are powered off.");
 
     modify_all_enable_bit_of_stage2_top_level_entries(true);
     /* Now, we can call add_memory_access_trap/remove_memory_access_trap */
+    gic::remove_sgi();
 
     /* Free last one AP's stack if needed */
-    let old_stack = STACK_TO_FREE_LATER.load(Ordering::Relaxed);
+    let old_stack = multi_core::STACK_TO_FREE_LATER.load(Ordering::Relaxed);
     if old_stack != 0 {
         if let Err(err) = free_memory(old_stack, STACK_PAGES) {
             println!("Failed to free stack: {:?}", err);
         }
-        STACK_TO_FREE_LATER.store(0, Ordering::Relaxed);
+        multi_core::STACK_TO_FREE_LATER.store(0, Ordering::Relaxed);
     }
 
     /* Restore GIC */
     if let Some(acpi_rsdp) = unsafe { crate::ACPI_RSDP } {
-        restore_gic(acpi_rsdp);
+        gic::restore_gic(acpi_rsdp.get());
     }
 
     #[cfg(feature = "smmu")]
-    restore_smmu_status();
+    smmu::restore_smmu_status();
 
     /* Restore saved registers */
     let saved_registers = unsafe { SAVED_SYSTEM_REGISTERS.assume_init_read() };
