@@ -12,6 +12,8 @@
 
 use core::arch::asm;
 use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
+use core::ptr::NonNull;
 
 use common::{cpu::*, *};
 use uefi::{
@@ -38,8 +40,8 @@ static mut INTERRUPT_FLAG: MaybeUninit<InterruptFlag> = MaybeUninit::uninit();
 
 static mut IMAGE_HANDLE: EfiHandle = 0;
 static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
-static mut ACPI_20_TABLE_ADDRESS: Option<usize> = None;
-static mut DTB_ADDRESS: Option<usize> = None;
+static mut ACPI_20_TABLE_ADDRESS: Option<NonZeroUsize> = None;
+static mut DTB_ADDRESS: Option<NonZeroUsize> = None;
 static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit();
 #[cfg(feature = "tftp")]
 static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
@@ -106,20 +108,20 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     }
 
     let ecam_info = if let Some(rsdp) = unsafe { ACPI_20_TABLE_ADDRESS } {
-        pci::detect_pci_space(rsdp)
+        pci::detect_pci_space(rsdp.get())
     } else {
         None
     };
 
     let spin_table_info = if let Some(dtb_address) = unsafe { DTB_ADDRESS } {
-        detect_spin_table(dtb_address)
+        detect_spin_table(dtb_address.get())
     } else {
         None
     };
 
     #[cfg(feature = "smmu")]
     let smmu_v3_base_address = if let Some(acpi_address) = unsafe { ACPI_20_TABLE_ADDRESS } {
-        smmu::detect_smmu(acpi_address)
+        smmu::detect_smmu(acpi_address.get()).and_then(|a| NonZeroUsize::new(a))
     } else {
         None
     };
@@ -129,7 +131,11 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     /* Stack for BSP */
     let stack_address = allocate_memory(STACK_PAGES, None).expect("Failed to alloc stack")
         + (STACK_PAGES << PAGE_SHIFT);
-    let memory_save_list = create_memory_save_list(b_s);
+
+    #[cfg(feature = "fast_restore")]
+    let memory_save_list = NonNull::new(create_memory_save_list(b_s));
+    #[cfg(not(feature = "fast_restore"))]
+    let memory_save_list = None;
 
     #[cfg(feature = "edit_dtb_memory")]
     if let Some(dtb_address) = unsafe { DTB_ADDRESS } {
@@ -141,7 +147,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
         /* Edit DTB's memory region */
         let dtb_total_size = dtb::add_new_memory_reservation_entry_to_dtb(
-            dtb_address,
+            dtb_address.get(),
             new_dtb_address,
             size,
             allocated_memory_address,
@@ -168,9 +174,9 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         serial_port: serial,
         ecam_info,
         smmu_v3_base_address,
-        exit_boot_service_address: unsafe {
+        exit_boot_service_address: NonZeroUsize::new(unsafe {
             (*(*SYSTEM_TABLE).efi_boot_services).exit_boot_services
-        } as usize,
+        } as usize),
     };
     unsafe {
         (core::mem::transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info)
@@ -213,10 +219,10 @@ fn detect_acpi_and_dtb(system_table: &EfiSystemTable) {
         pr_debug!("GUID: {:#X?}", table.vendor_guid);
         if table.vendor_guid == EFI_DTB_TABLE_GUID {
             pr_debug!("Detect DTB");
-            unsafe { DTB_ADDRESS = Some(table.vendor_table) };
+            unsafe { DTB_ADDRESS = NonZeroUsize::new(table.vendor_table) };
         } else if table.vendor_guid == EFI_ACPI_20_TABLE_GUID {
             pr_debug!("Detect ACPI 2.0");
-            unsafe { ACPI_20_TABLE_ADDRESS = Some(table.vendor_table) };
+            unsafe { ACPI_20_TABLE_ADDRESS = NonZeroUsize::new(table.vendor_table) };
         }
     }
 }
@@ -320,7 +326,12 @@ pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationE
 /// When device tree is available, this function searches "cpu" node and check "cpu-release-addr".
 /// When "cpu-release-addr" exists, secondary processors are enabled by spin-table,
 /// This finds area of spin-table(this function assumes "cpu-release-addr" is continued linearly.)
-fn detect_spin_table(dtb_address: usize) -> Option<(usize /* Base Address */, usize /* Length */)> {
+fn detect_spin_table(
+    dtb_address: usize,
+) -> Option<(
+    usize,        /* Base Address */
+    NonZeroUsize, /* Length */
+)> {
     let dtb_analyzer = dtb::DtbAnalyser::new(dtb_address).unwrap();
     let mut search_holder = dtb_analyzer.get_root_node().get_search_holder().unwrap();
     let Ok(Some(cpu_node)) = search_holder.search_next_device_by_node_name(b"cpu", &dtb_analyzer)
@@ -347,7 +358,7 @@ fn detect_spin_table(dtb_address: usize) -> Option<(usize /* Base Address */, us
         length = release_address + core::mem::size_of::<u64>() - base_address;
         pr_debug!("CPU Release Address: {:#X}", release_address);
     }
-    Some((base_address, length))
+    Some((base_address, NonZeroUsize::new(length).unwrap()))
 }
 
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
@@ -701,6 +712,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     return entry_point;
 }
 
+#[cfg(feature = "fast_restore")]
 fn create_memory_save_list(b_s: &EfiBootServices) -> &'static mut [MemorySaveListEntry] {
     const MEMORY_SAVE_LIST_PAGES: usize = 3;
     const MEMORY_SAVE_LIST_SIZE: usize = MEMORY_SAVE_LIST_PAGES << PAGE_SHIFT;
@@ -764,7 +776,7 @@ fn create_memory_save_list(b_s: &EfiBootServices) -> &'static mut [MemorySaveLis
     if let Err(e) = b_s.free_pool(memory_map_info.descriptor_address) {
         println!("Failed to free pool for the memory map: {:?}", e);
     }
-    return list;
+    list
 }
 
 #[cfg(debug_assertions)]

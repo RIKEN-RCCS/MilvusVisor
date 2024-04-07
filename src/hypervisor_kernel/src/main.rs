@@ -14,6 +14,7 @@
 
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
 
 use common::cpu::*;
 use common::spin_flag::SpinLockFlag;
@@ -45,7 +46,7 @@ const EC_MRS_MSR: u8 = 0b011000;
 
 static mut MEMORY_ALLOCATOR: (SpinLockFlag, MaybeUninit<MemoryAllocator>) =
     (SpinLockFlag::new(), MaybeUninit::uninit());
-static mut ACPI_RSDP: Option<usize> = None;
+static mut ACPI_RSDP: Option<NonZeroUsize> = None;
 static mut BSP_MPIDR: u64 = 0;
 
 #[repr(C)]
@@ -115,34 +116,36 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     }
 
     if let Some(rsdp_address) = system_information.acpi_rsdp_address {
-        gic::init_gic(rsdp_address);
+        gic::init_gic(rsdp_address.get());
     }
 
     #[cfg(feature = "smmu")]
     if let Some(smmu_base_address) = system_information.smmu_v3_base_address {
         smmu::init_smmu(
-            smmu_base_address,
-            system_information
-                .acpi_rsdp_address
-                .and_then(|rsdp| acpi::get_acpi_table(rsdp, &acpi::iort::IORT::SIGNATURE).ok()),
+            smmu_base_address.get(),
+            system_information.acpi_rsdp_address.and_then(|rsdp| {
+                acpi::get_acpi_table(rsdp.get(), &acpi::iort::IORT::SIGNATURE).ok()
+            }),
         );
     }
 
     if let Some((spin_table_address, length)) = system_information.spin_table_info {
-        multi_core::setup_spin_table(spin_table_address, length);
+        multi_core::setup_spin_table(spin_table_address, length.get());
     }
 
     #[cfg(feature = "acpi_table_protection")]
     if let Some(rsdp_address) = unsafe { ACPI_RSDP } {
-        acpi_protect::init_table_protection(rsdp_address);
+        acpi_protect::init_table_protection(rsdp_address.get());
     }
 
     #[cfg(feature = "fast_restore")]
-    {
+    if let Some(list) = system_information.memory_save_list {
         /* Fast Restore Initialization */
-        fast_restore::add_memory_save_list(system_information.memory_save_list);
-        fast_restore::add_trap_to_exit_boot_service(system_information.exit_boot_service_address);
+        fast_restore::add_memory_save_list(list.as_ptr());
         fast_restore::create_memory_trap_for_save_memory();
+        if let Some(exit_boot_service_address) = system_information.exit_boot_service_address {
+            fast_restore::add_trap_to_exit_boot_service(exit_boot_service_address.get());
+        }
     }
 
     unsafe { BSP_MPIDR = get_mpidr_el1() };

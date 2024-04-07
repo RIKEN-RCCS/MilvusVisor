@@ -26,6 +26,9 @@ pub use stack_memory_allocator::MemoryAllocator;
 
 use crate::serial_port::SerialPortInfo;
 
+use core::num::NonZeroUsize;
+use core::ptr::NonNull;
+
 /// The name of this hypervisor
 pub const HYPERVISOR_NAME: &'static str = "MilvusVisor";
 /// The hash value of VCS from the environment variable
@@ -94,15 +97,18 @@ pub const MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG: usize = usize::MAX;
 /// For communicating about system registers between hypervisor_bootloader and hypervisor_kernel
 pub struct SystemInformation {
     pub vbar_el2: u64,
-    pub acpi_rsdp_address: Option<usize>,
+    pub acpi_rsdp_address: Option<NonZeroUsize>,
     pub available_memory_info: (
         usize, /* base_address */
         usize, /* number of pages */
     ),
-    pub spin_table_info: Option<(usize /* base_address */, usize /* length */)>,
-    pub memory_save_list: *mut [MemorySaveListEntry],
+    pub spin_table_info: Option<(
+        usize,        /* base_address(may be zero, not NULL) */
+        NonZeroUsize, /* length */
+    )>,
+    pub memory_save_list: Option<NonNull<[MemorySaveListEntry]>>,
     pub serial_port: Option<SerialPortInfo>,
     pub ecam_info: Option<EcamInfo>,
-    pub smmu_v3_base_address: Option<usize>,
-    pub exit_boot_service_address: usize,
+    pub smmu_v3_base_address: Option<NonZeroUsize>,
+    pub exit_boot_service_address: Option<NonZeroUsize>,
 }

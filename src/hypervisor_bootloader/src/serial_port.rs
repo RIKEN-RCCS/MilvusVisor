@@ -7,6 +7,7 @@
 
 use common::acpi::{get_acpi_table, GeneralAddressStructure};
 use common::serial_port::{SerialPortInfo, SerialPortType};
+use core::num::NonZeroUsize;
 
 fn try_to_get_serial_info_from_acpi(rsdp_address: usize) -> Option<SerialPortInfo> {
     let spcr = get_acpi_table(rsdp_address, b"SPCR");
@@ -85,7 +86,10 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
 }
 
 #[cfg(feature = "raspberrypi")]
-pub fn detect_serial_port(_: Option<usize>, _: Option<usize>) -> Option<SerialPortInfo> {
+pub fn detect_serial_port(
+    _: Option<NonZeroUsize>,
+    _: Option<NonZeroUsize>,
+) -> Option<SerialPortInfo> {
     println!("MIDR_EL1; {:#X}", common::cpu::get_midr_el1());
     match (common::cpu::get_midr_el1() >> 4) & 0xFFF {
         /* Raspberry Pi 3 */
@@ -106,18 +110,18 @@ pub fn detect_serial_port(_: Option<usize>, _: Option<usize>) -> Option<SerialPo
 
 #[cfg(not(feature = "raspberrypi"))]
 pub fn detect_serial_port(
-    acpi_table: Option<usize>,
-    dtb_address: Option<usize>,
+    acpi_table: Option<NonZeroUsize>,
+    dtb_address: Option<NonZeroUsize>,
 ) -> Option<SerialPortInfo> {
     if let Some(acpi_table) = acpi_table {
-        let result = try_to_get_serial_info_from_acpi(acpi_table);
+        let result = try_to_get_serial_info_from_acpi(acpi_table.get());
 
         if result.is_some() {
             return result;
         }
     }
     if let Some(dtb_address) = dtb_address {
-        let result = try_to_get_serial_info_from_dtb(dtb_address);
+        let result = try_to_get_serial_info_from_dtb(dtb_address.get());
 
         if result.is_some() {
             return result;
