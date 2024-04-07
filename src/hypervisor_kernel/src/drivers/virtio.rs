@@ -210,26 +210,43 @@ pub(super) fn append_virtio_ssdt(
     }
 
     /* Append */
-    let Ok(ssdt) = common::acpi::get_acpi_table(rsdp_address, b"SSDT") else {
-        println!("Failed to find SSDT");
+    let table = if let Ok(ssdt) = common::acpi::get_acpi_table(rsdp_address, b"SSDT") {
+        println!("Using SSDT to append AML");
+        ssdt
+    } else if let Ok(dsdt) = common::acpi::get_acpi_table(rsdp_address, b"DSDT") {
+        println!("Using DSDT to append AML");
+        dsdt
+    } else if let Ok(fadt) = common::acpi::get_acpi_table(rsdp_address, b"FACP") {
+        let mut dsdt = unsafe { *((fadt + 140) as *const u64) } as usize;
+        if dsdt == 0 {
+            dsdt = unsafe { *((fadt + 40) as *const u32) } as usize;
+            if dsdt == 0 {
+                println!("Failed to find DSDT");
+                return;
+            }
+        }
+        println!("Using DSDT to append AML");
+        dsdt
+    } else {
+        println!("Failed to find SSDT/DSDT");
         return;
     };
-    let length = unsafe { &mut *((ssdt + 4) as *mut u32) };
+    let length = unsafe { &mut *((table + 4) as *mut u32) };
     unsafe {
         core::ptr::copy_nonoverlapping(
             &ssdt_template as *const u8,
-            (ssdt + (*length as usize)) as *mut u8,
+            (table + (*length as usize)) as *mut u8,
             SSDT_TEMPLATE_SIZE,
         )
     };
     *length += SSDT_TEMPLATE_SIZE as u32;
 
     /* Calculate Checksum */
-    let checksum = unsafe { &mut *((ssdt + 9) as *mut u8) };
+    let checksum = unsafe { &mut *((table + 9) as *mut u8) };
     *checksum = 0;
     let mut s = 0i32;
     for i in 0..(*length as usize) {
-        s = s.wrapping_add(unsafe { *((ssdt + i) as *const u8) } as i32);
+        s = s.wrapping_add(unsafe { *((table + i) as *const u8) } as i32);
     }
     *checksum = ((-s) & 0xff) as u8;
 }

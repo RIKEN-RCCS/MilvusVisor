@@ -13,6 +13,7 @@
 //!
 
 use core::mem::size_of;
+use core::num::NonZeroUsize;
 
 use common::spin_flag::SpinLockFlag;
 
@@ -62,7 +63,7 @@ struct VirtioNetHdr {
 /// VirtioNetwork::create_new_device(
 ///   0x45000000, // Base Address of MMIO, the size of MMIO is VirtioNetwork::MMIO_SIZE
 ///   40, // INT_ID assigned for this device, select the number which is not used by physical devices
-///   receive. // The function pointer to receive handler
+///   receive, // The function pointer to receive handler
 ///   acpi_rsdp_address, // The RSDP address, it is used to notify the MMIO area to OS
 ///   1, // The number to generate device name, it must be unique in virtio devices
 ///  ).expect("Failed to create virtio network");
@@ -110,7 +111,7 @@ impl VirtioNetwork {
         base_address: usize,
         int_id: u32,
         receive_callback: fn(frame: &[u8], send_frame: &mut dyn FnMut(&[u8]) -> Result<(), ()>),
-        rsdp_address: Option<usize>,
+        rsdp_address: Option<NonZeroUsize>,
         device_suffix: u8,
     ) -> Result<&'static mut Self, ()> {
         if device_suffix > 0xF {
@@ -181,7 +182,7 @@ impl VirtioNetwork {
             } else {
                 b'A' + (device_suffix - 0xA)
             };
-            append_virtio_ssdt(rsdp, [b'V', b'N', b'T', suffix], base_address, int_id);
+            append_virtio_ssdt(rsdp.get(), [b'V', b'N', b'T', suffix], base_address, int_id);
         }
         Ok(device)
     }
