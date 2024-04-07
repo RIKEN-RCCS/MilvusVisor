@@ -41,8 +41,9 @@ If you want to build with extra features, you can build by `make custom_all FEAT
     - Control some A64FX specific registers
 - PXE Boot (Feature Name: `tftp`)
     - Download hypervisor_kernel and payload(usually, bootloader) via TFTP
-- Raspberry Pi (Feature Name: `raspberrypi`)
-    - For running MilvusVisor on a Raspberry pi. See [the document](./docs/raspberry_pi4.md) for details.
+- Raspberry Pi 4 (Feature Name: `raspberrypi`)
+    - For running MilvusVisor on a Raspberry Pi 4. See [the document](./docs/raspberry_pi4.md) for details.
+    - Note that you do not need to use this option for Raspberry Pi 5. Please see the "Tested machines" section for more detail.
 - Virtio Network (Feature Name: `virtio_net`)
     - Add virtual devices to communicate with OS
     - This is the interface, you must implement a protocol stack
@@ -58,19 +59,23 @@ We have tested MilvusVisor on the following machines.
 - GIGABYTE E252-P30
 - QEMU (>= 7.1.0)
 - Bluefield-2
-- Rasspberry pi 4 model B
+- Rasspberry Pi 4 model B
     - The setup steps for Raspbrry pi are different from the other machines. So please also
       see [the document](./docs/raspberry_pi4.md) when you try MilvusVisor on Raspberry pi.
+- Raspberry Pi 5
+    - With https://github.com/worproject/rpi5-uefi
+    - Build without `raspberrypi`
 
 The following table shows which feature worked on which machines.
 
-| Test items \\ Machine                                       | FX700 | FX1000 | E252-P30 | QEMU | Bluefield-2 | RPi4B |
-|:------------------------------------------------------------|:-----:|:------:|:--------:|:----:|:-----------:|:-----:|
-| Booting Linux on MilvusVisor (Multi-core)                   |   o   |   o    |    o     |  o   |      o      |   o   |
-| Protecting non-volatile data of Intel I210                  |   o   |   -    |    -     |  -   |      -      |   -   |
-| Protecting firmware update of Mellanox Technologies MT27800 |   o   |   -    |    -     |  -   |      -      |   -   |
-| Protecting MilvusVisor itself against DMA attack            |   o   |   -    |    -     |  -   |      -      |   -   |
-| Fast Restore                                                |   o   |   o    |    -     |  -   |      -      |   -   |
+| Test items (o: works, -: Not works, ?: Not tested) \\ Machine | FX700 | FX1000 | E252-P30 | QEMU | Bluefield-2 | RPi4B | RPi5 |
+|:--------------------------------------------------------------|:-----:|:------:|:--------:|:----:|:-----------:|:-----:|:----:|
+| Booting Linux on MilvusVisor (Multi-core)                     |   o   |   o    |    o     |  o   |      o      |   o   |  o   |
+| Protecting non-volatile data of Intel I210                    |   o   |   -    |    -     |  ?   |      -      |   -   |  ?   |
+| Protecting firmware update of Mellanox Technologies MT27800   |   o   |   -    |    -     |  ?   |      -      |   -   |  ?   |
+| Protecting MilvusVisor itself against DMA attack              |   o   |   -    |    -     |  -   |      -      |   -   |  -   |
+| Fast Restore                                                  |   o   |   o    |    -     |  o   |      -      |   -   |  o   |
+| Virtio Network                                                |   -   |   -    |    ?     |  o   |      o      |   -   |  -   |
 
 ## How to build the hypervisor
 
