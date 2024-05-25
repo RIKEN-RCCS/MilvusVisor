@@ -54,7 +54,7 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
     };
     loop {
         match serial_node.search_next_device_by_compatible(
-            &[b"arm,pl011", b"amlogic,meson-gx-uart"],
+            &[b"arm,pl011", b"amlogic,meson-gx-uart", b"xlnx,xuartps"],
             &dtb_analyser,
         ) {
             Ok(Some((node, index))) => {
@@ -70,6 +70,7 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
                     port_type: match index {
                         0 => SerialPortType::ArmPl011,
                         1 => SerialPortType::MesonGxUart,
+                        2 => SerialPortType::XilinxUart,
                         _ => unreachable!(),
                     },
                 });

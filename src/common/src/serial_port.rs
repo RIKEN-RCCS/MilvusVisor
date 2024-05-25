@@ -13,6 +13,7 @@ pub enum SerialPortType {
     ArmPl011,
     ArmSbsaGenericUart,
     MesonGxUart,
+    XilinxUart,
 }
 
 #[derive(Clone)]

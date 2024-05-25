@@ -12,10 +12,12 @@ use arm_sbsa_generic_uart::SerialSbsaUart;
 use common::serial_port::{SerialPortInfo, SerialPortType};
 use common::spin_flag::SpinLockFlag;
 use meson_gx_uart::SerialMesonGxUart;
+use xilinx_uart::SerialXilinxUart;
 
 mod arm_pl011;
 mod arm_sbsa_generic_uart;
 mod meson_gx_uart;
+mod xilinx_uart;
 
 trait SerialPortDevice {
     fn new(address: usize) -> Self;
@@ -27,6 +29,7 @@ enum Device {
     ArmPl011(SerialArmPl011),
     ArmSbsaGenericUart(SerialSbsaUart),
     MesonGxUart(SerialMesonGxUart),
+    XilinxUart(SerialXilinxUart),
 }
 
 impl SerialPortDevice for Device {
@@ -39,6 +42,7 @@ impl SerialPortDevice for Device {
             Device::ArmPl011(d) => d.write_char(c),
             Device::ArmSbsaGenericUart(d) => d.write_char(c),
             Device::MesonGxUart(d) => d.write_char(c),
+            Device::XilinxUart(d) => d.write_char(c),
         }
     }
 
@@ -47,6 +51,7 @@ impl SerialPortDevice for Device {
             Device::ArmPl011(d) => d.is_write_fifo_full(),
             Device::ArmSbsaGenericUart(d) => d.is_write_fifo_full(),
             Device::MesonGxUart(d) => d.is_write_fifo_full(),
+            Device::XilinxUart(d) => d.is_write_fifo_full(),
         }
     }
 }
@@ -68,6 +73,9 @@ impl SerialPort {
                 }
                 SerialPortType::MesonGxUart => {
                     Device::MesonGxUart(SerialMesonGxUart::new(info.virtual_address))
+                }
+                SerialPortType::XilinxUart => {
+                    Device::XilinxUart(SerialXilinxUart::new(info.virtual_address))
                 }
             },
             write_lock: SpinLockFlag::new(),
