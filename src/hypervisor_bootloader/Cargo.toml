@@ -28,6 +28,7 @@ save_dtb = []
 raspberrypi = ["edit_dtb_memory", "save_dtb"]
 virtio = []
 virtio_net = []
+embed_kernel = []
 
 [dependencies]
 common = { path = "../common" }

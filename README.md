@@ -43,12 +43,16 @@ If you want to build with extra features, you can build by `make custom_all FEAT
     - Download hypervisor_kernel and payload(usually, bootloader) via TFTP
 - Raspberry Pi 4 (Feature Name: `raspberrypi`)
     - For running MilvusVisor on a Raspberry Pi 4. See [the document](./docs/raspberry_pi4.md) for details.
-    - Note that you do not need to use this option for Raspberry Pi 5. Please see the "Tested machines" section for more detail.
+    - Note that you do not need to use this option for Raspberry Pi 5. Please see the "Tested machines" section for more
+      detail.
 - Virtio Network (Feature Name: `virtio_net`)
     - Add virtual devices to communicate with OS
     - This is the interface, you must implement a protocol stack
     - For more detail, see [virtio_net.rs](./src/hypervisor_kernel/src/drivers/virtio_net.rs)
     - This is an experimental feature, this may not work on some devices
+- Embed the hypervisor kernel into the bootloader (Feature Name: `embed_kernel`)
+    - Embed the hypervisor kernel and use the built-in hypervisor kernel
+    - This is for the device which does not support file systems
 
 ## Tested machines
 

@@ -73,6 +73,7 @@ fn build(mut args: Args, cargo_path: &String) {
     // default settings
     let mut is_parallel = false;
     let mut is_release = false;
+    let mut is_kernel_embedded = false;
     let mut cargo_args: Vec<String> = vec!["build".to_string()];
     let mut output_directory = "bin/EFI/BOOT".to_string();
     let hypervisor_bootloader_name = "hypervisor_bootloader";
@@ -89,6 +90,9 @@ fn build(mut args: Args, cargo_path: &String) {
             cargo_args.push("--features".to_string());
             let f;
             try_get_argument!(args, f, "Failed to get features", 1);
+            if f.contains("embed_kernel") {
+                is_kernel_embedded = true;
+            }
             cargo_args.push(f);
         } else if v == "-p" || v == "--parallel" {
             is_parallel = true;
@@ -119,6 +123,11 @@ fn build(mut args: Args, cargo_path: &String) {
     bootloader_command.args(cargo_args.clone());
     kernel_command.args(cargo_args);
 
+    if is_kernel_embedded && is_parallel {
+        is_parallel = false;
+        eprintln!("Parallel build is disabled by \"embed_kernel\"");
+    }
+
     if is_parallel {
         let mut bootloader_child = bootloader_command
             .spawn()
@@ -140,16 +149,18 @@ fn build(mut args: Args, cargo_path: &String) {
             exit(kernel_result.code().unwrap_or(1));
         }
     } else {
-        let bootloader_result = bootloader_command
-            .spawn()
-            .expect("Failed to run bootloader build")
-            .wait();
-        if bootloader_result.is_err() {
-            exit(1);
-        }
-        let bootloader_result = bootloader_result.unwrap();
-        if !bootloader_result.success() {
-            exit(bootloader_result.code().unwrap_or(1));
+        if !is_kernel_embedded {
+            let bootloader_result = bootloader_command
+                .spawn()
+                .expect("Failed to run bootloader build")
+                .wait();
+            if bootloader_result.is_err() {
+                exit(1);
+            }
+            let bootloader_result = bootloader_result.unwrap();
+            if !bootloader_result.success() {
+                exit(bootloader_result.code().unwrap_or(1));
+            }
         }
 
         let kernel_result = kernel_command
@@ -188,6 +199,22 @@ fn build(mut args: Args, cargo_path: &String) {
     hypervisor_bootloader_binary_path
         .push(hypervisor_bootloader_name.to_string() + hypervisor_bootloader_suffix);
     hypervisor_kernel_binary_path.push(hypervisor_kernel_name);
+
+    // Build bootloader if kernel should be embedded
+    if is_kernel_embedded {
+        std::env::set_var("HYPERVISOR_PATH", hypervisor_kernel_binary_path.clone());
+        let bootloader_result = bootloader_command
+            .spawn()
+            .expect("Failed to run bootloader build")
+            .wait();
+        if bootloader_result.is_err() {
+            exit(1);
+        }
+        let bootloader_result = bootloader_result.unwrap();
+        if !bootloader_result.success() {
+            exit(bootloader_result.code().unwrap_or(1));
+        }
+    }
 
     // Create bin directory
     std::fs::create_dir_all(bin_dir_path).expect("Failed to create output directory");

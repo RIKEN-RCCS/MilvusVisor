@@ -361,6 +361,138 @@ fn detect_spin_table(
     Some((base_address, NonZeroUsize::new(length).unwrap()))
 }
 
+/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] via TFTP
+///
+/// This function loads hypervisor_kernel according to ELF header.
+/// The hypervisor_kernel will be loaded from [`common::HYPERVISOR_PATH`]
+///
+/// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
+/// create new TTBR0_EL2 by copying original page table tree.
+///
+/// # Panics
+/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
+///
+/// # Arguments
+/// * image_handle: EFI Image Handle
+/// * b_s: EfiBootService
+///
+/// # Result
+/// Returns the entry point of hypervisor_kernel
+#[cfg(feature = "tftp")]
+fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
+    let pxe_protocol = pxe::EfiPxeBaseCodeProtocol::open_pxe_handler(image_handle, b_s)
+        .expect("Failed to open PXE Handler");
+    unsafe { PXE_PROTOCOL = pxe_protocol };
+
+    /* Open the server */
+    let server_ip = pxe_protocol
+        .get_server_ip_v4()
+        .expect("Failed to get Server IP");
+    pr_debug!("Server IP: {:?}", server_ip);
+
+    /* Get the hypervisor_kernel size */
+    let mut kernel_size = 0;
+    let mut dummy_buffer = [0u8; 4];
+    let result = pxe_protocol.get_file(
+        dummy_buffer.as_mut_ptr(),
+        &mut kernel_size,
+        server_ip,
+        HYPERVISOR_TFTP_PATH.as_bytes().as_ptr(),
+    );
+    assert_eq!(result, Err(EfiStatus::EfiBufferTooSmall));
+    if kernel_size == 0 {
+        kernel_size = 0x10000;
+        println!(
+            "Failed to get file size, assume file size: {:#X}",
+            kernel_size
+        );
+    }
+    pr_debug!("Kernel Size: {:#X}", kernel_size);
+
+    /* Allocate pool */
+    let kernel_pool = b_s
+        .alloc_pool(kernel_size as usize)
+        .expect("Failed to allocate memory pool");
+
+    /* Get hypervisor_kernel via TFTP */
+    let mut read_size = kernel_size;
+    pxe_protocol
+        .get_file(
+            kernel_pool as *mut u8,
+            &mut read_size,
+            server_ip,
+            HYPERVISOR_TFTP_PATH.as_bytes().as_ptr(),
+        )
+        .expect("Failed to receive file from server");
+    assert_eq!(
+        read_size, kernel_size,
+        "Expected {:#X} Bytes, but read size is {:#X} Bytes.",
+        kernel_size, read_size
+    );
+
+    let read_data = |buffer: *mut u8, offset: usize, read_size: usize| -> Result<usize, ()> {
+        if offset + read_size > kernel_size as usize {
+            println!(
+                "Tried to read {:#X} bytes from {:#X}, but the binaries size is {:#X}",
+                read_size, offset, kernel_size
+            );
+            return Err(());
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping((kernel_pool + offset) as *const u8, buffer, read_size)
+        };
+        Ok(read_size)
+    };
+
+    let entry_point = _load_hypervisor(b_s, read_data);
+
+    if let Err(e) = b_s.free_pool(kernel_pool) {
+        println!("Failed to free the pool: {:?}", e);
+    }
+    return entry_point;
+}
+
+/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] from the embedded binary
+///
+/// This function loads hypervisor_kernel according to ELF header.
+/// The hypervisor_kernel must be embedded.
+///
+/// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
+/// create new TTBR0_EL2 by copying original page table tree.
+///
+/// # Panics
+/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
+///
+/// # Arguments
+/// * image_handle: Unused
+/// * b_s: EfiBootService
+///
+/// # Result
+/// Returns the entry point of hypervisor_kernel
+#[cfg(feature = "embed_kernel")]
+fn load_hypervisor(_image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
+    let hypervisor_kernel = include_bytes!(env!("HYPERVISOR_PATH"));
+    println!("Reading the embedded hypervisor_kernel");
+
+    let read_data = |buffer: *mut u8, offset: usize, read_size: usize| -> Result<usize, ()> {
+        if offset + read_size > hypervisor_kernel.len() {
+            println!(
+                "Tried to read {:#X} bytes from {:#X}, but the binaries size is {:#X}",
+                read_size,
+                offset,
+                hypervisor_kernel.len()
+            );
+            return Err(());
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(hypervisor_kernel[offset..].as_ptr(), buffer, read_size)
+        };
+        Ok(read_size)
+    };
+
+    _load_hypervisor(b_s, read_data)
+}
+
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
 ///
 /// This function loads hypervisor_kernel according to ELF header.
@@ -378,7 +510,7 @@ fn detect_spin_table(
 ///
 /// # Result
 /// Returns the entry point of hypervisor_kernel
-#[cfg(not(feature = "tftp"))]
+#[cfg(not(any(feature = "tftp", feature = "embed_kernel")))]
 fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     use uefi::file;
     let root_protocol =
@@ -391,40 +523,86 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     let hypervisor_protocol = file::EfiFileProtocol::open_file(root_protocol, &file_name_utf16)
         .expect("Failed to open the hypervisor binary file");
 
+    let read_data = |buffer: *mut u8, offset: usize, read_size: usize| -> Result<usize, ()> {
+        if let Err(e) = hypervisor_protocol.seek(offset) {
+            println!("Failed to seek: {:?}", e);
+            return Err(());
+        }
+        match hypervisor_protocol.read(buffer, read_size) {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                println!("Failed to read data from the file: {:?}", e);
+                Err(())
+            }
+        }
+    };
+
+    let entry_point = _load_hypervisor(b_s, read_data);
+
+    if let Err(e) = hypervisor_protocol.close_file() {
+        println!("Failed to clone the HypervisorProtocol: {:?}", e);
+    }
+    if let Err(e) = root_protocol.close_file() {
+        println!("Failed to clone the RootProtocol: {:?}", e);
+    }
+
+    entry_point
+}
+
+/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
+///
+/// This function loads hypervisor_kernel according to ELF header.
+/// The data will be loaded by `read_data`
+///
+/// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
+/// create new TTBR0_EL2 by copying original page table tree.
+///
+/// # Panics
+/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
+///
+/// # Arguments
+/// * b_s: EfiBootService
+/// * read_data: the closure to read hypervisor_kernel, this should return the read size, or error if failed
+///   * buffer: the buffer to write the data
+///   * offset: the offset to start reading
+///   * read_size: the size to read
+///
+/// # Result
+/// Returns the entry point of hypervisor_kernel
+fn _load_hypervisor<F>(b_s: &EfiBootServices, read_data: F) -> usize
+where
+    F: Fn(*mut u8, usize, usize) -> Result<usize, ()>,
+{
     /* Read ElfHeader */
     let mut elf_header: MaybeUninit<elf::Elf64Header> = MaybeUninit::uninit();
     const ELF64_HEADER_SIZE: usize = core::mem::size_of::<elf::Elf64Header>();
-    let read_size = hypervisor_protocol
-        .read(elf_header.as_mut_ptr() as *mut u8, ELF64_HEADER_SIZE)
+    let read_size = read_data(elf_header.as_mut_ptr() as *mut u8, 0, ELF64_HEADER_SIZE)
         .expect("Failed to read Elf header");
-    if read_size != core::mem::size_of_val(&elf_header) {
-        panic!(
-            "Expected {} bytes, but read {} bytes",
-            ELF64_HEADER_SIZE, read_size
-        );
-    }
-
+    assert_eq!(
+        read_size, ELF64_HEADER_SIZE,
+        "Expected {} bytes, but read {} bytes",
+        ELF64_HEADER_SIZE, read_size
+    );
     let elf_header = unsafe { elf_header.assume_init() };
-    if !elf_header.check_elf_header() {
-        panic!("Failed to load the hypervisor");
-    }
-    let program_header_entries_size =
+    assert!(elf_header.check_elf_header(), "Hypervisor is not ELF file");
+
+    /* Read program headers */
+    let program_headers_size =
         elf_header.get_program_header_entry_size() * elf_header.get_num_of_program_header_entries();
     let program_header_pool = b_s
-        .alloc_pool(program_header_entries_size)
+        .alloc_pool(program_headers_size)
         .expect("Failed to allocate the pool for the program header");
-    hypervisor_protocol
-        .seek(elf_header.get_program_header_offset())
-        .expect("Failed to seek for the program header");
-    let read_size = hypervisor_protocol
-        .read(program_header_pool as *mut u8, program_header_entries_size)
-        .expect("Failed to read hypervisor");
-    if read_size != program_header_entries_size {
-        panic!(
-            "Expected {} bytes, but read {} bytes",
-            program_header_entries_size, read_size
-        );
-    }
+    let read_size = read_data(
+        program_header_pool as *mut u8,
+        elf_header.get_program_header_offset(),
+        program_headers_size,
+    )
+    .expect("Failed to read program headers");
+    assert_eq!(
+        read_size, program_headers_size,
+        "Expected {} bytes, but read {} bytes",
+        program_headers_size, read_size
+    );
 
     /* Switch PageTable */
     let cloned_page_table = paging::clone_page_table();
@@ -450,20 +628,18 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
                 allocate_memory(pages, None).expect("Failed to allocate memory for hypervisor");
 
             if info.file_size > 0 {
-                hypervisor_protocol
-                    .seek(info.file_offset)
-                    .expect("Failed to seek for hypervisor segments");
-                let read_size = hypervisor_protocol
-                    .read(physical_base_address as *mut u8, info.file_size)
-                    .expect("Failed to read hypervisor segments");
-                if read_size != info.file_size {
-                    panic!(
-                        "Expected {} bytes, but read {} bytes",
-                        info.file_size, read_size
-                    );
-                }
+                let read_size = read_data(
+                    physical_base_address as *mut u8,
+                    info.file_offset,
+                    info.file_size,
+                )
+                .expect("Failed to read hypervisor segments");
+                assert_eq!(
+                    read_size, info.file_size,
+                    "Expected {} bytes, but read {} bytes",
+                    info.file_size, read_size
+                );
             }
-
             if info.memory_size - info.file_size > 0 {
                 unsafe {
                     core::ptr::write_bytes(
@@ -473,17 +649,19 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
                     )
                 };
             }
-            if info.virtual_base_address < HYPERVISOR_VIRTUAL_BASE_ADDRESS {
-                panic!(
-                    "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_VIRTUAL_BASE_ADDRESS:{:#X}",
-                    info.virtual_base_address, HYPERVISOR_VIRTUAL_BASE_ADDRESS
-                );
-            } else if info.virtual_base_address >= HYPERVISOR_SERIAL_BASE_ADDRESS {
-                panic!(
-                    "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_SERIAL_BASE_ADDRESS:{:#X}",
-                    info.virtual_base_address, HYPERVISOR_SERIAL_BASE_ADDRESS
-                );
-            }
+            assert!(
+                info.virtual_base_address >= HYPERVISOR_VIRTUAL_BASE_ADDRESS,
+                "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_VIRTUAL_BASE_ADDRESS:{:#X}",
+                info.virtual_base_address,
+                HYPERVISOR_VIRTUAL_BASE_ADDRESS
+            );
+            assert!(
+                info.virtual_base_address < HYPERVISOR_SERIAL_BASE_ADDRESS,
+                "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_SERIAL_BASE_ADDRESS:{:#X}",
+                info.virtual_base_address,
+                HYPERVISOR_SERIAL_BASE_ADDRESS
+            );
+
             paging::map_address(
                 physical_base_address,
                 info.virtual_base_address,
@@ -501,12 +679,9 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     if let Err(e) = b_s.free_pool(program_header_pool) {
         println!("Failed to free the pool: {:?}", e);
     }
-    if let Err(e) = hypervisor_protocol.close_file() {
-        println!("Failed to clone the HypervisorProtocol: {:?}", e);
-    }
-    if let Err(e) = root_protocol.close_file() {
-        println!("Failed to clone the RootProtocol: {:?}", e);
-    }
+
+    /* Flush the data cache */
+    clean_data_cache_all();
 
     entry_point
 }
@@ -548,168 +723,6 @@ fn save_dtb(dtb_address: usize, dtb_size: usize, image_handle: EfiHandle, b_s: &
     if let Err(e) = root_protocol.close_file() {
         println!("Failed to clone the RootProtocol: {:?}", e);
     }
-}
-
-/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] via TFTP
-///
-/// This function loads hypervisor_kernel according to ELF header.
-/// The hypervisor_kernel will be loaded from [`common::HYPERVISOR_PATH`]
-///
-/// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
-/// create new TTBR0_EL2 by copying original page table tree.
-///
-/// # Panics
-/// If the loading is failed(including memory allocation, calling UEFI functions), this function panics
-///
-/// # Arguments
-/// * image_handle: EFI Image Handle
-/// * b_s: EfiBootService
-///
-/// # Result
-/// Returns the entry point of hypervisor_kernel
-#[cfg(feature = "tftp")]
-fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
-    let pxe_protocol = pxe::EfiPxeBaseCodeProtocol::open_pxe_handler(image_handle, b_s)
-        .expect("Failed to open PXE Handler");
-    unsafe { PXE_PROTOCOL = pxe_protocol };
-    let mut file_name_ascii: [u8; HYPERVISOR_TFTP_PATH.len() + 1] =
-        [0; HYPERVISOR_TFTP_PATH.len() + 1];
-    for (i, e) in HYPERVISOR_TFTP_PATH.as_bytes().iter().enumerate() {
-        file_name_ascii[i] = *e;
-    }
-
-    let server_ip = pxe_protocol
-        .get_server_ip_v4()
-        .expect("Failed to get Server IP");
-    pr_debug!("Server IP: {:?}", server_ip);
-
-    let mut kernel_size = 0;
-    let mut dummy_buffer = [0u8; 4];
-    let result = pxe_protocol.get_file(
-        dummy_buffer.as_mut_ptr(),
-        &mut kernel_size,
-        server_ip,
-        file_name_ascii.as_ptr(),
-    );
-    assert_eq!(result, Err(EfiStatus::EfiBufferTooSmall));
-
-    if kernel_size == 0 {
-        kernel_size = 0x10000;
-        println!(
-            "Failed to get file size, assume file size: {:#X}",
-            kernel_size
-        );
-    }
-
-    pr_debug!("Kernel Size: {:#X}", kernel_size);
-
-    /* Allocate pool */
-    let kernel_pool = b_s
-        .alloc_pool(kernel_size as usize)
-        .expect("Failed to allocate memory pool");
-
-    /* Read Hypervisor Binary */
-    let mut read_size = kernel_size;
-    pxe_protocol
-        .get_file(
-            kernel_pool as *mut u8,
-            &mut read_size,
-            server_ip,
-            file_name_ascii.as_ptr(),
-        )
-        .expect("Failed to receive file from server");
-    if read_size != kernel_size {
-        panic!(
-            "Expected {:#X} Bytes, but read size is {:#X} Bytes.",
-            kernel_size, read_size
-        );
-    }
-
-    /* Read ElfHeader */
-    let elf_header: &elf::Elf64Header = unsafe { &*(kernel_pool as *const elf::Elf64Header) };
-    if !elf_header.check_elf_header() {
-        panic!("Failed to load the hypervisor");
-    }
-
-    /* Switch PageTable */
-    let cloned_page_table = paging::clone_page_table();
-    unsafe {
-        ORIGINAL_PAGE_TABLE = get_ttbr0_el2() as usize;
-        ORIGINAL_TCR_EL2 = get_tcr_el2();
-    };
-    set_ttbr0_el2(cloned_page_table as u64);
-    pr_debug!(
-        "Switched TTBR0_EL2 from {:#X} to {:#X}",
-        unsafe { ORIGINAL_PAGE_TABLE },
-        cloned_page_table
-    );
-
-    assert!(
-        (kernel_size as usize)
-            > elf_header.get_program_header_entry_size()
-                * elf_header.get_num_of_program_header_entries()
-    );
-
-    for index in 0..elf_header.get_num_of_program_header_entries() {
-        if let Some(info) =
-            elf_header.get_segment_info(index, kernel_pool + elf_header.get_program_header_offset())
-        {
-            pr_debug!("{:#X?}", info);
-            if info.memory_size == 0 {
-                continue;
-            }
-            let pages = (((info.memory_size - 1) & PAGE_MASK) >> PAGE_SHIFT) + 1;
-            let physical_base_address =
-                allocate_memory(pages, None).expect("Failed to allocate memory for hypervisor");
-
-            if info.file_size > 0 {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        (kernel_pool + info.file_offset) as *const u8,
-                        physical_base_address as *mut u8,
-                        info.file_size,
-                    )
-                };
-            }
-
-            if info.memory_size - info.file_size > 0 {
-                unsafe {
-                    core::ptr::write_bytes(
-                        (physical_base_address + info.file_size) as *mut u8,
-                        0,
-                        info.memory_size - info.file_size,
-                    )
-                };
-            }
-            if info.virtual_base_address < HYPERVISOR_VIRTUAL_BASE_ADDRESS {
-                panic!(
-                    "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_VIRTUAL_BASE_ADDRESS:{:#X}",
-                    info.virtual_base_address, HYPERVISOR_VIRTUAL_BASE_ADDRESS
-                );
-            } else if info.virtual_base_address >= HYPERVISOR_SERIAL_BASE_ADDRESS {
-                panic!(
-                    "Expected VirtualBaseAddress:{:#X} >= HYPERVISOR_SERIAL_BASE_ADDRESS:{:#X}",
-                    info.virtual_base_address, HYPERVISOR_SERIAL_BASE_ADDRESS
-                );
-            }
-            paging::map_address(
-                physical_base_address,
-                info.virtual_base_address,
-                pages << PAGE_SHIFT,
-                info.readable,
-                info.writable,
-                info.executable,
-                false,
-            )
-            .expect("Failed to map hypervisor");
-        }
-    }
-
-    let entry_point = elf_header.get_entry_point();
-    if let Err(e) = b_s.free_pool(kernel_pool) {
-        println!("Failed to free the pool: {:?}", e);
-    }
-    return entry_point;
 }
 
 #[cfg(feature = "fast_restore")]
