@@ -10,6 +10,8 @@
 //!
 //! Supported MADT Revision: ~ 5
 
+use core::ptr::read_unaligned;
+
 const STRUCT_TYPE_GICC: u8 = 0x0B;
 const STRUCT_TYPE_GICD: u8 = 0x0C;
 const STRUCT_TYPE_ITS: u8 = 0x0F;
@@ -89,7 +91,7 @@ impl MADT {
                 return unsafe {
                     Some((
                         *((base_address + 20) as *const u8),
-                        *((base_address + 8) as *const u64) as usize,
+                        read_unaligned((base_address + 8) as *const u64) as usize,
                     ))
                 };
             }
@@ -110,7 +112,7 @@ impl MADT {
 }
 
 impl Iterator for GicCpuInterfaceStructureList {
-    type Item = &'static GicCpuInterfaceStructure;
+    type Item = GicCpuInterfaceStructure;
     fn next(&mut self) -> Option<Self::Item> {
         if self.pointer >= self.limit {
             return None;
@@ -122,7 +124,8 @@ impl Iterator for GicCpuInterfaceStructureList {
         self.pointer += record_length as usize;
         match record_type {
             STRUCT_TYPE_GICC => {
-                let gicc_struct = unsafe { &*(record_base as *const GicCpuInterfaceStructure) };
+                let gicc_struct =
+                    unsafe { read_unaligned(record_base as *const GicCpuInterfaceStructure) };
                 if (gicc_struct.flags & GICC_FLAGS_ENABLED) != 0 {
                     /* Enabled */
                     Some(gicc_struct)
@@ -153,7 +156,9 @@ impl Iterator for GicInterruptTranslationServiceStructureList {
 
         self.pointer += record_length as usize;
         match record_type {
-            STRUCT_TYPE_ITS => Some(unsafe { *((record_base + 8) as *const u64) } as usize),
+            STRUCT_TYPE_ITS => {
+                Some(unsafe { read_unaligned((record_base + 8) as *const u64) } as usize)
+            }
             _ => self.next(),
         }
     }

@@ -9,6 +9,8 @@
 //! I/O Remapping Table
 //!
 
+use core::ptr::read_unaligned;
+
 #[repr(C, packed)]
 pub struct IORT {
     signature: [u8; 4],
@@ -71,7 +73,7 @@ impl IORT {
             if unsafe { *(node_address as *const u8) } == SmmuV3Node::NODE_TYPE {
                 return Some(unsafe { &*(node_address as *const SmmuV3Node) });
             }
-            node_address += unsafe { *((node_address + 1) as *const u16) } as usize;
+            node_address += unsafe { read_unaligned((node_address + 1) as *const u16) } as usize;
         }
         None
     }
@@ -105,7 +107,7 @@ impl Iterator for IdMappingIter {
             let a = self.p;
             self.n -= 1;
             self.p += core::mem::size_of::<Self::Item>();
-            Some(unsafe { &*(a as *const Self::Item) }.clone())
+            Some(unsafe { read_unaligned(a as *const Self::Item) })
         }
     }
 }

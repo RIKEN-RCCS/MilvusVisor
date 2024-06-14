@@ -10,6 +10,8 @@
 //!
 //! Supported ACPI Version 6.4
 
+use core::ptr::read_unaligned;
+
 pub mod iort;
 pub mod madt;
 
@@ -91,7 +93,7 @@ impl GeneralAddressStructure {
 }
 
 pub fn get_acpi_table(rsdp_address: usize, signature: &[u8; 4]) -> Result<usize, AcpiError> {
-    let rsdp = unsafe { &*(rsdp_address as *const RSDP) };
+    let rsdp = unsafe { read_unaligned(rsdp_address as *const RSDP) };
     if rsdp.signature != RSDP_SIGNATURE {
         return Err(AcpiError::InvalidSignature);
     }
@@ -106,7 +108,9 @@ pub fn get_acpi_table(rsdp_address: usize, signature: &[u8; 4]) -> Result<usize,
 
     for table_index in 0..((xsdt.length as usize - XSDT_STRUCT_SIZE) >> 3) {
         let table_address = unsafe {
-            *((rsdp.xsdt_address as usize + XSDT_STRUCT_SIZE + (table_index << 3)) as *const u64)
+            read_unaligned(
+                (rsdp.xsdt_address as usize + XSDT_STRUCT_SIZE + (table_index << 3)) as *const u64,
+            )
         } as usize;
 
         if unsafe { *(table_address as *const [u8; 4]) } == *signature {
