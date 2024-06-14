@@ -6,6 +6,7 @@
 // http://opensource.org/licenses/mit-license.php
 
 #![no_std]
+#![allow(dead_code)]
 
 pub mod acpi;
 pub mod cpu;

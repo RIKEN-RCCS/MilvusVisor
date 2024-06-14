@@ -8,7 +8,6 @@
 #![no_std]
 #![no_main]
 #![feature(asm_const)]
-#![feature(const_mut_refs)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 

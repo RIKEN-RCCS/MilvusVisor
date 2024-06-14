@@ -8,25 +8,21 @@
 //! Panic Handler
 //!
 
-use core::panic;
-
-use common::cpu::halt_loop;
-
 #[panic_handler]
-#[no_mangle]
-pub fn panic(info: &panic::PanicInfo) -> ! {
-    let location = info.location();
-    let message = info.message();
-
+pub fn panic(info: &core::panic::PanicInfo) -> ! {
     unsafe { crate::drivers::serial_port::force_release_serial_port_lock() };
     println!("\n\n=====Hypervisor Panic=====");
-    println!(
-        "Line {} in {}: {}",
-        location.and_then(|l| Some(l.line())).unwrap_or(0),
-        location.and_then(|l| Some(l.file())).unwrap_or("???"),
-        message.unwrap_or(&format_args!("???"))
-    );
-
+    if let Some(location) = info.location() {
+        println!(
+            "{}:{}:{}: {}",
+            location.file(),
+            location.line(),
+            location.column(),
+            info.message()
+        );
+    } else {
+        println!("{}", info.message());
+    }
     println!("===== Dump complete =====");
-    halt_loop()
+    common::cpu::halt_loop()
 }
