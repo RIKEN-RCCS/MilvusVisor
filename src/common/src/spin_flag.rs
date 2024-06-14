@@ -6,6 +6,8 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::cpu::{clean_and_invalidate_data_cache, isb};
+
 pub struct SpinLockFlag(AtomicBool);
 
 impl SpinLockFlag {
@@ -15,6 +17,8 @@ impl SpinLockFlag {
 
     #[inline(always)]
     pub fn try_lock_weak(&self) -> Result<(), ()> {
+        clean_and_invalidate_data_cache(self.0.as_ptr() as usize);
+        isb();
         self.0
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .and_then(|old| if old == false { Ok(()) } else { Err(false) })
@@ -32,11 +36,15 @@ impl SpinLockFlag {
 
     #[inline(always)]
     pub fn unlock(&self) {
+        clean_and_invalidate_data_cache(self.0.as_ptr() as usize);
+        isb();
         self.0.store(false, Ordering::Release)
     }
 
     #[inline(always)]
     pub fn is_locked(&self) -> bool {
+        clean_and_invalidate_data_cache(self.0.as_ptr() as usize);
+        isb();
         self.0.load(Ordering::Relaxed)
     }
 }
