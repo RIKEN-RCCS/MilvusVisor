@@ -197,7 +197,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     set_up_el1();
 
     /* Jump to EL1(el1_main) */
-    el2_to_el1(stack_address, el1_main as *const fn() as usize);
+    el2_to_el1(el1_main as *const fn() as usize, stack_address);
 
     /* Never come here */
     local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
@@ -1122,21 +1122,21 @@ extern "C" fn el1_main() -> ! {
     exit_bootloader();
 }
 
-#[naked]
-extern "C" fn el2_to_el1(stack_pointer: usize, el1_entry_point: usize) {
+fn el2_to_el1(el1_entry_point: usize, el1_stack_pointer: usize) {
     unsafe {
-        asm!(
-            "
-            msr elr_el2, x1 // x1 contains the entry point of EL1
-            mov x8, sp
-            msr sp_el1, x8
-            mov sp, x0 // x0 contains stack_pointer
-            mov x0, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
-            msr spsr_el2, x0
+        asm!("
+            msr elr_el2, {entry_point}
+            mov {tmp}, sp
+            msr sp_el1, {tmp}
+            mov sp, {stack_pointer}
+            mov {tmp}, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
+            msr spsr_el2, {tmp}
             isb
-            eret
-        ",
-            options(noreturn)
+            eret",
+        tmp = in(reg) 0u64,
+        entry_point = in(reg) el1_entry_point,
+        stack_pointer = in(reg) el1_stack_pointer,
+        options(noreturn)
         )
     }
 }

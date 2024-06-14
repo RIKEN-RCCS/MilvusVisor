@@ -363,10 +363,11 @@ fn interrupt_handler_panic(s_r: &StoredRegisters, f: core::fmt::Arguments) -> ! 
     panic!("{}", f)
 }
 
-global_asm!(
-    "
-.section .text
-.balign 0x800
+global_asm!("
+.section    .text
+.type       vector_table_el2, %function
+.size       vector_table_el2, 0x800
+.balign     0x800
 vector_table_el2:
 
 .balign 0x080
@@ -446,10 +447,8 @@ fiq_lower_aa32:
 .balign 0x080
 s_error_lower_aa32:
     nop
-"
-);
 
-global_asm!("
+.type   synchronous_lower_aa64_save_registers, %function
 synchronous_lower_aa64_save_registers:
     sub sp,   sp, {SR_SIZE}
     stp x30, xzr, [sp, #( 15 * 16)]
@@ -480,6 +479,9 @@ synchronous_lower_aa64_save_registers:
     str  x0, [sp, #( 15 * 16 + 8)]
     b   synchronous_lower_aa64_1
 
+.size   synchronous_lower_aa64_save_registers, . - synchronous_lower_aa64_save_registers
+
+.type   s_error_lower_aa64_save_registers, %function
 s_error_lower_aa64_save_registers:
     sub sp,   sp, {SR_SIZE}
     stp x30, xzr, [sp, #( 15 * 16)]
@@ -510,7 +512,9 @@ s_error_lower_aa64_save_registers:
     str  x0, [sp, #( 15 * 16 + 8)]
     b   s_error_lower_aa64_1
 
+.size   s_error_lower_aa64_save_registers, . - s_error_lower_aa64_save_registers
 
+.type   lower_aa64_restore_registers_and_eret, %function
 lower_aa64_restore_registers_and_eret:
     mrs  x0,  spsr_el2
     ubfx x0,  x0, #0, #4    // and x0, x0, #0b1111
@@ -540,5 +544,7 @@ lower_aa64_restore_registers_and_eret:
     ldp  x2,  x3, [sp, #(  1 * 16)]
     ldp  x0,  x1, [sp, #(  0 * 16)]
     add  sp,  sp, {SR_SIZE}
+    isb
     eret
+.size   lower_aa64_restore_registers_and_eret, . - lower_aa64_restore_registers_and_eret
 ", SR_SIZE = const core::mem::size_of::<StoredRegisters>());

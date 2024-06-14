@@ -227,69 +227,66 @@ fn spin_table_store_access_handler(
 #[naked]
 extern "C" fn cpu_boot() {
     unsafe {
-        core::arch::asm!(
-            "       // MIDR_EL1 & MPIDR_EL1
-                    mrs x15, midr_el1
-                    msr vpidr_el2, x15
-                    mrs x16, mpidr_el1
-                    msr vmpidr_el2, x16
+        core::arch::asm!("
+    // MIDR_EL1 & MPIDR_EL1
+    mrs x15, midr_el1
+    msr vpidr_el2, x15
+    mrs x16, mpidr_el1
+    msr vmpidr_el2, x16
 
-                    // SVE
-	                mrs	x17, id_aa64pfr0_el1
-                    ubfx x18, x17, 32, 4
-                    cbz x18, 1f
-                    mov x15, {MAX_ZCR_EL2_LEN}
-                    msr S3_4_C1_C2_0, x15 // ZCR_EL2
+    // SVE
+    mrs x17, id_aa64pfr0_el1
+    ubfx x18, x17, 32, 4
+    cbz x18, 1f
+    mov x15, {MAX_ZCR_EL2_LEN}
+    msr S3_4_C1_C2_0, x15 // ZCR_EL2
 
 1:
-                    // GICv3~
-                    /*ubfx x18, x17, 24, 4
-                    cbz  x18, 2f
-                    mrs  x15, icc_sre_el2
-                    orr  x15, x15, 1 << 0
-                    orr  x15, x15, 1 << 3
-                    msr  icc_sre_el2, x15
-                    isb
-                    mrs  x15, icc_sre_el2
-                    tbz  x15, 0, 2f
-                    msr  ich_hcr_el2, xzr*/
-
+    // GICv3~
+    mrs x15, icc_sre_el2
+    and x16, x15, 1
+    cbz x16, 2f
+    mov x17, 0xf
+    msr icc_sre_el2, x16
+    msr ich_hcr_el2, xzr
+    isb
 2:
-                    // A64FX
-                    mov x15, {A64FX}
-                    cbz x15, 3f
-                    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
+    // A64FX
+    mov x15, {A64FX}
+    cbz x15, 3f
+    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
+
 3:
+    ldp x1,   x2, [x0, 16 * 0]
+    ldp x3,   x4, [x0, 16 * 1]
+    ldp x5,   x6, [x0, 16 * 2]
+    ldp x7,   x8, [x0, 16 * 3]
+    ldp x9,  x10, [x0, 16 * 4]
+    ldp x11, x12, [x0, 16 * 5]
 
-                    ldp x1,   x2, [x0, 16 * 0]
-                    ldp x3,   x4, [x0, 16 * 1]
-                    ldp x5,   x6, [x0, 16 * 2]
-                    ldp x7,   x8, [x0, 16 * 3]
-                    ldp x9,  x10, [x0, 16 * 4]
-                    ldp x11, x12, [x0, 16 * 5]
+    mov sp, x0
+    add sp, sp, #(16 * 6)
+    msr cnthctl_el2,     x1
+    msr cntvoff_el2,    xzr
+    msr cptr_el2,        x2
+    msr ttbr0_el2,       x3
+    msr mair_el2,        x4
+    msr tcr_el2,         x5
+    msr vbar_el2,        x6
+    msr vttbr_el2,       x7
+    msr vtcr_el2,        x8
+    msr sctlr_el2,       x9
+    msr hcr_el2,        x10
 
-                    mov sp, x0
-                    add sp, sp, #(16 * 6)
-                    msr cnthctl_el2,     x1
-                    msr cntvoff_el2,    xzr
-                    msr cptr_el2,        x2
-                    msr ttbr0_el2,       x3
-                    msr mair_el2,        x4
-                    msr tcr_el2,         x5
-                    msr vbar_el2,        x6
-                    msr vttbr_el2,       x7
-                    msr vtcr_el2,        x8
-                    msr sctlr_el2,       x9
-                    msr hcr_el2,        x10
-
-                    mov x1, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
-                    msr spsr_el2,        x1
-                    msr elr_el2,        x11
-                    mov x0, x12
-                    eret
-                    ",  MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
-                        A64FX = const cfg!(feature = "a64fx") as u64,
-                        options(noreturn))
+    mov x1, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
+    msr spsr_el2,        x1
+    msr elr_el2,        x11
+    mov x0, x12
+    isb
+    eret",
+        MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
+        A64FX = const cfg!(feature = "a64fx") as u64,
+        options(noreturn))
     }
 }
 
@@ -301,24 +298,21 @@ extern "C" fn cpu_boot() {
 #[naked]
 extern "C" fn spin_table_boot() {
     unsafe {
-        core::arch::asm!(
-            "
-.align              3
-                    adr     x1,     2f
+        core::arch::asm!("
+.align  3
+    adr     x1, 2f
 1:
-                    //ldaxr   x0,     [x1]
-                    ldr     x0,     [x1]
-                    cbz     x0,     1b
-                    //stlxr   w2,     xzr, [x1]
-                    str     xzr,    [x1]
-                    //cbnz    w2,     1b
-                    nop
-                    b       {CPU_BOOT}
+    //ldaxr     x0, [x1]
+    ldr     x0, [x1]
+    cbz     x0, 1b
+    //stlxr     w2, xzr, [x1]
+    str     xzr, [x1]
+    //cbnz      w2, 1b
+    nop
+    b       {CPU_BOOT}
 2:
-                    .quad   0
-            ",
-            CPU_BOOT = sym cpu_boot,
-            options(noreturn)
-        )
+    .quad   0",
+        CPU_BOOT = sym cpu_boot,
+        options(noreturn))
     }
 }
