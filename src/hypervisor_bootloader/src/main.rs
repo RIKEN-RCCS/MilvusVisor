@@ -7,8 +7,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(naked_functions)]
-#![feature(panic_info_message)]
 
 use core::arch::asm;
 use core::mem::MaybeUninit;
