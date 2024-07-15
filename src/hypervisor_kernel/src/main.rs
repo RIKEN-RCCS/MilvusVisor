@@ -9,7 +9,6 @@
 #![no_main]
 #![feature(asm_const)]
 #![feature(naked_functions)]
-#![feature(panic_info_message)]
 
 use core::arch::global_asm;
 use core::mem::MaybeUninit;

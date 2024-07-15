@@ -237,26 +237,26 @@ extern "C" fn cpu_boot() {
     // SVE
     mrs x17, id_aa64pfr0_el1
     ubfx x18, x17, 32, 4
-    cbz x18, 1f
+    cbz x18, 2f
     mov x15, {MAX_ZCR_EL2_LEN}
     msr S3_4_C1_C2_0, x15 // ZCR_EL2
 
-1:
+2:
     // GICv3~
     mrs x15, icc_sre_el2
     and x16, x15, 1
-    cbz x16, 2f
+    cbz x16, 3f
     mov x17, 0xf
     msr icc_sre_el2, x16
     msr ich_hcr_el2, xzr
     isb
-2:
+3:
     // A64FX
     mov x15, {A64FX}
-    cbz x15, 3f
+    cbz x15, 4f
     msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
 
-3:
+4:
     ldp x1,   x2, [x0, 16 * 0]
     ldp x3,   x4, [x0, 16 * 1]
     ldp x5,   x6, [x0, 16 * 2]
@@ -300,17 +300,17 @@ extern "C" fn spin_table_boot() {
     unsafe {
         core::arch::asm!("
 .align  3
-    adr     x1, 2f
-1:
+    adr     x1, 3f
+2:
     //ldaxr     x0, [x1]
     ldr     x0, [x1]
-    cbz     x0, 1b
+    cbz     x0, 2b
     //stlxr     w2, xzr, [x1]
     str     xzr, [x1]
-    //cbnz      w2, 1b
+    //cbnz      w2, 2b
     nop
     b       {CPU_BOOT}
-2:
+3:
     .quad   0",
         CPU_BOOT = sym cpu_boot,
         options(noreturn))
