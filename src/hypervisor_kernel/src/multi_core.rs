@@ -11,13 +11,13 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{cpu, GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES};
+use common::{GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu};
 
 use crate::memory_hook::{
-    add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
+    StoreAccessHandlerEntry, StoreHookResult, add_memory_store_access_handler,
 };
 use crate::paging::{add_memory_access_trap, map_address};
-use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
+use crate::psci::{PsciFunctionId, PsciReturnCode, call_psci_function};
 use crate::{allocate_memory, free_memory};
 
 pub static NUMBER_OF_RUNNING_AP: AtomicUsize = AtomicUsize::new(0);
@@ -46,7 +46,7 @@ pub fn setup_new_cpu(regs: &mut GeneralPurposeRegisters) {
 
     /* Write System Registers */
     let register_buffer = unsafe {
-        &mut *((stack_address as usize - core::mem::size_of::<HypervisorRegisters>())
+        &mut *((stack_address as usize - size_of::<HypervisorRegisters>())
             as *mut HypervisorRegisters)
     };
     register_buffer.cnthctl_el2 = cpu::get_cnthctl_el2();
@@ -163,7 +163,7 @@ fn spin_table_store_access_handler(
 
     /* Write System Registers */
     let register_buffer = unsafe {
-        &mut *((stack_address as usize - core::mem::size_of::<HypervisorRegisters>())
+        &mut *((stack_address as usize - size_of::<HypervisorRegisters>())
             as *mut HypervisorRegisters)
     };
     register_buffer.cnthctl_el2 = cpu::get_cnthctl_el2();
@@ -228,35 +228,6 @@ fn spin_table_store_access_handler(
 extern "C" fn cpu_boot() {
     unsafe {
         core::arch::naked_asm!("
-    // MIDR_EL1 & MPIDR_EL1
-    mrs x15, midr_el1
-    msr vpidr_el2, x15
-    mrs x16, mpidr_el1
-    msr vmpidr_el2, x16
-
-    // SVE
-    mrs x17, id_aa64pfr0_el1
-    ubfx x18, x17, 32, 4
-    cbz x18, 2f
-    mov x15, {MAX_ZCR_EL2_LEN}
-    msr S3_4_C1_C2_0, x15 // ZCR_EL2
-
-2:
-    // GICv3~
-    mrs x15, icc_sre_el2
-    and x16, x15, 1
-    cbz x16, 3f
-    mov x17, 0xf
-    msr icc_sre_el2, x16
-    msr ich_hcr_el2, xzr
-    isb
-3:
-    // A64FX
-    mov x15, {A64FX}
-    cbz x15, 4f
-    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
-
-4:
     ldp x1,   x2, [x0, 16 * 0]
     ldp x3,   x4, [x0, 16 * 1]
     ldp x5,   x6, [x0, 16 * 2]
@@ -284,8 +255,9 @@ extern "C" fn cpu_boot() {
     mov x0, x12
     isb
     eret",
-        MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
-        A64FX = const cfg!(feature = "a64fx") as u64)
+    MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
+    A64FX = const cfg!(feature = "a64fx") as u64,
+    SPSR_EL2 = const cpu::SPSR_EL2_DEFAULT)
     }
 }
 
@@ -311,6 +283,6 @@ extern "C" fn spin_table_boot() {
     b       {CPU_BOOT}
 3:
     .quad   0",
-        CPU_BOOT = sym cpu_boot)
+    CPU_BOOT = sym cpu_boot)
     }
 }

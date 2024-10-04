@@ -11,7 +11,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use common::{bitmask, GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
 
 use crate::memory_hook::*;
 use crate::paging;
@@ -187,5 +187,5 @@ fn mt27800_address_and_data_store_handler(
             IS_WRITE_CANCELED.store(false, Ordering::Relaxed);
         }
     }
-    return StoreHookResult::PassThrough;
+    StoreHookResult::PassThrough
 }

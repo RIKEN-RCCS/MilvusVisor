@@ -12,11 +12,10 @@
 //! It may be not able to create virtio device on some devices.
 //!
 
-use core::mem::size_of;
 use core::num::NonZeroUsize;
 
-use common::spin_flag::SpinLockFlag;
 use common::GeneralPurposeRegisters;
+use common::spin_flag::SpinLockFlag;
 
 use crate::memory_hook::*;
 use crate::paging;
@@ -24,6 +23,8 @@ use crate::paging;
 use super::virtio::*;
 
 const VIRTIO_NET_F_MRG_RXBUF: u32 = 1 << 15;
+
+pub type Callback = fn(frame: &[u8], send_frame: &mut dyn FnMut(&[u8]) -> Result<(), ()>);
 
 /// Virtio Network Entry Descriptor
 #[repr(C)]
@@ -80,7 +81,7 @@ pub struct VirtioNetwork {
     mac_address: [u8; 6],
     features_select: u8,
     //base_address: usize,
-    callback: fn(frame: &[u8], send_frame: &mut dyn FnMut(&[u8]) -> Result<(), ()>),
+    callback: Callback,
 }
 
 impl VirtioNetwork {
@@ -111,7 +112,7 @@ impl VirtioNetwork {
     pub fn create_new_device(
         base_address: usize,
         int_id: u32,
-        receive_callback: fn(frame: &[u8], send_frame: &mut dyn FnMut(&[u8]) -> Result<(), ()>),
+        receive_callback: Callback,
         rsdp_address: Option<NonZeroUsize>,
         device_suffix: u8,
     ) -> Result<&'static mut Self, ()> {
@@ -463,12 +464,10 @@ impl VirtioNetwork {
                 }
                 _ => { /* Ignore */ }
             }
-        } else {
-            if 0x100 <= offset && offset <= 0x106 {
-                net.lock.lock();
-                value = net.mac_address[offset - 0x100] as u64;
-                net.lock.unlock();
-            }
+        } else if (0x100..=0x106).contains(&offset) {
+            net.lock.lock();
+            value = net.mac_address[offset - 0x100] as u64;
+            net.lock.unlock();
         }
         LoadHookResult::Data(value)
     }
@@ -539,7 +538,7 @@ impl VirtioNetwork {
             }
             _ => { /* Ignore */ }
         }
-        if 0x100 <= offset && offset <= 0x106 {
+        if (0x100..=0x106).contains(&offset) {
             net.lock.lock();
             net.mac_address[offset - 0x100] = data as u8;
             net.lock.unlock();

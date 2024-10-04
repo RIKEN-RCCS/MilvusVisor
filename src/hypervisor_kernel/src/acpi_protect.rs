@@ -12,7 +12,7 @@ use common::acpi::{RSDP, XSDT, XSDT_STRUCT_SIZE};
 use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 use crate::memory_hook::{
-    add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
+    StoreAccessHandlerEntry, StoreHookResult, add_memory_store_access_handler,
 };
 use crate::paging::add_memory_access_trap;
 

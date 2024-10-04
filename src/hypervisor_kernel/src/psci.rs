@@ -10,8 +10,8 @@
 //!
 //! Supported Version: ~2.0
 
-use common::cpu::{get_mpidr_el1, secure_monitor_call};
 use common::GeneralPurposeRegisters;
+use common::cpu::{get_mpidr_el1, secure_monitor_call};
 
 use crate::handler_panic;
 use crate::multi_core::{power_off_cpu, setup_new_cpu};

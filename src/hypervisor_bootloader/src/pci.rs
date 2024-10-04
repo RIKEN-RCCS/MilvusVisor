@@ -11,6 +11,7 @@ use common::acpi::get_acpi_table;
 use common::{EcamInfo, PAGE_MASK};
 
 pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
+    use core::ptr::read_unaligned;
     let mcfg = get_acpi_table(rsdp, b"MCFG");
     if let Err(e) = mcfg {
         println!("Failed to get MCFG table: {:?}", e);
@@ -18,9 +19,9 @@ pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
     }
     let mcfg = mcfg.unwrap();
     /* Currently, supporting only one ECAM Address */
-    let ecam_address = unsafe { *((mcfg + 44) as *const u64) } as usize;
-    let start_bus = unsafe { *((mcfg + 54) as *const u8) };
-    let end_bus = unsafe { *((mcfg + 55) as *const u8) };
+    let ecam_address = unsafe { read_unaligned((mcfg + 44) as *const u64) } as usize;
+    let start_bus = unsafe { read_unaligned((mcfg + 54) as *const u8) };
+    let end_bus = unsafe { read_unaligned((mcfg + 55) as *const u8) };
     println!(
         "ECAM: BaseAddress: {:#X}, Bus: {:#X} ~ {:#X}",
         ecam_address, start_bus, end_bus

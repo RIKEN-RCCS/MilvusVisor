@@ -11,13 +11,14 @@
 //! Supported: str, stp (except Atomic, SIMD)
 //!
 
-use common::{bitmask, cpu::advance_elr_el2, GeneralPurposeRegisters, STAGE_2_PAGE_SHIFT};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_SHIFT, bitmask, cpu::advance_elr_el2};
 
-use crate::memory_hook::{memory_store_hook_handler, StoreHookResult};
+use crate::memory_hook::{StoreHookResult, memory_store_hook_handler};
 
 use super::{
-    faulting_va_to_ipa_store, get_virtual_address_to_access_ipa, write_back_index_register_imm7,
-    write_back_index_register_imm9, EmulationError, REGISTER_NUMBER_XZR,
+    EmulationError, REGISTER_NUMBER_XZR, faulting_va_to_ipa_store,
+    get_virtual_address_to_access_ipa, write_back_index_register_imm7,
+    write_back_index_register_imm9,
 };
 
 pub fn emulate_store_register(
@@ -25,7 +26,7 @@ pub fn emulate_store_register(
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     //let op2 = ((target_instruction & bitmask!(24, 23)) >> 23) as u8;
@@ -46,12 +47,17 @@ pub fn emulate_store_register(
         }
     );
     if op4 == 0b10 {
-        unimplemented!("UnPrivileged Access is not implemented...");
+        println!(
+            "UnPrivileged Access is not supported: {:#X}",
+            target_instruction
+        );
+        return Err(EmulationError::Unsupported);
     }
 
     if ((target_instruction >> 26) & 1) != 0 {
         /* V */
-        handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+        println!("SIMD is not supported: {:#X}", target_instruction);
+        return Err(EmulationError::Unsupported);
     }
 
     pr_debug!("Size: {:#b}", size);
@@ -69,7 +75,7 @@ pub fn emulate_store_register(
     }
 
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_unsigned_immediate_store_register(
@@ -77,7 +83,7 @@ pub fn emulate_unsigned_immediate_store_register(
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     let size = (target_instruction >> 30) as u8;
@@ -88,7 +94,7 @@ pub fn emulate_unsigned_immediate_store_register(
         size,
     )?;
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_store_register_register_offset(
@@ -96,7 +102,7 @@ pub fn emulate_store_register_register_offset(
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_store_address = faulting_va_to_ipa_store(far)?;
     let size = (target_instruction >> 30) as u8;
@@ -107,7 +113,7 @@ pub fn emulate_store_register_register_offset(
         size,
     )?;
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_store_pair(
@@ -115,7 +121,7 @@ pub fn emulate_store_pair(
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let op2 = ((target_instruction & bitmask!(24, 23)) >> 23) as u8;
     let opc = (target_instruction >> 30) as u8;
     let sf = (opc & (1 << 1)) != 0;
@@ -148,10 +154,11 @@ pub fn emulate_store_pair(
             >> STAGE_2_PAGE_SHIFT)
     {
         println!("STP alignment error.");
-        return Err(());
+        return Err(EmulationError::AlignmentError);
     }
     if sse {
-        unimplemented!();
+        println!("SSE is not supported: {:#X}", target_instruction);
+        return Err(EmulationError::Unsupported);
     }
     store_register_into_address(
         s_r,
@@ -173,7 +180,7 @@ pub fn emulate_store_pair(
         write_back_index_register_imm7(base_register, imm7);
     }
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 fn store_register_into_address(
@@ -181,7 +188,7 @@ fn store_register_into_address(
     intermediate_physical_store_address: usize,
     target_register: u8,
     size: u8,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let virtual_address_to_store =
         get_virtual_address_to_access_ipa(intermediate_physical_store_address, true)?;
 
@@ -215,11 +222,11 @@ fn store_register_into_address(
         };
 
     pr_debug!("Data: {:#X}", data);
-    _write_memory(virtual_address_to_store, size, data);
-    return Ok(());
+    write_memory(virtual_address_to_store, size, data);
+    Ok(())
 }
 
-pub fn _write_memory(store_address: usize, access_size: u8, data: u64) {
+pub fn write_memory(store_address: usize, access_size: u8, data: u64) {
     use core::ptr::write_volatile;
     match access_size {
         0b00 => unsafe { write_volatile(store_address as *mut u8, data as u8) },
@@ -228,14 +235,4 @@ pub fn _write_memory(store_address: usize, access_size: u8, data: u64) {
         0b11 => unsafe { write_volatile(store_address as *mut u64, data) },
         _ => unreachable!(),
     };
-}
-
-#[allow(dead_code)]
-pub fn write_memory(intermediate_physical_store_address: usize, access_size: u8, data: u64) {
-    _write_memory(
-        get_virtual_address_to_access_ipa(intermediate_physical_store_address, true)
-            .expect("Failed to convert Address"),
-        access_size,
-        data,
-    )
 }

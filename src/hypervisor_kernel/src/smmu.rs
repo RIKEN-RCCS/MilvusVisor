@@ -9,12 +9,10 @@
 //! System Memory Management Unit
 //!
 
-use core::mem::size_of;
-
 use common::cpu::{dsb, get_vtcr_el2, get_vttbr_el2};
 use common::paging::{page_align_up, stage2_page_align_up};
 use common::smmu::*;
-use common::{bitmask, GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
 
 use crate::emulation;
 use crate::memory_hook::*;
@@ -81,7 +79,7 @@ static mut SMMU_BASE_ADDRESS: usize = 0;
 /// If adding memory access handler is failed, this function panics.
 ///
 /// # Arguments
-/// * `smmu_registers_base_address` - The base address of SMMU registers([`common::smmu::SMMU_MEMORY_MAP_SIZE`] must be mapped and accessible)
+/// * `smmu_registers_base_address` - The base address of SMMU registers([`SMMU_MEMORY_MAP_SIZE`] must be mapped and accessible)
 /// * `iort_address` - The address of IORT(Optional)
 pub fn init_smmu(smmu_base_address: usize, _iort_address: Option<usize>) {
     #[cfg(feature = "fast_restore")]

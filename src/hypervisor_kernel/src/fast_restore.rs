@@ -8,11 +8,11 @@
 use crate::paging::{
     add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
 };
-use crate::{allocate_memory, free_memory, gic, multi_core, psci, smmu, BSP_MPIDR};
+use crate::{BSP_MPIDR, allocate_memory, free_memory, gic, multi_core, psci, smmu};
 
 use common::{
-    cpu, paging, GeneralPurposeRegisters, MemorySaveListEntry, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG,
-    PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES,
+    GeneralPurposeRegisters, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, MemorySaveListEntry, PAGE_MASK,
+    PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu, paging,
 };
 
 use core::mem::MaybeUninit;
@@ -60,14 +60,24 @@ impl SavedSystemRegisters {
 }
 
 pub fn add_memory_save_list(list: *mut [MemorySaveListEntry]) {
-    unsafe { MEMORY_SAVE_LIST.write(&mut *list) };
+    unsafe {
+        (&raw mut MEMORY_SAVE_LIST)
+            .as_mut()
+            .unwrap()
+            .write(&mut *list)
+    };
 }
 
 pub fn create_memory_trap_for_save_memory() {
     unsafe { ORIGINAL_VTTBR_EL2 = cpu::get_vttbr_el2() };
     let page_table = remake_stage2_page_table().expect("Failed to remake page table.");
     cpu::set_vttbr_el2(page_table as u64);
-    let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
+    let list = unsafe {
+        (&raw const MEMORY_SAVE_LIST)
+            .as_ref()
+            .unwrap()
+            .assume_init_read()
+    };
     for e in list {
         if e.num_of_pages == 0 && e.memory_start == 0 {
             break;
@@ -91,7 +101,7 @@ pub fn check_memory_access_for_memory_save_list(ec: u8, far_el2: u64) -> bool {
         add_memory_area_to_memory_save_list(far_el2);
         return true;
     }
-    return false;
+    false
 }
 
 fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> {
@@ -122,7 +132,7 @@ fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> 
             }
         }
     }
-    return None;
+    None
 }
 
 #[inline(never)]
@@ -134,12 +144,20 @@ fn add_memory_area_to_memory_save_list(far_el2: u64) {
 
     pr_debug!("Fault Address: {:#X}", fault_address);
     let mut available_entry: Option<*mut MemorySaveListEntry> = None;
-    let list_length = unsafe { MEMORY_SAVE_LIST.assume_init_read() }.len();
+    let list_ptr = &raw const MEMORY_SAVE_LIST;
+    let mut is_registered = false;
+    let mut should_clear_next = false;
 
-    for (i, e) in unsafe { MEMORY_SAVE_LIST.assume_init_read() }
-        .iter_mut()
-        .enumerate()
-    {
+    for e in unsafe { list_ptr.as_ref().unwrap().assume_init_read() } {
+        if should_clear_next {
+            *e = MemorySaveListEntry {
+                memory_start: 0,
+                saved_address: 0,
+                num_of_pages: 0,
+            };
+            assert!(is_registered);
+            break;
+        }
         if e.num_of_pages == 0 && e.memory_start == 0 {
             let new_entry = MemorySaveListEntry {
                 memory_start: fault_address,
@@ -148,42 +166,41 @@ fn add_memory_area_to_memory_save_list(far_el2: u64) {
             };
             if let Some(available_entry) = available_entry {
                 unsafe { *available_entry = new_entry };
+                is_registered = true;
+                break;
             } else {
                 *e = new_entry;
-                if i + 1 != list_length {
-                    unsafe {
-                        MEMORY_SAVE_LIST.assume_init_read()[i + 1] = MemorySaveListEntry {
-                            memory_start: 0,
-                            saved_address: 0,
-                            num_of_pages: 0,
-                        }
-                    };
-                }
+                is_registered = true;
+                should_clear_next = true;
+                continue;
             }
-            break;
         }
         if e.saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG {
             available_entry = Some(e);
         } else if e.memory_start == fault_address + PAGE_SIZE {
             e.memory_start = fault_address;
             e.num_of_pages += 1;
+            is_registered = true;
             break;
         } else if e.memory_start + ((e.num_of_pages as usize) << PAGE_SHIFT) == fault_address {
             e.num_of_pages += 1;
+            is_registered = true;
             break;
         }
-        if i + 1 == list_length {
-            let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
-            if let Some(i) = compress_memory_save_list(list) {
-                list[i] = MemorySaveListEntry {
+    }
+    if !is_registered {
+        if let Some(i) =
+            compress_memory_save_list(unsafe { list_ptr.as_ref().unwrap().assume_init_read() })
+        {
+            unsafe {
+                list_ptr.as_ref().unwrap().assume_init_read()[i] = MemorySaveListEntry {
                     memory_start: fault_address,
                     saved_address: 0,
                     num_of_pages: 1,
-                };
-                break;
-            } else {
-                panic!("There is no available entry");
-            }
+                }
+            };
+        } else {
+            panic!("There is no available entry");
         }
     }
     remove_memory_access_trap(fault_address, PAGE_SIZE).expect("Failed to remove memory trap");
@@ -254,7 +271,7 @@ pub fn save_original_instruction_and_insert_hvc(address: usize, hvc_number: u16)
         )
         .expect("Failed to map memory");
     }
-    let hvc_instruction = 0b11010100000 << 21 | (hvc_number as u32) << 5 | 0b00010;
+    let hvc_instruction = (0b11010100000 << 21) | ((hvc_number as u32) << 5) | 0b00010;
     unsafe {
         ORIGINAL_INSTRUCTION = *(address as *const u32);
         *(address as *mut u32) = hvc_instruction;
@@ -298,7 +315,12 @@ pub fn after_exit_boot_service_trap_main(regs: &mut GeneralPurposeRegisters, elr
     }
 
     /* Save current status */
-    save_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
+    save_memory(unsafe {
+        (&raw mut MEMORY_SAVE_LIST)
+            .as_ref()
+            .unwrap()
+            .assume_init_read()
+    });
     /* Store registers */
     let r = SavedSystemRegisters {
         cpacr_el1: cpu::get_cpacr_el1(),
@@ -319,7 +341,7 @@ pub fn after_exit_boot_service_trap_main(regs: &mut GeneralPurposeRegisters, elr
 }
 
 /// If you disable all entries of Stage2 Page Table,
-/// don't call [`super::paging::add_memory_access_trap`] and [`super::paging::remove_memory_access_trap`]
+/// don't call [`add_memory_access_trap`] and [`remove_memory_access_trap`]
 /// until you re-enable the entries.
 fn modify_all_enable_bit_of_stage2_top_level_entries(is_enabled: bool) {
     let stage_2_page_table = paging::TTBR::new(cpu::get_vttbr_el2()).get_base_address();
@@ -339,7 +361,7 @@ fn modify_all_enable_bit_of_stage2_top_level_entries(is_enabled: bool) {
     let table = unsafe {
         core::slice::from_raw_parts_mut(
             stage_2_page_table as *mut u64,
-            (paging::PAGE_TABLE_SIZE / core::mem::size_of::<u64>()) * num_of_pages as usize,
+            (paging::PAGE_TABLE_SIZE / size_of::<u64>()) * num_of_pages as usize,
         )
     };
     if is_enabled {
@@ -387,7 +409,10 @@ pub fn perform_restore_if_needed() {
 fn restore_main() -> ! {
     cpu::local_irq_fiq_save();
     if unsafe { BSP_MPIDR } != cpu::get_mpidr_el1() {
-        pr_debug!("This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)", cpu::get_mpidr_el1());
+        pr_debug!(
+            "This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)",
+            cpu::get_mpidr_el1()
+        );
         let result = multi_core::power_off_cpu();
         panic!(
             "Failed to call CPU_OFF: {:#X?}",
@@ -444,7 +469,12 @@ fn restore_main() -> ! {
 
     /* Restore memory */
     pr_debug!("Restore the memory");
-    restore_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
+    restore_memory(unsafe {
+        (&raw const MEMORY_SAVE_LIST)
+            .as_ref()
+            .unwrap()
+            .assume_init_read()
+    });
 
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
@@ -468,6 +498,6 @@ fn restore_main() -> ! {
             ldp  x4,  x5, [x0, #(  2 * 16)]
             ldp  x2,  x3, [x0, #(  1 * 16)]
             ldp  x0,  x1, [x0, #(  0 * 16)]
-            eret", in("x0") SAVED_REGISTERS.as_ptr() as usize, options(noreturn))
+            eret", in("x0") (&raw const SAVED_REGISTERS) as usize, options(noreturn))
     }
 }

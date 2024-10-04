@@ -7,7 +7,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(naked_functions)]
 
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
@@ -16,8 +15,8 @@ use core::num::NonZeroUsize;
 use common::cpu::*;
 use common::spin_flag::SpinLockFlag;
 use common::{
-    acpi, bitmask, MemoryAllocationError, MemoryAllocator, SystemInformation, COMPILER_INFO,
-    HYPERVISOR_HASH_INFO, HYPERVISOR_NAME, PAGE_SHIFT,
+    COMPILER_INFO, GeneralPurposeRegisters, HYPERVISOR_HASH_INFO, HYPERVISOR_NAME,
+    MemoryAllocationError, MemoryAllocator, PAGE_SHIFT, SystemInformation, acpi, bitmask,
 };
 
 #[macro_use]
@@ -53,21 +52,23 @@ macro_rules! handler_panic {
     };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(s_info) = &system_information.serial_port {
-        unsafe { drivers::serial_port::init_default_serial_port(s_info.clone()) };
+        drivers::serial_port::init_default_serial_port(s_info.clone());
     }
 
     show_kernel_info();
 
-    unsafe {
-        MEMORY_ALLOCATOR.1.assume_init_mut().init(
-            system_information.available_memory_info.0,
-            system_information.available_memory_info.1 << PAGE_SHIFT,
-        );
-        ACPI_RSDP = system_information.acpi_rsdp_address;
-    }
+    let (lock, allocator) = unsafe { (&raw mut MEMORY_ALLOCATOR).as_mut() }.unwrap();
+    lock.lock();
+    unsafe { allocator.assume_init_mut() }.init(
+        system_information.available_memory_info.0,
+        system_information.available_memory_info.1 << PAGE_SHIFT,
+    );
+    lock.unlock();
+
+    unsafe { ACPI_RSDP = system_information.acpi_rsdp_address };
 
     memory_hook::init_memory_access_handler();
 
@@ -109,8 +110,9 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     }
 
     unsafe { BSP_MPIDR = get_mpidr_el1() };
-    extern "C" {
+    unsafe extern "C" {
         fn vector_table_el2();
+
     }
     system_information.vbar_el2 = vector_table_el2 as *const fn() as usize as u64;
 }
@@ -169,15 +171,12 @@ fn show_kernel_info() {
 /// # Result
 /// If the allocation is succeeded, Ok(start_address), otherwise Err(())
 pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
-    unsafe {
-        MEMORY_ALLOCATOR.0.lock();
-        let result = MEMORY_ALLOCATOR
-            .1
-            .assume_init_mut()
-            .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT));
-        MEMORY_ALLOCATOR.0.unlock();
-        return result;
-    }
+    let (lock, allocator) = unsafe { (&raw mut MEMORY_ALLOCATOR).as_mut() }.unwrap();
+    lock.lock();
+    let result = unsafe { allocator.assume_init_mut() }
+        .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT));
+    lock.unlock();
+    result
 }
 
 /// Free memory to memory pool
@@ -189,15 +188,11 @@ pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, Memo
 /// # Result
 /// If succeeded, Ok(()), otherwise Err(())
 pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationError> {
-    unsafe {
-        MEMORY_ALLOCATOR.0.lock();
-        let result = MEMORY_ALLOCATOR
-            .1
-            .assume_init_mut()
-            .free(address, pages << PAGE_SHIFT);
-        MEMORY_ALLOCATOR.0.unlock();
-        return result;
-    }
+    let (lock, allocator) = unsafe { (&raw mut MEMORY_ALLOCATOR).as_mut() }.unwrap();
+    lock.lock();
+    let result = unsafe { allocator.assume_init_mut() }.free(address, pages << PAGE_SHIFT);
+    lock.unlock();
+    result
 }
 
 #[unsafe(no_mangle)]
