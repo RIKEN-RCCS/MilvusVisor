@@ -14,7 +14,7 @@ use core::mem::size_of;
 use common::cpu::{dsb, get_vtcr_el2, get_vttbr_el2};
 use common::paging::{page_align_up, stage2_page_align_up};
 use common::smmu::*;
-use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
+use common::{bitmask, GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 use crate::emulation;
 use crate::memory_hook::*;

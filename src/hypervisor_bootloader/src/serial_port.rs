@@ -5,7 +5,7 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 
-use common::acpi::{get_acpi_table, GeneralAddressStructure};
+use common::acpi::{GeneralAddressStructure, get_acpi_table};
 use common::serial_port::{SerialPortInfo, SerialPortType};
 use core::num::NonZeroUsize;
 

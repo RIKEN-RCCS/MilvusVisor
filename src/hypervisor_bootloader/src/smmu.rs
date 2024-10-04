@@ -15,7 +15,7 @@ use crate::allocate_memory;
 use crate::paging::map_address;
 
 use common::cpu::{get_vtcr_el2, get_vttbr_el2};
-use common::{acpi, paging::page_align_up, smmu::*, PAGE_SHIFT};
+use common::{PAGE_SHIFT, acpi, paging::page_align_up, smmu::*};
 
 use core::ptr::{read_volatile, write_volatile};
 

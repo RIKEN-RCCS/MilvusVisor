@@ -8,7 +8,7 @@
 //! Intel(R) Ethernet Controller I210
 //!
 
-use common::{GeneralPurposeRegisters, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
+use common::{bitmask, GeneralPurposeRegisters, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 use crate::memory_hook::*;
 use crate::paging;

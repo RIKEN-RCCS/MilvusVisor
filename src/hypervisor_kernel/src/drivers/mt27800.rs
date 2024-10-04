@@ -11,7 +11,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
+use common::{bitmask, GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 use crate::memory_hook::*;
 use crate::paging;

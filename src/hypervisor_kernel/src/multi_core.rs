@@ -11,13 +11,13 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu};
+use common::{cpu, GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES};
 
 use crate::memory_hook::{
     add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
 };
 use crate::paging::{add_memory_access_trap, map_address};
-use crate::psci::{PsciFunctionId, PsciReturnCode, call_psci_function};
+use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
 use crate::{allocate_memory, free_memory};
 
 pub static NUMBER_OF_RUNNING_AP: AtomicUsize = AtomicUsize::new(0);

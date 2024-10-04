@@ -18,7 +18,7 @@ use common::cpu::{
     convert_virtual_address_to_physical_address_el2_read,
     convert_virtual_address_to_physical_address_el2_write, SPSR_EL2_M, SPSR_EL2_M_EL0T,
 };
-use common::{GeneralPurposeRegisters, PAGE_MASK, PAGE_SIZE, bitmask};
+use common::{bitmask, GeneralPurposeRegisters, PAGE_MASK, PAGE_SIZE};
 
 pub use load::read_memory;
 

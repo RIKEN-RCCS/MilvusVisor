@@ -8,11 +8,11 @@
 use crate::paging::{
     add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
 };
-use crate::{BSP_MPIDR, allocate_memory, free_memory, gic, multi_core, psci, smmu};
+use crate::{allocate_memory, free_memory, gic, multi_core, psci, smmu, BSP_MPIDR};
 
 use common::{
-    GeneralPurposeRegisters, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, MemorySaveListEntry, PAGE_MASK,
-    PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu, paging,
+    cpu, paging, GeneralPurposeRegisters, MemorySaveListEntry, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG,
+    PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES,
 };
 
 use core::mem::MaybeUninit;

@@ -15,8 +15,8 @@
 use core::mem::size_of;
 use core::num::NonZeroUsize;
 
-use common::GeneralPurposeRegisters;
 use common::spin_flag::SpinLockFlag;
+use common::GeneralPurposeRegisters;
 
 use crate::memory_hook::*;
 use crate::paging;

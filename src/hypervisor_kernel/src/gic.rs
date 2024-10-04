@@ -8,7 +8,7 @@ use core::ptr::{read_volatile, write_volatile};
 
 use common::acpi::{get_acpi_table, madt::MADT};
 use common::paging::{page_align_up, stage2_page_align_up};
-use common::{GeneralPurposeRegisters, PAGE_SIZE, cpu};
+use common::{cpu, GeneralPurposeRegisters, PAGE_SIZE};
 
 use crate::memory_hook::*;
 use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};

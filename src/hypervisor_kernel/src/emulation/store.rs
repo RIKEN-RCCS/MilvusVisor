@@ -11,14 +11,13 @@
 //! Supported: str, stp (except Atomic, SIMD)
 //!
 
-use common::{GeneralPurposeRegisters, STAGE_2_PAGE_SHIFT, bitmask, cpu::advance_elr_el2};
+use common::{bitmask, cpu::advance_elr_el2, GeneralPurposeRegisters, STAGE_2_PAGE_SHIFT};
 
-use crate::memory_hook::{StoreHookResult, memory_store_hook_handler};
+use crate::memory_hook::{memory_store_hook_handler, StoreHookResult};
 
 use super::{
-    EmulationError, REGISTER_NUMBER_XZR, faulting_va_to_ipa_store,
-    get_virtual_address_to_access_ipa, write_back_index_register_imm7,
-    write_back_index_register_imm9,
+    faulting_va_to_ipa_store, get_virtual_address_to_access_ipa, write_back_index_register_imm7,
+    write_back_index_register_imm9, EmulationError, REGISTER_NUMBER_XZR,
 };
 
 pub fn emulate_store_register(

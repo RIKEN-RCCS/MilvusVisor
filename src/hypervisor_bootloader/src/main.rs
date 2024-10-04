@@ -15,11 +15,11 @@ use core::ptr::NonNull;
 
 use common::{cpu::*, *};
 use uefi::{
-    boot_service, boot_service::EfiBootServices, EfiConfigurationTable, EfiHandle, EfiSystemTable,
-    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
+    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID, EfiConfigurationTable, EfiHandle, EfiSystemTable,
+    boot_service, boot_service::EfiBootServices,
 };
 #[cfg(feature = "tftp")]
-use uefi::{pxe, EfiStatus};
+use uefi::{EfiStatus, pxe};
 
 #[macro_use]
 mod console;
@@ -51,8 +51,8 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     unsafe {
         IMAGE_HANDLE = image_handle;
         SYSTEM_TABLE = system_table;
-        console::DEFAULT_CONSOLE.init((*system_table).console_output_protocol);
     }
+    console::init_default_console(unsafe { &*system_table.console_output_protocol });
 
     if let Some(hash_info) = HYPERVISOR_HASH_INFO {
         println!(
