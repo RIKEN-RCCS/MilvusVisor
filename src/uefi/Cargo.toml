@@ -6,8 +6,8 @@
 # http://opensource.org/licenses/mit-license.php
 [package]
 name = "uefi"
-version = "1.5.0"
-edition = "2024"
-resolver = "2"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]

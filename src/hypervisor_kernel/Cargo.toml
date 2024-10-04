@@ -6,9 +6,9 @@
 # http://opensource.org/licenses/mit-license.php
 [package]
 name = "hypervisor_kernel"
-version = "1.5.0"
-edition = "2024"
-resolver = "2"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [features]
 default = ["smmu", "i210", "mt27800", "fast_restore", "acpi_table_protection", "contiguous_bit", "advanced_memory_manager"]
@@ -22,10 +22,6 @@ contiguous_bit = []
 mrs_msr_emulation = []
 a64fx = ["mrs_msr_emulation"]
 advanced_memory_manager = ["common/advanced_memory_manager"]
-tftp = []
-edit_dtb_memory = []
-save_dtb = []
-raspberrypi = ["edit_dtb_memory", "save_dtb"]
 virtio = []
 virtio_net = ["virtio"]
 embed_kernel = []
