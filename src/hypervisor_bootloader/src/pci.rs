@@ -36,9 +36,9 @@ pub fn detect_pci_space(rsdp: usize) -> Option<EcamInfo> {
         true,
     )
     .expect("Failed to map ECAM Space");
-    return Some(EcamInfo {
+    Some(EcamInfo {
         address: ecam_address,
         start_bus,
         end_bus,
-    });
+    })
 }

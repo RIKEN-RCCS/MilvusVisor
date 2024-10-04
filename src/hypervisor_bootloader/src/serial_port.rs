@@ -34,16 +34,16 @@ fn try_to_get_serial_info_from_acpi(rsdp_address: usize) -> Option<SerialPortInf
         }
     };
 
-    return Some(SerialPortInfo {
+    Some(SerialPortInfo {
         physical_address: address.get_address() as usize,
         virtual_address: address.get_address() as usize,
         port_type,
-    });
+    })
 }
 
 fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo> {
     let dtb_analyser = crate::dtb::DtbAnalyser::new(dtb_address);
-    if let Err(_) = dtb_analyser {
+    if dtb_analyser.is_err() {
         println!("Invalid DTB");
         return None;
     }
@@ -83,7 +83,7 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
         }
     }
 
-    return None;
+    None
 }
 
 #[cfg(feature = "raspberrypi")]
