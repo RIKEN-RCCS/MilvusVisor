@@ -9,13 +9,12 @@
 //!
 
 use common::acpi::{RSDP, XSDT, XSDT_STRUCT_SIZE};
-use common::{STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
 
 use crate::memory_hook::{
     add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
 };
 use crate::paging::add_memory_access_trap;
-use crate::StoredRegisters;
 
 const EXCEPT_TABLE: [&[u8; 4]; 0] = [];
 
@@ -93,7 +92,7 @@ fn register_acpi_table(table_address: usize, table_length: Option<u32>) {
 
 pub fn acpi_table_store_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: u64,
     _: &StoreAccessHandlerEntry,

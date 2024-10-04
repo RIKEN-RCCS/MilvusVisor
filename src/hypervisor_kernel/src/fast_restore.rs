@@ -8,13 +8,11 @@
 use crate::paging::{
     add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
 };
-use crate::{
-    allocate_memory, free_memory, gic, multi_core, psci, smmu, StoredRegisters, BSP_MPIDR,
-};
+use crate::{BSP_MPIDR, allocate_memory, free_memory, gic, multi_core, psci, smmu};
 
 use common::{
-    cpu, paging, MemorySaveListEntry, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, PAGE_MASK, PAGE_SHIFT,
-    PAGE_SIZE, STACK_PAGES,
+    GeneralPurposeRegisters, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, MemorySaveListEntry, PAGE_MASK,
+    PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu, paging,
 };
 
 use core::mem::MaybeUninit;
@@ -24,14 +22,15 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static IS_RESTORE_NEEDED: AtomicBool = AtomicBool::new(false);
 static mut MEMORY_SAVE_LIST: MaybeUninit<&'static mut [MemorySaveListEntry]> =
     MaybeUninit::uninit();
-static mut SAVED_SYSTEM_REGISTERS: MaybeUninit<SavedRegisters> = MaybeUninit::uninit();
-static mut SAVED_REGISTERS: MaybeUninit<StoredRegisters> = MaybeUninit::uninit();
+static mut SAVED_SYSTEM_REGISTERS: SavedSystemRegisters = SavedSystemRegisters::new();
+static mut SAVED_REGISTERS: GeneralPurposeRegisters = [0; 32];
 static mut ORIGINAL_VTTBR_EL2: u64 = 0;
 
 pub const HVC_EXIT_BOOT_SERVICE_TRAP: u16 = 0xFFF0;
 pub const HVC_AFTER_EXIT_BOOT_SERVICE_TRAP: u16 = 0xFFF1;
 
-struct SavedRegisters {
+#[derive(Clone)]
+struct SavedSystemRegisters {
     cpacr_el1: u64,
     ttbr0_el1: u64,
     /*ttbr1_el1: u64,*/
@@ -42,6 +41,22 @@ struct SavedRegisters {
     spsr_el2: u64,
     elr_el2: u64,
     sp_el1: u64,
+}
+
+impl SavedSystemRegisters {
+    const fn new() -> Self {
+        Self {
+            cpacr_el1: 0,
+            ttbr0_el1: 0,
+            tcr_el1: 0,
+            mair_el1: 0,
+            sctlr_el1: 0,
+            vbar_el1: 0,
+            spsr_el2: 0,
+            elr_el2: 0,
+            sp_el1: 0,
+        }
+    }
 }
 
 pub fn add_memory_save_list(list: *mut [MemorySaveListEntry]) {
@@ -253,7 +268,7 @@ pub fn add_trap_to_exit_boot_service(address: usize) {
     save_original_instruction_and_insert_hvc(address, HVC_EXIT_BOOT_SERVICE_TRAP);
 }
 
-pub fn exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
+pub fn exit_boot_service_trap_main(regs: &mut GeneralPurposeRegisters, elr: u64) {
     if unsafe { ORIGINAL_INSTRUCTION } == 0 {
         return;
     }
@@ -261,10 +276,10 @@ pub fn exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
     let hvc_address = elr as usize - cpu::AA64_INSTRUCTION_SIZE;
     unsafe { *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION };
     cpu::set_elr_el2(hvc_address as u64);
-    save_original_instruction_and_insert_hvc(regs.x30 as usize, HVC_AFTER_EXIT_BOOT_SERVICE_TRAP);
+    save_original_instruction_and_insert_hvc(regs[30] as usize, HVC_AFTER_EXIT_BOOT_SERVICE_TRAP);
 }
 
-pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
+pub fn after_exit_boot_service_trap_main(regs: &mut GeneralPurposeRegisters, elr: u64) {
     if unsafe { ORIGINAL_INSTRUCTION } == 0 {
         return;
     }
@@ -277,15 +292,15 @@ pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
     cpu::set_elr_el2(hvc_address as u64);
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
-    pr_debug!("ExitBootServiceStatus: {:#X}", regs.x0);
-    if regs.x0 != 0 {
+    pr_debug!("ExitBootServiceStatus: {:#X}", regs[0]);
+    if regs[0] != 0 {
         panic!("ExitBootService is failed(TODO: reset trap point and continue...)");
     }
 
     /* Save current status */
     save_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
     /* Store registers */
-    let r = SavedRegisters {
+    let r = SavedSystemRegisters {
         cpacr_el1: cpu::get_cpacr_el1(),
         ttbr0_el1: cpu::get_ttbr0_el1(),
         tcr_el1: cpu::get_tcr_el1(),
@@ -296,8 +311,8 @@ pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
         elr_el2: cpu::get_elr_el2(),
         sp_el1: cpu::get_sp_el1(),
     };
-    unsafe { SAVED_SYSTEM_REGISTERS.write(r) };
-    unsafe { SAVED_REGISTERS.write(regs.clone()) };
+    unsafe { *(&raw mut SAVED_SYSTEM_REGISTERS).as_mut().unwrap() = r };
+    unsafe { *(&raw mut SAVED_REGISTERS).as_mut().unwrap() = *regs };
     cpu::set_vttbr_el2(unsafe { ORIGINAL_VTTBR_EL2 }); /* TODO: free old page table */
     unsafe { ORIGINAL_VTTBR_EL2 = 0 };
     pr_debug!("Remove page table for memory save");
@@ -410,7 +425,12 @@ fn restore_main() -> ! {
     smmu::restore_smmu_status();
 
     /* Restore saved registers */
-    let saved_registers = unsafe { SAVED_SYSTEM_REGISTERS.assume_init_read() };
+    let saved_registers = unsafe {
+        (&raw const SAVED_SYSTEM_REGISTERS)
+            .as_ref()
+            .unwrap()
+            .clone()
+    };
     cpu::set_cpacr_el1(saved_registers.cpacr_el1);
     cpu::set_ttbr0_el1(saved_registers.ttbr0_el1);
     cpu::set_tcr_el1(saved_registers.tcr_el1);

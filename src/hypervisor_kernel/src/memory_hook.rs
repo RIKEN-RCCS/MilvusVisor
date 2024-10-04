@@ -11,7 +11,7 @@
 
 use core::mem::MaybeUninit;
 
-use crate::StoredRegisters;
+use common::GeneralPurposeRegisters;
 
 const DEFAULT_LOAD_EMULATION_RESULT: LoadHookResult = LoadHookResult::PassThrough;
 const DEFAULT_STORE_EMULATION_RESULT: StoreHookResult = StoreHookResult::PassThrough;
@@ -39,7 +39,7 @@ pub enum StoreHookResult {
 
 pub type LoadAccessHandler = fn(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     is_64bit_register: bool,
     is_sign_extend_required: bool,
@@ -48,7 +48,7 @@ pub type LoadAccessHandler = fn(
 
 pub type StoreAccessHandler = fn(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
     entry: &StoreAccessHandlerEntry,
@@ -289,7 +289,7 @@ pub fn remove_memory_store_access_handler(entry: StoreAccessHandlerEntry) -> Res
 
 pub fn memory_load_hook_handler(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     is_64bit_register: bool,
     is_sign_extend_required: bool,
@@ -302,7 +302,7 @@ pub fn memory_load_hook_handler(
         if (e.target_address..(e.target_address + e.range)).contains(&accessing_memory_address) {
             return (e.handler)(
                 accessing_memory_address,
-                stored_registers,
+                regs,
                 access_size,
                 is_64bit_register,
                 is_sign_extend_required,
@@ -319,20 +319,14 @@ pub fn memory_load_hook_handler(
 
 pub fn memory_store_hook_handler(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
 ) -> StoreHookResult {
     let mut num_of_check_entries = 0;
     for e in get_store_handler_list!() {
         if (e.target_address..(e.target_address + e.range)).contains(&accessing_memory_address) {
-            return (e.handler)(
-                accessing_memory_address,
-                stored_registers,
-                access_size,
-                data,
-                e,
-            );
+            return (e.handler)(accessing_memory_address, regs, access_size, data, e);
         }
         num_of_check_entries += 1;
         if num_of_check_entries == unsafe { NUM_OF_STORE_HANDLER_ENABLED_ENTRIES } {

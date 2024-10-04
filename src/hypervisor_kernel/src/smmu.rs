@@ -14,11 +14,11 @@ use core::mem::size_of;
 use common::cpu::{dsb, get_vtcr_el2, get_vttbr_el2};
 use common::paging::{page_align_up, stage2_page_align_up};
 use common::smmu::*;
-use common::{bitmask, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
 
+use crate::emulation;
 use crate::memory_hook::*;
 use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
-use crate::{emulation, StoredRegisters};
 
 #[inline(always)]
 fn read_smmu_register<T>(base: usize, offset: usize) -> T {
@@ -129,7 +129,7 @@ fn backup_default_smmu_settings(base_address: usize) {
 
 fn smmu_registers_load_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: bool,
     _: bool,
@@ -164,7 +164,7 @@ fn smmu_registers_load_handler(
 
 fn smmu_registers_store_handler(
     accessing_memory_address: usize,
-    _stored_registers: &mut StoredRegisters,
+    _regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
     entry: &StoreAccessHandlerEntry,
@@ -680,7 +680,7 @@ fn process_level2_table_entry(entry_base: usize, _id: u32, should_check_entry: b
 
 fn level1_table_store_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -704,7 +704,7 @@ fn level1_table_store_handler(
 
 fn level2_table_load_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     access_size: u8,
     _: bool,
     _: bool,
@@ -719,7 +719,7 @@ fn level2_table_load_handler(
 
 fn level2_table_store_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,

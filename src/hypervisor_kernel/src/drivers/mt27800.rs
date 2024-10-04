@@ -11,11 +11,11 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use common::{bitmask, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
 
 use crate::memory_hook::*;
+use crate::paging;
 use crate::pci::{get_configuration_space_data, get_ecam_target_address};
-use crate::{paging, StoredRegisters};
 
 static mut CURRENT_EXPANSION_ROM_BAR: usize = 0;
 static mut EXPANSION_ROM_SIZE: usize = 0;
@@ -116,7 +116,7 @@ fn remove_expansion_rom_memory_trap(expansion_rom_bar: usize) {
 
 fn mt27800_pci_expansion_rom_bar_address_store_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -134,7 +134,7 @@ fn mt27800_pci_expansion_rom_bar_address_store_handler(
 
 fn mt27800_expansion_rom_store_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: u64,
     _: &StoreAccessHandlerEntry,
@@ -147,7 +147,7 @@ static IS_WRITE_CANCELED: AtomicBool = AtomicBool::new(false);
 
 fn mt27800_address_and_data_load_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: bool,
     _: bool,
@@ -166,7 +166,7 @@ fn mt27800_address_and_data_load_handler(
 
 fn mt27800_address_and_data_store_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,

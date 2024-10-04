@@ -11,14 +11,14 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{cpu, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES};
+use common::{GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu};
 
 use crate::memory_hook::{
     add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
 };
 use crate::paging::{add_memory_access_trap, map_address};
-use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
-use crate::{allocate_memory, free_memory, StoredRegisters};
+use crate::psci::{PsciFunctionId, PsciReturnCode, call_psci_function};
+use crate::{allocate_memory, free_memory};
 
 pub static NUMBER_OF_RUNNING_AP: AtomicUsize = AtomicUsize::new(0);
 pub static STACK_TO_FREE_LATER: AtomicUsize = AtomicUsize::new(0);
@@ -39,7 +39,7 @@ struct HypervisorRegisters {
     el1_context_id: u64,
 }
 
-pub fn setup_new_cpu(regs: &mut StoredRegisters) {
+pub fn setup_new_cpu(regs: &mut GeneralPurposeRegisters) {
     let stack_address = (allocate_memory(STACK_PAGES, Some(STACK_PAGES))
         .expect("Failed to allocate stack")
         + (STACK_PAGES << PAGE_SHIFT)) as u64;
@@ -59,8 +59,8 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
     register_buffer.vtcr_el2 = cpu::get_vtcr_el2();
     register_buffer.sctlr_el2 = cpu::get_sctlr_el2();
     register_buffer.hcr_el2 = cpu::get_hcr_el2();
-    register_buffer.el1_entry_point = regs.x2;
-    register_buffer.el1_context_id = regs.x3;
+    register_buffer.el1_entry_point = regs[2];
+    register_buffer.el1_context_id = regs[3];
 
     cpu::dsb();
     /* Flush Memory Cache for Application Processors */
@@ -70,13 +70,13 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
         cpu::convert_virtual_address_to_physical_address_el2_read(cpu_boot as *const fn() as usize)
             .expect("Failed to convert virtual address to real address");
 
-    regs.x0 = call_psci_function(
+    regs[0] = call_psci_function(
         PsciFunctionId::CpuOn,
-        regs.x1,
+        regs[1],
         cpu_boot_address_real_address as u64,
         register_buffer as *const _ as usize as u64,
     );
-    if regs.x0 as i32 != PsciReturnCode::Success as i32 {
+    if regs[0] as i32 != PsciReturnCode::Success as i32 {
         if let Err(err) = free_memory(
             stack_address as usize - (STACK_PAGES << PAGE_SHIFT),
             STACK_PAGES,
@@ -85,8 +85,8 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
         }
         println!(
             "Failed to power on the cpu (MPIDR: {:#X}): {:?}",
-            regs.x1,
-            PsciReturnCode::try_from(regs.x0 as i32)
+            regs[1],
+            PsciReturnCode::try_from(regs[0] as i32)
         );
         return;
     }
@@ -151,7 +151,7 @@ pub fn setup_spin_table(base_address: usize, length: usize) {
 
 fn spin_table_store_access_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,

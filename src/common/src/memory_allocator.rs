@@ -42,7 +42,7 @@ impl MemoryAllocator {
     const NUM_OF_POOL_ENTRIES: usize = 64;
     const NUM_OF_FREE_LIST: usize = 12;
 
-    /// Setup myself with with allocated address
+    /// Setup myself with allocated address
     ///
     /// All members of Self are uninitialized.
     /// Please be careful when you assign some value into the member which has a drop trait.
@@ -58,7 +58,7 @@ impl MemoryAllocator {
     /// * `allocated_address` - the base address allocated
     /// * `allocated_size` - the allocated size
     pub fn init(&mut self, allocated_address: usize, allocated_size: usize) {
-        use core::mem::{forget, replace};
+        use core::mem::replace;
 
         /* Initialize members */
         self.free_memory_size = 0;
@@ -66,33 +66,7 @@ impl MemoryAllocator {
         let _ = replace(&mut self.free_list, [None; Self::NUM_OF_FREE_LIST]);
 
         for e in &mut self.memory_entry_pool {
-            forget(replace(
-                e,
-                MemoryEntry {
-                    previous: None,
-                    next: None,
-                    list_prev: None,
-                    list_next: None,
-                    start: 0,
-                    end: 0,
-                    enabled: false,
-                },
-            ));
-        }
-
-        self.free(allocated_address, allocated_size)
-            .expect("Failed to init memory");
-    }
-
-    /*
-    /// Setup MemoryAllocator with allocated address, and return Self
-    pub fn create(allocated_address: usize, allocated_size: usize) -> Self {
-        use core::mem::MaybeUninit;
-
-        let mut pool: [MaybeUninit<MemoryEntry>; Self::NUM_OF_POOL_ENTRIES] =
-            MaybeUninit::uninit_array();
-        for e in &mut pool {
-            e.write(MemoryEntry {
+            *e = MemoryEntry {
                 previous: None,
                 next: None,
                 list_prev: None,
@@ -100,21 +74,16 @@ impl MemoryAllocator {
                 start: 0,
                 end: 0,
                 enabled: false,
-            });
+            };
         }
 
-        let mut s = Self {
-            free_memory_size: 0,
-            first_entry: core::ptr::null_mut(),
-            free_list: [None; Self::NUM_OF_FREE_LIST],
-            memory_entry_pool: unsafe { MaybeUninit::array_assume_init(pool) },
-        };
-        s.free(allocated_address, allocated_size)
+        self.free(allocated_address, allocated_size)
             .expect("Failed to init memory");
-
-        return s;
     }
-    */
+
+    pub fn get_all_memory(&mut self) -> (usize /*base_address*/, usize /* number of pages*/) {
+        unreachable!()
+    }
 
     fn create_memory_entry(&mut self) -> Result<&'static mut MemoryEntry, MemoryAllocationError> {
         for e in &mut self.memory_entry_pool {
@@ -452,9 +421,7 @@ impl MemoryAllocator {
                 self.free_list[new_order] = Some(entry as *mut _);
             } else {
                 loop {
-                    if let Some(next_entry) =
-                        list_entry.list_next.and_then(|n| Some(unsafe { &mut *n }))
-                    {
+                    if let Some(next_entry) = list_entry.list_next.map(|n| unsafe { &mut *n }) {
                         if next_entry.get_size() >= entry.get_size() {
                             list_entry.list_next = Some(entry as *mut _);
                             entry.list_prev = Some(list_entry as *mut _);
@@ -619,7 +586,7 @@ impl MemoryEntry {
     }
 
     pub fn is_first_entry(&self) -> bool {
-        self.previous == None
+        self.previous.is_none()
     }
 
     pub fn unchain_from_freelist(&mut self) {
@@ -646,7 +613,7 @@ impl Iterator for FreeListIterMut {
     type Item = &'static mut MemoryEntry;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(address) = self.entry {
-            let entry = unsafe { &mut *(address as *mut MemoryEntry) };
+            let entry = unsafe { &mut *(address) };
             self.entry = entry.list_next; /* ATTENTION: get **free_list's** next */
             Some(entry)
         } else {

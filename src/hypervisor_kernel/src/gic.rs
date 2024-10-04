@@ -8,11 +8,10 @@ use core::ptr::{read_volatile, write_volatile};
 
 use common::acpi::{get_acpi_table, madt::MADT};
 use common::paging::{page_align_up, stage2_page_align_up};
-use common::{cpu, PAGE_SIZE};
+use common::{GeneralPurposeRegisters, PAGE_SIZE, cpu};
 
 use crate::memory_hook::*;
 use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
-use crate::StoredRegisters;
 
 const GICR_MAP_SIZE: usize = 0x1000;
 
@@ -219,7 +218,7 @@ pub fn restore_gic(acpi_address: usize) {
 
 fn gic_redistributor_fast_restore_load_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: bool,
     _: bool,
@@ -237,7 +236,7 @@ fn gic_redistributor_fast_restore_load_handler(
 
 fn gic_redistributor_fast_restore_store_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,

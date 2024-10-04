@@ -15,10 +15,11 @@
 use core::mem::size_of;
 use core::num::NonZeroUsize;
 
+use common::GeneralPurposeRegisters;
 use common::spin_flag::SpinLockFlag;
 
 use crate::memory_hook::*;
-use crate::{paging, StoredRegisters};
+use crate::paging;
 
 use super::virtio::*;
 
@@ -398,7 +399,7 @@ impl VirtioNetwork {
 
     fn load_handler(
         accessing_memory_address: usize,
-        _: &mut StoredRegisters,
+        _: &mut GeneralPurposeRegisters,
         _: u8,
         _: bool,
         _: bool,
@@ -474,7 +475,7 @@ impl VirtioNetwork {
 
     fn store_handler(
         accessing_memory_address: usize,
-        _: &mut StoredRegisters,
+        _: &mut GeneralPurposeRegisters,
         _: u8,
         data: u64,
         entry: &StoreAccessHandlerEntry,

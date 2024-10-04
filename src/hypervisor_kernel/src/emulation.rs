@@ -18,10 +18,11 @@ use common::cpu::{
     convert_virtual_address_to_physical_address_el2_read,
     convert_virtual_address_to_physical_address_el2_write, SPSR_EL2_M, SPSR_EL2_M_EL0T,
 };
-use common::{bitmask, PAGE_MASK, PAGE_SIZE};
+use common::{GeneralPurposeRegisters, PAGE_MASK, PAGE_SIZE, bitmask};
+
 pub use load::read_memory;
 
-use crate::{handler_panic, paging::map_address, StoredRegisters};
+use crate::paging::map_address;
 
 mod load;
 mod store;
@@ -30,7 +31,7 @@ const REGISTER_NUMBER_XZR: u8 = 31;
 
 #[allow(unused_variables)]
 pub fn data_abort_handler(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     esr: u64,
     elr: u64,
     far: u64,
@@ -89,7 +90,7 @@ pub fn data_abort_handler(
 }
 
 fn emulate_instruction(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     _elr: u64,
     far: u64,
@@ -204,18 +205,19 @@ fn emulate_instruction(
                 pr_debug!("Load Register Literal");
                 if op1 != 0 {
                     /* V */
-                    handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+                    println!("SIMD is not supported: {:#X}", target_instruction);
+                    return Err(EmulationError::Unsupported);
                 }
                 return load::emulate_literal_load_register(s_r, target_instruction, far, hpfar);
             }
         }
     }
     println!("Unknown Instruction: {:#X}", target_instruction);
-    Err(())
+    Err(EmulationError::Unsupported)
 }
 
 #[cfg(feature = "mrs_msr_emulation")]
-pub fn mrs_msr_handler(s_r: &mut StoredRegisters, esr: u64) -> Result<(), ()> {
+pub fn mrs_msr_handler(s_r: &mut GeneralPurposeRegisters, esr: u64) -> Result<(), ()> {
     let op0 = ((esr & bitmask!(21, 20)) >> 20) as u8;
     let op2 = ((esr & bitmask!(19, 17)) >> 17) as u8;
     let op1 = ((esr & bitmask!(16, 14)) >> 14) as u8;
@@ -227,7 +229,7 @@ pub fn mrs_msr_handler(s_r: &mut StoredRegisters, esr: u64) -> Result<(), ()> {
     let reg = if target_register == REGISTER_NUMBER_XZR {
         &mut xzr
     } else {
-        get_register_reference_mut(s_r, target_register)
+        &mut s_r[target_register as usize]
     };
 
     macro_rules! emulate_mrs_msr_if_matched {
@@ -324,15 +326,6 @@ fn get_virtual_address_to_access_ipa(
         true,
     )?;
     Ok(intermediate_physical_address)
-}
-
-fn get_register_reference_mut(s_r: &mut StoredRegisters, index: u8) -> &mut u64 {
-    unsafe {
-        &mut core::mem::transmute::<
-            &mut StoredRegisters,
-            &mut [u64; core::mem::size_of::<StoredRegisters>() / core::mem::size_of::<u64>()],
-        >(s_r)[index as usize]
-    }
 }
 
 fn write_back_index_register_imm9(base_register: &mut u64, imm9_u32: u32) {

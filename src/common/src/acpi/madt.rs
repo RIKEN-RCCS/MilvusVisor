@@ -69,7 +69,7 @@ pub struct GicInterruptTranslationServiceStructureList {
 
 impl MADT {
     pub const SIGNATURE: [u8; 4] = *b"APIC";
-    const STRUCT_SIZE: usize = core::mem::size_of::<MADT>();
+    const STRUCT_SIZE: usize = size_of::<MADT>();
 
     pub fn get_gic_list(&self) -> GicCpuInterfaceStructureList {
         let length = self.length as usize - Self::STRUCT_SIZE;
@@ -97,7 +97,7 @@ impl MADT {
             }
             base_address += record_length as usize;
         }
-        return None;
+        None
     }
 
     pub fn get_gic_its_list(&self) -> GicInterruptTranslationServiceStructureList {

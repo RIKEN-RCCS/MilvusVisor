@@ -11,18 +11,18 @@
 //! Supported: ldr, ldp (except Atomic, SIMD)
 //!
 
-use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_SHIFT, bitmask, cpu::advance_elr_el2};
 
-use crate::memory_hook::{memory_load_hook_handler, LoadHookResult};
-use crate::StoredRegisters;
+use crate::memory_hook::{LoadHookResult, memory_load_hook_handler};
 
 use super::{
-    faulting_va_to_ipa_load, get_register_reference_mut, get_virtual_address_to_access_ipa,
-    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
+    EmulationError, REGISTER_NUMBER_XZR, faulting_va_to_ipa_load,
+    get_virtual_address_to_access_ipa, write_back_index_register_imm7,
+    write_back_index_register_imm9,
 };
 
 pub fn emulate_load_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
@@ -71,8 +71,7 @@ pub fn emulate_load_register(
     if (op4 & 1) != 0 {
         pr_debug!("Post/Pre Indexed");
         let imm9 = (target_instruction & bitmask!(20, 12)) >> 12;
-        let base_register =
-            get_register_reference_mut(s_r, ((target_instruction & bitmask!(9, 5)) >> 5) as u8);
+        let base_register = &mut s_r[((target_instruction & bitmask!(9, 5)) >> 5) as usize];
         write_back_index_register_imm9(base_register, imm9);
     }
 
@@ -81,7 +80,7 @@ pub fn emulate_load_register(
 }
 
 pub fn emulate_unsigned_immediate_load_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
@@ -112,7 +111,7 @@ pub fn emulate_unsigned_immediate_load_register(
 }
 
 pub fn emulate_load_register_register_offset(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
@@ -143,7 +142,7 @@ pub fn emulate_load_register_register_offset(
 }
 
 pub fn emulate_literal_load_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
@@ -175,7 +174,7 @@ pub fn emulate_literal_load_register(
 }
 
 pub fn emulate_load_pair(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
@@ -234,8 +233,7 @@ pub fn emulate_load_pair(
     if is_pre_or_post_indexed {
         pr_debug!("Post/Pre Indexed");
         let imm7 = (target_instruction & bitmask!(21, 15)) >> 15;
-        let base_register =
-            get_register_reference_mut(s_r, ((target_instruction & bitmask!(9, 5)) >> 5) as u8);
+        let base_register = &mut s_r[((target_instruction & bitmask!(9, 5)) >> 5) as usize];
         write_back_index_register_imm7(base_register, imm7);
     }
     advance_elr_el2();
@@ -243,7 +241,7 @@ pub fn emulate_load_pair(
 }
 
 fn load_from_address_and_store_into_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     intermediate_physical_load_address: usize,
     target_register: u8,
     size: u8,
@@ -281,7 +279,7 @@ fn load_from_address_and_store_into_register(
 
     pr_debug!("Data: {:#X}", data);
     if target_register != REGISTER_NUMBER_XZR {
-        *get_register_reference_mut(s_r, target_register) = data;
+        s_r[target_register as usize] = data;
     }
     return Ok(());
 }
