@@ -8,8 +8,8 @@
 //! EFI Device Path Protocol
 //!
 
-use crate::loaded_image::{EfiLoadedImageProtocol, EFI_LOADED_IMAGE_PROTOCOL_GUID};
-use crate::{boot_service, EfiHandle, EfiStatus, Guid};
+use crate::loaded_image::{EFI_LOADED_IMAGE_PROTOCOL_GUID, EfiLoadedImageProtocol};
+use crate::{EfiHandle, EfiStatus, Guid, boot_service};
 
 const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = Guid {
     d1: 0x09576e91,

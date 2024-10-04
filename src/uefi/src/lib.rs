@@ -35,7 +35,7 @@ macro_rules! efi_warn {
 }
 
 #[repr(usize)]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::enum_clike_unportable_variant)]
 #[derive(Eq, PartialEq, Debug)]
 pub enum EfiStatus {
     EfiSuccess = 0,
