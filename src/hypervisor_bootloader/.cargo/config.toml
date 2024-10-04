@@ -1,7 +1,3 @@
 [build]
 target = "aarch64-unknown-uefi"
 target-dir = "../target/"
-
-[unstable]
-build-std-features = ["compiler-builtins-mem"]
-build-std = ["core", "compiler_builtins"]

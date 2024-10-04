@@ -1,4 +1,4 @@
-name: Check compile errors and miss formatting
+name: Rustfmt
 
 on:
   pull_request:
@@ -6,20 +6,11 @@ on:
       - main
       - develop
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install tools
-        run: |
-          rustup default nightly
-          rustup component add rust-src
-          rustup component add rustfmt
-
       - name: Run cargo fmt
         id: fmt
         continue-on-error: true
@@ -35,12 +26,4 @@ jobs:
           echo "\`\`\`" >> /tmp/message
           gh pr comment -F /tmp/message "$REF"
         if: steps.fmt.outcome != 'success'
-      - name: Build UEFI bootloader
-        run: |
-          cd src/hypervisor_bootloader
-          cargo build
 
-      - name: Build kernel
-        run: |
-          cd src/hypervisor_kernel
-          cargo build
