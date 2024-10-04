@@ -40,24 +40,37 @@ pub const CNTHCTL_EL2_EL1PCTEN: u64 = 1 << 0;
 
 /* CPACR_EL1 */
 pub const CPACR_EL1_TTA_BIT_OFFSET: u64 = 28;
-//pub const CPACR_EL1_TTA: u64 = 1 << CPACR_EL1_TTA_BIT_OFFSET;
+// pub const CPACR_EL1_TTA: u64 = 1 << CPACR_EL1_TTA_BIT_OFFSET;
+pub const CPACR_EL1_SMEN_BITS_OFFSET: u64 = 24;
+// pub const CPACR_EL1_SMEN: u64 = 0b11 << CPACR_EL1_SMEN_BITS_OFFSET;
+pub const CPACR_EL1_SMEN_TRAP_ALL: u64 = 0b00 << CPACR_EL1_SMEN_BITS_OFFSET;
+pub const CPACR_EL1_SMEN_TRAP_NONE: u64 = 0b11 << CPACR_EL1_SMEN_BITS_OFFSET;
 pub const CPACR_EL1_FPEN_BITS_OFFSET: u64 = 20;
-//pub const CPACR_EL1_FPEN: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
+// pub const CPACR_EL1_FPEN: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
+pub const CPACR_EL1_FPEN_TRAP_ALL: u64 = 0b00 << CPACR_EL1_FPEN_BITS_OFFSET;
+pub const CPACR_EL1_FPEN_TRAP_NONE: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
 pub const CPACR_EL1_ZEN_BITS_OFFSET: u64 = 16;
-//pub const CPACR_EL1_ZEN: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
+// pub const CPACR_EL1_ZEN: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
+pub const CPACR_EL1_ZEN_TRAP_NONE: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
+pub const CPACR_EL1_ZEN_TRAP_ALL: u64 = 0b00 << CPACR_EL1_ZEN_BITS_OFFSET;
 
 /* CPTR_EL2 */
-pub const CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H: u64 = 28;
-pub const CPTR_EL2_TTA_WITH_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H;
+pub const CPTR_EL2_TCPAC_BIT_OFFSET: u64 = 31;
+pub const CPTR_EL2_TCPAC: u64 = 1 << CPTR_EL2_TCPAC_BIT_OFFSET;
+pub const CPTR_EL2_TAM_BIT_OFFSET: u64 = 30;
+pub const CPTR_EL2_TAM: u64 = 1 << CPTR_EL2_TAM_BIT_OFFSET;
 pub const CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H: u64 = 20;
 pub const CPTR_EL2_TTA_WITHOUT_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H;
-pub const CPTR_EL2_FPEN_BITS_OFFSET: u64 = 20;
-pub const CPTR_EL2_FPEN: u64 = 0b11 << CPTR_EL2_FPEN_BITS_OFFSET;
-pub const CPTR_EL2_FPEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_FPEN_BITS_OFFSET;
-pub const CPTR_EL2_ZEN_BITS_OFFSET: u64 = 16;
-pub const CPTR_EL2_ZEN: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
-pub const CPTR_EL2_ZEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
-//pub const CPTR_EL2_RES1: u64 = 0b11111111 | (1 << 9) | (0b11 << 12);
+pub const CPTR_EL2_TSM_BIT_OFFSET: u64 = 12;
+pub const CPTR_EL2_TSM: u64 = 1 << CPTR_EL2_TSM_BIT_OFFSET;
+pub const CPTR_EL2_TSM_TRAP: u64 = 1 << CPTR_EL2_TSM_BIT_OFFSET;
+pub const CPTR_EL2_TFP_BIT_OFFSET: u64 = 10;
+pub const CPTR_EL2_TFP: u64 = 1 << CPTR_EL2_TFP_BIT_OFFSET;
+pub const CPTR_EL2_TFP_TRAP: u64 = 1 << CPTR_EL2_TFP_BIT_OFFSET;
+pub const CPTR_EL2_TZ_BIT_OFFSET: u64 = 8;
+pub const CPTR_EL2_TZ: u64 = 1 << CPTR_EL2_TZ_BIT_OFFSET;
+pub const CPTR_EL2_TZ_TRAP: u64 = 1 << CPTR_EL2_TZ_BIT_OFFSET;
+pub const CPTR_EL2_RES1: u64 = (1 << 13) | (1 << 9) | bitmask!(7, 0);
 
 /* TCR_EL2 */
 pub const TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H: u64 = 32;
@@ -139,6 +152,9 @@ pub const SPSR_EL2_M_EL0T: u64 = 0b0000;
 pub const ID_AA64PFR0_EL1_SVE: u64 = 0b1111 << 32;
 pub const ID_AA64PFR0_EL1_GIC: u64 = 0b1111 << 24;
 
+/* ID_AA64PFR1_EL1 */
+pub const ID_AA64PFR1_EL1_SME: u64 = 0b1111 << 24;
+
 /* ID_AA64MMFR0_EL1 */
 pub const ID_AA64MMFR0_EL1_PARANGE: u64 = 0b1111;
 
@@ -156,6 +172,12 @@ pub const CCSIDR_EL1_LINE_SIZE: u64 = 0b111 << CCSIDR_EL1_LINE_SIZE_BITS_OFFSET;
 
 /* ZCR_EL2 */
 pub const MAX_ZCR_EL2_LEN: u64 = 0x1ff;
+
+/* ICC_SRE_EL2 */
+pub const ICC_SRE_EL2_ENABLE_BIT_OFFSET: u64 = 3;
+pub const ICC_SRE_EL2_ENABLE: u64 = 1 << ICC_SRE_EL2_ENABLE_BIT_OFFSET;
+pub const ICC_SRE_EL2_SRE_BIT_OFFSET: u64 = 3;
+pub const ICC_SRE_EL2_SRE: u64 = 1 << ICC_SRE_EL2_SRE_BIT_OFFSET;
 
 /// Execute SMC #0 with SMC Calling Convention 1.2
 pub fn secure_monitor_call(regs: &mut [u64; 32]) {
@@ -539,6 +561,13 @@ pub fn get_id_aa64pfr0_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_id_aa64pfr1_el1() -> u64 {
+    let id_aa64pfr1_el1: u64;
+    unsafe { asm!("mrs {:x}, id_aa64pfr1_el1", out(reg) id_aa64pfr1_el1) };
+    id_aa64pfr1_el1
+}
+
+#[inline(always)]
 pub fn get_mpidr_el1() -> u64 {
     let mpidr_el1: u64;
     unsafe { asm!("mrs {:x}, mpidr_el1", out(reg) mpidr_el1) };
@@ -555,6 +584,16 @@ pub fn get_midr_el1() -> u64 {
 #[inline(always)]
 pub fn advance_elr_el2() {
     set_elr_el2(get_elr_el2() + AA64_INSTRUCTION_SIZE as u64);
+}
+
+#[inline(always)]
+pub fn set_icc_sre_el2(icc_sre_el2: u64) {
+    unsafe { asm!("msr icc_sre_el2, {:x}", in(reg) icc_sre_el2) };
+}
+
+#[inline(always)]
+pub fn set_ich_hcr_el2(ich_hcr_el2: u64) {
+    unsafe { asm!("msr ich_hcr_el2, {:x}", in(reg) ich_hcr_el2) };
 }
 
 #[inline(always)]

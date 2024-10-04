@@ -846,6 +846,8 @@ fn dump_memory_map(b_s: &EfiBootServices) {
 
 fn set_up_el1() {
     let is_e2h_enabled = (get_hcr_el2() & HCR_EL2_E2H) != 0;
+    let id_aa64pfr0_el1 = get_id_aa64pfr0_el1();
+    let id_aa64pfr1_el1 = get_id_aa64pfr1_el1();
 
     /* CNTHCTL_EL2 & CNTVOFF_EL2 */
     set_cnthctl_el2(CNTHCTL_EL2_EL1PCEN | CNTHCTL_EL2_EL1PCTEN);
@@ -869,66 +871,59 @@ fn set_up_el1() {
     /* Ignore it currently... */
 
     /* CPACR_EL1 & CPTR_EL2 */
-    #[cfg(feature = "raspberrypi")]
-    set_cptr_el2(0x0);
-    let cptr_el2_current = get_cptr_el2();
+    let cptr_el2 = get_cptr_el2();
     let mut cpacr_el1: u64 = 0;
 
-    cpacr_el1 |= ((((cptr_el2_current) & CPTR_EL2_ZEN) >> CPTR_EL2_ZEN_BITS_OFFSET)
-        << CPACR_EL1_ZEN_BITS_OFFSET)
-        | ((((cptr_el2_current) & CPTR_EL2_FPEN) >> CPTR_EL2_FPEN_BITS_OFFSET)
-            << CPACR_EL1_FPEN_BITS_OFFSET);
-    cpacr_el1 |= 0b11 << CPACR_EL1_FPEN_BITS_OFFSET; /* TODO: inspect why we must set 0b11 */
-
     if is_e2h_enabled {
-        cpacr_el1 |= ((cptr_el2_current & CPTR_EL2_TTA_WITH_E2H)
-            >> CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H)
-            << CPACR_EL1_TTA_BIT_OFFSET;
+        cpacr_el1 = cptr_el2;
+        cpacr_el1 &= !(CPTR_EL2_TCPAC | CPTR_EL2_TAM);
     } else {
-        cpacr_el1 |= ((cptr_el2_current & CPTR_EL2_TTA_WITHOUT_E2H)
-            >> CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H)
+        cpacr_el1 |= ((cptr_el2 & CPTR_EL2_TTA_WITHOUT_E2H) >> CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H)
             << CPACR_EL1_TTA_BIT_OFFSET;
+        if (cptr_el2 & CPTR_EL2_TSM) == CPTR_EL2_TSM_TRAP {
+            cpacr_el1 |= CPACR_EL1_SMEN_TRAP_ALL;
+        } else {
+            cpacr_el1 |= CPACR_EL1_SMEN_TRAP_NONE;
+        }
+        if (cptr_el2 & CPTR_EL2_TFP) == CPTR_EL2_TFP_TRAP {
+            cpacr_el1 |= CPACR_EL1_FPEN_TRAP_ALL;
+        } else {
+            cpacr_el1 |= CPACR_EL1_FPEN_TRAP_NONE;
+        }
+        if (cptr_el2 & CPTR_EL2_TZ) == CPTR_EL2_TZ_TRAP {
+            cpacr_el1 |= CPACR_EL1_ZEN_TRAP_ALL;
+        } else {
+            cpacr_el1 |= CPACR_EL1_ZEN_TRAP_NONE;
+        }
     }
 
-    let mut cptr_el2: u64 = cptr_el2_current | CPTR_EL2_ZEN_NO_TRAP | CPTR_EL2_FPEN_NO_TRAP /*| CPTR_EL2_RES1*/;
-    cptr_el2 &= !((1 << 28) | (1 << 30) | (1 << 31));
-    set_cpacr_el1(cpacr_el1);
-    isb();
-    /* CPTR_EL2 will be set after HCR_EL2 */
-
-    let id_aa64pfr0_el1 = get_id_aa64pfr0_el1();
+    let mut cptr_el2 = CPTR_EL2_RES1;
+    if (id_aa64pfr1_el1 & ID_AA64PFR1_EL1_SME) != 0 {
+        cptr_el2 &= !CPTR_EL2_TSM;
+    }
     if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_SVE) != 0 {
-        /* ZCR_EL2 */
-        unsafe {
-            asm!("  mov {t}, 0x1ff
-                msr S3_4_C1_C2_0, {t}", t = out(reg) _)
-        };
+        cptr_el2 &= !CPTR_EL2_TZ;
+
+        let zcr_el2 = MAX_ZCR_EL2_LEN;
+        unsafe { asm!("msr S3_4_C1_C2_0, {:x}", in(reg)zcr_el2) };
     }
 
     if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_GIC) != 0 {
-        /* GICv3~ */
-        /*unsafe {
-            asm!("  mrs {t}, icc_sre_el2
-                    orr {t}, {t}, 1 << 0
-                    orr {t}, {t}, 1 << 3
-                    msr icc_sre_el2, {t}
-                    isb
-                    mrs {t}, icc_sre_el2
-                    tbz {t}, 0, 1f
-                    msr ich_hcr_el2, xzr
-                    1:", t = out(reg) _)
-        };*/
+        let icc_sre_el2 = ICC_SRE_EL2_ENABLE | ICC_SRE_EL2_SRE;
+        set_icc_sre_el2(icc_sre_el2);
+        isb();
+        set_ich_hcr_el2(0);
     }
 
     /* MAIR_EL1(Copy MAIR_EL2) */
-    set_mair_el1(get_mair_el2());
+    let mair_el1 = get_mair_el2();
 
     /* TTBR0_EL1 */
-    set_ttbr0_el1(unsafe { ORIGINAL_PAGE_TABLE } as u64);
+    let ttbr0_el1 = unsafe { ORIGINAL_PAGE_TABLE } as u64;
 
     /* TCR_EL1 */
-    if is_e2h_enabled {
-        set_tcr_el1(unsafe { ORIGINAL_TCR_EL2 });
+    let tcr_el1 = if is_e2h_enabled {
+        unsafe { ORIGINAL_TCR_EL2 }
     } else {
         let mut tcr_el1: u64 = 0;
         let tcr_el2 = unsafe { ORIGINAL_TCR_EL2 };
@@ -955,15 +950,24 @@ fn set_up_el1() {
             << TCR_EL1_IPS_BITS_OFFSET;
         tcr_el1 |= TCR_EL1_EPD1; /* Disable TTBR1_EL1 */
 
-        set_tcr_el1(tcr_el1);
-    }
+        tcr_el1
+    };
 
     /* SCTLR_EL1(Copy SCTLR_EL2) */
-    set_sctlr_el1(get_sctlr_el2());
+    let sctlr_el1 = get_sctlr_el2();
 
     /* VBAR_EL1 */
-    set_vbar_el1(unsafe { ORIGINAL_VECTOR_BASE });
+    let vbar_el1 = unsafe { ORIGINAL_VECTOR_BASE };
 
+    /* A64FX specific registers */
+    #[cfg(feature = "a64fx")]
+    let mut imp_fj_tag_address_ctrl_el1: u32;
+    #[cfg(feature = "a64fx")]
+    let imp_sccr_ctrl_el1: u64;
+    #[cfg(feature = "a64fx")]
+    let imp_pf_ctrl_el1: u64;
+    #[cfg(feature = "a64fx")]
+    let imp_barrier_ctrl_el1: u64;
     #[cfg(feature = "a64fx")]
     {
         const IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET: u32 = 0;
@@ -986,18 +990,18 @@ fn set_up_el1() {
         const IMP_BARRIER_CTRL_EL1_EL0AE: u64 = 1 << 62;
 
         let mut imp_fj_tag_address_ctrl_el2: u32;
-        let mut imp_fj_tag_address_ctrl_el1: u32 = 0;
         /* Is it ok including IMP_SCCR_CTRL_EL1_EL0AE? */
-        let imp_sccr_ctrl_el1: u64 = IMP_SCCR_CTRL_EL1_EL1AE | IMP_SCCR_CTRL_EL1_EL0AE;
+        imp_sccr_ctrl_el1 = IMP_SCCR_CTRL_EL1_EL1AE | IMP_SCCR_CTRL_EL1_EL0AE;
         /* Is it ok including IMP_PF_CTRL_EL1_EL0AE? */
-        let imp_pf_ctrl_el1: u64 = IMP_PF_CTRL_EL1_EL1AE | IMP_PF_CTRL_EL1_EL0AE;
+        imp_pf_ctrl_el1 = IMP_PF_CTRL_EL1_EL1AE | IMP_PF_CTRL_EL1_EL0AE;
         /* Is it ok including IMP_BARRIER_CTRL_EL1_EL0AE? */
-        let imp_barrier_ctrl_el1: u64 = IMP_BARRIER_CTRL_EL1_EL1AE | IMP_BARRIER_CTRL_EL1_EL0AE;
+        imp_barrier_ctrl_el1 = IMP_BARRIER_CTRL_EL1_EL1AE | IMP_BARRIER_CTRL_EL1_EL0AE;
 
         unsafe { asm!("mrs {:x}, S3_4_C11_C2_0", out(reg) imp_fj_tag_address_ctrl_el2) };
         if is_e2h_enabled {
             imp_fj_tag_address_ctrl_el1 = imp_fj_tag_address_ctrl_el2;
         } else {
+            imp_fj_tag_address_ctrl_el1 = 0;
             imp_fj_tag_address_ctrl_el1 |= ((imp_fj_tag_address_ctrl_el2
                 & IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0)
                 >> IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET)
@@ -1013,17 +1017,29 @@ fn set_up_el1() {
         }
         imp_fj_tag_address_ctrl_el2 = 0;
         unsafe { asm!("msr S3_4_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el2) };
-        unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
-        unsafe { asm!("msr S3_0_C11_C8_0, {:x}", in(reg) imp_sccr_ctrl_el1) };
-        unsafe { asm!("msr S3_0_C11_C4_0, {:x}", in(reg) imp_pf_ctrl_el1) };
-        unsafe { asm!("msr S3_0_C11_C12_0, {:x}", in(reg) imp_barrier_ctrl_el1) };
     }
 
     /* HCR_EL2 */
     let hcr_el2 = HCR_EL2_FIEN | HCR_EL2_API | HCR_EL2_APK | HCR_EL2_RW | HCR_EL2_TSC | HCR_EL2_VM;
     set_hcr_el2(hcr_el2);
     isb();
+
+    /* Now, HCR_EL2.E2H == 0 */
     set_cptr_el2(cptr_el2);
+    set_cpacr_el1(cpacr_el1);
+    set_sctlr_el1(sctlr_el1);
+    set_vbar_el1(vbar_el1);
+    set_mair_el1(mair_el1);
+    set_tcr_el1(tcr_el1);
+    set_ttbr0_el1(ttbr0_el1);
+
+    #[cfg(feature = "a64fx")]
+    {
+        unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C8_0, {:x}", in(reg) imp_sccr_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C4_0, {:x}", in(reg) imp_pf_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C12_0, {:x}", in(reg) imp_barrier_ctrl_el1) };
+    }
 }
 
 #[cfg(feature = "tftp")]
