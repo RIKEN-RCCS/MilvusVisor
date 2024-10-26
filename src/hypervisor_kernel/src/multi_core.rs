@@ -249,13 +249,47 @@ extern "C" fn cpu_boot() {
     msr sctlr_el2,       x9
     msr hcr_el2,        x10
 
-    mov x1, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
-    msr spsr_el2,        x1
-    msr elr_el2,        x11
-    mov x0, x12
+    // Do not use x11 and x12
+
+    // MIDR_EL1 & MPIDR_EL1
+    mrs x15, midr_el1
+    msr vpidr_el2, x15
+    mrs x16, mpidr_el1
+    msr vmpidr_el2, x16
+
+    mrs x17, id_aa64pfr0_el1
+
+    // SVE
+    ubfx x18, x17, 32, 4
+    cbz x18, 2f
+    mov x15, {MAX_ZCR_EL2_LEN}
+    msr S3_4_C1_C2_0, x15 // ZCR_EL2
+
+2:  // GIC v3/4/4.1
+    ubfx x18, x17, 24, 4
+    cbz x18, 3f
+    mrs x15, icc_sre_el2
+    and x16, x15, 1
+    cbz x16, 3f
+    mov x18, {ICC_SRE_EL2}
+    msr icc_sre_el2, x18
+    isb
+    msr ich_hcr_el2, xzr
+
+3:  // A64FX
+    mov x15, {A64FX}
+    cbz x15, 4f
+    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
+
+4:
+    mov x1,         {SPSR_EL2}
+    msr spsr_el2,    x1
+    msr elr_el2,    x11
+    mov x0,         x12
     isb
     eret",
     MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
+    ICC_SRE_EL2 = const (cpu::ICC_SRE_EL2_ENABLE | cpu::ICC_SRE_EL2_SRE),
     A64FX = const cfg!(feature = "a64fx") as u64,
     SPSR_EL2 = const cpu::SPSR_EL2_DEFAULT)
     }

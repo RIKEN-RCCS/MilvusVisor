@@ -147,6 +147,7 @@ pub const VTCR_EL2_T0SZ: u64 = 0b111111 << VTCR_EL2_T0SZ_BITS_OFFSET;
 /* SPSR_EL2 */
 pub const SPSR_EL2_M: u64 = 0b1111;
 pub const SPSR_EL2_M_EL0T: u64 = 0b0000;
+pub const SPSR_EL2_DEFAULT: u64 = (1 << 7) | (1 << 6) | (1 << 2) | (1) /* EL1h(EL1 + Use SP_EL1) */;
 
 /* ID_AA64PFR0_EL1 */
 pub const ID_AA64PFR0_EL1_SVE: u64 = 0b1111 << 32;
@@ -176,7 +177,7 @@ pub const MAX_ZCR_EL2_LEN: u64 = 0x1ff;
 /* ICC_SRE_EL2 */
 pub const ICC_SRE_EL2_ENABLE_BIT_OFFSET: u64 = 3;
 pub const ICC_SRE_EL2_ENABLE: u64 = 1 << ICC_SRE_EL2_ENABLE_BIT_OFFSET;
-pub const ICC_SRE_EL2_SRE_BIT_OFFSET: u64 = 3;
+pub const ICC_SRE_EL2_SRE_BIT_OFFSET: u64 = 0;
 pub const ICC_SRE_EL2_SRE: u64 = 1 << ICC_SRE_EL2_SRE_BIT_OFFSET;
 
 /// Execute SMC #0 with SMC Calling Convention 1.2

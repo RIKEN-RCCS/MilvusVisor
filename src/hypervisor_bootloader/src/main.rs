@@ -1162,13 +1162,14 @@ fn el2_to_el1(el1_entry_point: usize, el2_stack_pointer: usize) {
             mov {tmp}, sp
             msr sp_el1, {tmp}
             mov sp, {stack_pointer}
-            mov {tmp}, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
+            mov {tmp}, {SPSR_EL2}
             msr spsr_el2, {tmp}
             isb
             eret",
         tmp = in(reg) 0u64,
         entry_point = in(reg) el1_entry_point,
         stack_pointer = in(reg) el2_stack_pointer,
+        SPSR_EL2 = const SPSR_EL2_DEFAULT,
         options(noreturn)
         )
     }
