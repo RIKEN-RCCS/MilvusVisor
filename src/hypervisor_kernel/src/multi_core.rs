@@ -227,7 +227,7 @@ fn spin_table_store_access_handler(
 #[naked]
 extern "C" fn cpu_boot() {
     unsafe {
-        core::arch::asm!("
+        core::arch::naked_asm!("
     // MIDR_EL1 & MPIDR_EL1
     mrs x15, midr_el1
     msr vpidr_el2, x15
@@ -285,8 +285,7 @@ extern "C" fn cpu_boot() {
     isb
     eret",
         MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
-        A64FX = const cfg!(feature = "a64fx") as u64,
-        options(noreturn))
+        A64FX = const cfg!(feature = "a64fx") as u64)
     }
 }
 
@@ -298,7 +297,7 @@ extern "C" fn cpu_boot() {
 #[naked]
 extern "C" fn spin_table_boot() {
     unsafe {
-        core::arch::asm!("
+        core::arch::naked_asm!("
 .align  3
     adr     x1, 3f
 2:
@@ -312,7 +311,6 @@ extern "C" fn spin_table_boot() {
     b       {CPU_BOOT}
 3:
     .quad   0",
-        CPU_BOOT = sym cpu_boot,
-        options(noreturn))
+        CPU_BOOT = sym cpu_boot)
     }
 }
