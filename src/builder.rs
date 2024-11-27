@@ -202,7 +202,7 @@ fn build(mut args: Args, cargo_path: &String) {
 
     // Build bootloader if kernel should be embedded
     if is_kernel_embedded {
-        std::env::set_var("HYPERVISOR_PATH", hypervisor_kernel_binary_path.clone());
+        unsafe { std::env::set_var("HYPERVISOR_PATH", hypervisor_kernel_binary_path.clone()) };
         let bootloader_result = bootloader_command
             .spawn()
             .expect("Failed to run bootloader build")
