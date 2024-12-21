@@ -70,7 +70,7 @@ pub fn add_memory_save_list(list: *mut [MemorySaveListEntry]) {
 
 pub fn create_memory_trap_for_save_memory() {
     unsafe { ORIGINAL_VTTBR_EL2 = cpu::get_vttbr_el2() };
-    let page_table = remake_stage2_page_table().expect("Failed to remake page table.");
+    let page_table = remake_stage2_page_table(false).expect("Failed to remake page table.");
     cpu::set_vttbr_el2(page_table as u64);
     let list = unsafe {
         (&raw const MEMORY_SAVE_LIST)

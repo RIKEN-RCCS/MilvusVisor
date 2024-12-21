@@ -25,6 +25,7 @@ advanced_memory_manager = ["common/advanced_memory_manager"]
 virtio = []
 virtio_net = ["virtio"]
 embed_kernel = []
+lwie_bf2 = [ "virtio_net"]
 
 [dependencies]
 common = { path = "../common" }

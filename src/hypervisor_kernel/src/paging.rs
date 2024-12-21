@@ -23,6 +23,7 @@ fn _remake_stage2_page_table(
     table_level: i8,
     number_of_tables: usize,
     vtcr_el2_t0sz: u8,
+    unmap_all: bool,
 ) -> Result<(), ()> {
     let page_table = unsafe {
         core::slice::from_raw_parts_mut(
@@ -38,7 +39,7 @@ fn _remake_stage2_page_table(
                     | (1 << MEMORY_PERMISSION_WRITABLE_BIT)
                     | (1 << MEMORY_PERMISSION_READABLE_BIT),
                 false,
-                false,
+                unmap_all,
                 true,
             );
             *e = (*physical_address as u64) | attribute;
@@ -54,6 +55,7 @@ fn _remake_stage2_page_table(
                 table_level + 1,
                 1,
                 vtcr_el2_t0sz,
+                unmap_all,
             )?;
             *e = (next_table_address as u64) | 0b11;
         }
@@ -61,7 +63,7 @@ fn _remake_stage2_page_table(
     Ok(())
 }
 
-pub fn remake_stage2_page_table() -> Result<usize, ()> {
+pub fn remake_stage2_page_table(unmap_all: bool) -> Result<usize, ()> {
     let vtcr_el2 = get_vtcr_el2();
     let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
     let vtcr_el2_sl2 = ((vtcr_el2 & VTCR_EL2_SL2) >> VTCR_EL2_SL2_BIT_OFFSET) as u8;
@@ -89,6 +91,7 @@ pub fn remake_stage2_page_table() -> Result<usize, ()> {
         initial_look_up_level,
         number_of_tables,
         vtcr_el2_t0sz,
+        unmap_all,
     )?;
 
     Ok(table_address)

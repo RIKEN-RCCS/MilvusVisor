@@ -4,17 +4,12 @@
 // This software is released under the MIT License.
 // http://opensource.org/licenses/mit-license.php
 //!
-//! Virtio Device Interface
+//! Virtio Device Interface for Light Weight Isolation Environment
 //!
-//! This module provides virtio network device interface.
-//!
-//! This is an experimental implementation.
-//! It may be not able to create virtio device on some devices.
-//!
-
-use core::num::NonZeroUsize;
+//! This module provides virtio network device interface to communicate with BSP environment
 
 use common::GeneralPurposeRegisters;
+use common::cpu;
 use common::spin_flag::SpinLockFlag;
 
 use crate::memory_hook::*;
@@ -23,8 +18,6 @@ use crate::paging;
 use super::virtio::*;
 
 const VIRTIO_NET_F_MRG_RXBUF: u32 = 1 << 15;
-
-pub type Callback = fn(frame: &[u8], send_frame: &mut dyn FnMut(&[u8]) -> Result<(), ()>);
 
 /// Virtio Network Entry Descriptor
 #[repr(C)]
@@ -38,40 +31,9 @@ struct VirtioNetHdr {
     num_buffers: u16,
 }
 
-///
-/// Providing interface to communicate with OS
-///
-/// This device provides low layer interface of virtio network.
-/// [`VirtioNetwork::create_new_device`] creates a virtio network device over MMIO.
-/// It handles send/receive ethernet frames, but it does not contain TCP/IP protocol stacks(must be implemented by yourself).
-///
-/// By registering `callback` you can receive ethernet frames when you OS writes.
-/// If you want to reply while processing, you can use `send_frame` closure passed as the second argument.
-/// **In the `callback`, do not use [`VirtioNetwork::send_frame`] directly due to avoid deadlocking.**
-///
-/// When you will send the frames out of `callback`, use [`VirtioNetwork::send_frame`].
-///
-/// # Example
-///
-/// ```rust
-/// /// The function will be called when OS sends ethernet frames.
-/// /// `frame` contains a ethernet frame, `send_frame` is a function pointer to replay
-/// fn receive(frame: &[u8], send_frame: &mut dyn FnMut(&[u8]) -> Result<(), ()>) {
-///   println!("Received: {:#X?}", frame);
-///   // Echo back same ethernet frame to OS, it does not mean anything usually.
-///   let _ = (send_frame)(frame);
-/// }
-///
-/// VirtioNetwork::create_new_device(
-///   0x45000000, // Base Address of MMIO, the size of MMIO is VirtioNetwork::MMIO_SIZE
-///   40, // INT_ID assigned for this device, select the number which is not used by physical devices
-///   receive, // The function pointer to receive handler
-///   acpi_rsdp_address, // The RSDP address, it is used to notify the MMIO area to OS
-///   1, // The number to generate device name, it must be unique in virtio devices
-///  ).expect("Failed to create virtio network");
-/// ```
 pub struct VirtioNetwork {
     lock: SpinLockFlag,
+    affinity: u64,
     int_id: u32,
     page_size: usize,
     queue_selector: u8,
@@ -80,242 +42,32 @@ pub struct VirtioNetwork {
     status: u8,
     mac_address: [u8; 6],
     features_select: u8,
-    //base_address: usize,
-    callback: Callback,
+    base_address: usize,
 }
+
+static mut VIRTIO_NET_LIST: [VirtioNetwork; 10] =
+    unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
+static mut BSP_VIRTIO_NET_LIST: [VirtioNetwork; 10] =
+    unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
 
 impl VirtioNetwork {
     /// The size of MMIO handled by this implementation
     pub const MMIO_SIZE: usize = 0x100;
 
-    /// Create a virtio network device and register
-    ///
-    /// This function allocate memory for [`VirtioNetwork`] and add memory trap at `base_address`.
-    /// If `rsdp_address` is available, this will append AML(ACPI Machine Language) to notify the device information to OS.
-    ///
-    /// # Arguments
-    /// * `base_address`: The address this device can occupy.
-    ///                   `base_address` ~ (`base_address` + [`Self::MMIO_SIZE`] - 1) will be trapped and handled.
-    ///                   The area must be usable and reserved.
-    /// * `int_id`: INT_ID used by this device when it wants to interrupt. `int_id` must not be used by physical devices.
-    /// * `callback`: The function pointer to handle received frames. This function is called with two arguments.
-    ///               First argument(`frame`) is the array of the received frame, second(`send_frame`) is a closure
-    ///               which should be used to send a frame, its arguments and results is same as [`VirtioNetwork::send_frame`].
-    /// * `rsdp_address`: The ACPI's RSD pointer. If it is available, this will generate AML and append to SSDT.
-    /// * `device_suffix`: A number which is unique between virtio network devices. Ignored if `rsdp_address` is None.
-    ///
-    /// # Result
-    /// If it is failed to create virtio device, this will return `Err(())`,
-    /// otherwise this returns a mutable reference of the created device.
-    ///
-    /// **Note: if failed to append AML to SSDT,  this will not return Err**
-    pub fn create_new_device(
-        base_address: usize,
-        int_id: u32,
-        receive_callback: Callback,
-        rsdp_address: Option<NonZeroUsize>,
-        device_suffix: u8,
-    ) -> Result<&'static mut Self, ()> {
-        if device_suffix > 0xF {
-            println!("Device Suffix({:#X}) is invalid", device_suffix);
-            return Err(());
-        }
-
-        let device = crate::allocate_memory(1, None);
-        if let Err(e) = device {
-            println!("Failed to allocate memory: {:?}", e);
-            return Err(());
-        }
-        let device = unsafe { &mut *(device.unwrap() as *mut Self) };
-        *device = Self {
-            lock: SpinLockFlag::new(),
-            int_id,
-            page_size: 0x1000,
-            queue_selector: 0,
-            queue: [VirtQueue::new(), VirtQueue::new()],
-            interrupt_status: 0,
-            status: 0,
-            mac_address: [0; 6],
-            features_select: 0,
-            //base_address,
-            callback: receive_callback,
-        };
-
-        if paging::add_memory_access_trap(
-            base_address & common::STAGE_2_PAGE_MASK,
-            common::STAGE_2_PAGE_SIZE,
-            false,
-            false,
-        )
-        .is_err()
-        {
-            println!("Failed to setup memory trap.");
-            let _ = crate::free_memory(device as *mut _ as usize, 1);
-            return Err(());
-        };
-        if add_memory_load_access_handler(LoadAccessHandlerEntry::new(
-            base_address,
-            Self::MMIO_SIZE,
-            device as *mut _ as usize,
-            Self::load_handler,
-        ))
-        .is_err()
-        {
-            println!("Failed to add the handler");
-            let _ = crate::free_memory(device as *mut _ as usize, 1);
-            return Err(());
-        };
-        if add_memory_store_access_handler(StoreAccessHandlerEntry::new(
-            base_address,
-            Self::MMIO_SIZE,
-            device as *mut _ as usize,
-            Self::store_handler,
-        ))
-        .is_err()
-        {
-            println!("Failed to add the handler");
-            let _ = crate::free_memory(device as *mut _ as usize, 1);
-            return Err(());
-        }
-
-        if let Some(rsdp) = rsdp_address {
-            let suffix = if device_suffix <= 9 {
-                b'0' + device_suffix
-            } else {
-                b'A' + (device_suffix - 0xA)
-            };
-            append_virtio_ssdt(rsdp.get(), [b'V', b'N', b'T', suffix], base_address, int_id);
-        }
-        Ok(device)
-    }
-
-    /// The handler to receive ethernet frames from the OS
-    fn receive_frames(&mut self, queue_id: u8) -> Result<u32, ()> {
+    fn init(&mut self, affinity: u64, int_id: u32, base_address: usize) {
         assert!(self.lock.is_locked());
-        let mut number_of_frames = 0;
-        let mut is_sent_frames = false;
-        if queue_id as usize >= self.queue.len() {
-            println!("Queue id({:#X}) is invalid", queue_id);
-            return Err(());
+        self.affinity = affinity;
+        self.int_id = int_id;
+        self.page_size = Self::MMIO_SIZE;
+        self.base_address = base_address;
+        for e in &mut self.queue {
+            *e = VirtQueue::new();
         }
-
-        while let Some(id) = self.queue[queue_id as usize].get_next_avail_id() {
-            let Some(request_descriptor_id) = self.queue[queue_id as usize].get_descriptor_id(id)
-            else {
-                println!("Failed to get next descriptor id");
-                return Err(());
-            };
-            let Some(request_descriptor) =
-                self.queue[queue_id as usize].get_descriptor(request_descriptor_id)
-            else {
-                println!("Failed to get next descriptor");
-                return Err(());
-            };
-            if (request_descriptor.length as usize) < size_of::<VirtioNetHdr>() {
-                println!("Invalid Request: Descriptor is too small");
-                return Err(());
-            }
-            let request = unsafe { &*(request_descriptor.address as usize as *const VirtioNetHdr) };
-            if request.flags != 0 || request.gso_type != 0 {
-                println!(
-                    "Unsupported flag({:#X}) nor gso_type({:#X})",
-                    request.flags, request.gso_type
-                );
-                return Err(());
-            }
-
-            let mut descriptor_id = request_descriptor.next;
-            let mut total_size = 0;
-            let size = request_descriptor.length as usize - size_of::<VirtioNetHdr>();
-
-            if size > 0 {
-                let frame = request_descriptor.address as usize + size_of::<VirtioNetHdr>();
-                number_of_frames += 1;
-                total_size += size;
-
-                (self.callback)(
-                    unsafe { core::slice::from_raw_parts(frame as *const u8, size) },
-                    &mut |frame: &[u8]| -> Result<(), ()> {
-                        is_sent_frames = true;
-                        Self::_send_frame(&mut self.queue[0], frame)
-                    },
-                );
-                if (request_descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) == 0 {
-                    self.queue[queue_id as usize]
-                        .write_used(request_descriptor_id, total_size as u32);
-                    continue;
-                }
-            }
-            if (request_descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) == 0 {
-                println!("Invalid Request: Broken Descriptor");
-                return Err(());
-            }
-
-            loop {
-                let Some(descriptor) = self.queue[queue_id as usize].get_descriptor(descriptor_id)
-                else {
-                    println!("Failed to get next descriptor");
-                    return Err(());
-                };
-                let frame = descriptor.address as usize;
-                let size = descriptor.length as usize;
-                total_size += size;
-                number_of_frames += 1;
-
-                (self.callback)(
-                    unsafe { core::slice::from_raw_parts(frame as *const u8, size) },
-                    &mut |frame: &[u8]| -> Result<(), ()> {
-                        is_sent_frames = true;
-                        Self::_send_frame(&mut self.queue[0], frame)
-                    },
-                );
-                if (descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) != 0 {
-                    descriptor_id = descriptor.next;
-                } else {
-                    break;
-                }
-            }
-            self.queue[queue_id as usize].write_used(request_descriptor_id, total_size as u32);
-        }
-        if number_of_frames > 0 {
-            self.trigger_interrupt(1);
-        }
-        if is_sent_frames {
-            self.trigger_interrupt(0);
-        }
-
-        Ok(number_of_frames)
     }
 
-    /// Send ethernet frames to guest
-    ///
-    /// # Arguments
-    /// * frame: the array to send
-    ///
-    /// # Result
-    /// If failed to send the frame, this will return Err(())
-    #[allow(dead_code)]
-    pub fn send_frame(&mut self, frame: &[u8]) -> Result<(), ()> {
-        self.lock.lock();
-        if !self.is_ready() {
-            println!("Device is not ready.");
-            self.lock.unlock();
-            return Err(());
-        }
-        let result = Self::_send_frame(&mut self.queue[0], frame);
-        if result.is_ok() {
-            self.trigger_interrupt(0);
-        }
-        self.lock.unlock();
-        result
-    }
-
-    fn _send_frame(queue: &mut VirtQueue, frame: &[u8]) -> Result<(), ()> {
-        /*
-         */
+    fn process_receive_frame(queue: &mut VirtQueue, frame: &[u8]) -> Result<(), ()> {
         let Some(id) = queue.get_next_avail_id() else {
             println!("Failed to get avail id.");
-
             return Err(());
         };
         let Some(descriptor_id) = queue.get_descriptor_id(id) else {
@@ -362,7 +114,6 @@ impl VirtioNetwork {
 
             if (descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) == 0 {
                 println!("Failed to get next descriptor");
-                //self.lock.unlock();
                 return Err(());
             }
             descriptor = if let Some(d) = queue.get_descriptor(descriptor.next) {
@@ -388,6 +139,245 @@ impl VirtioNetwork {
         Ok(())
     }
 
+    fn process_transmit_frames<F>(queue: &mut VirtQueue, mut callback: F) -> Result<u32, ()>
+    where
+        F: FnMut(&[u8]),
+    {
+        let mut number_of_frames = 0;
+        while let Some(id) = queue.get_next_avail_id() {
+            let Some(request_descriptor_id) = queue.get_descriptor_id(id) else {
+                println!("Failed to get next descriptor id");
+                return Err(());
+            };
+            let Some(request_descriptor) = queue.get_descriptor(request_descriptor_id) else {
+                println!("Failed to get next descriptor");
+                return Err(());
+            };
+            if (request_descriptor.length as usize) < size_of::<VirtioNetHdr>() {
+                println!("Invalid Request: Descriptor is too small");
+                return Err(());
+            }
+            let request = unsafe { &*(request_descriptor.address as usize as *const VirtioNetHdr) };
+            if request.flags != 0 || request.gso_type != 0 {
+                println!(
+                    "Unsupported flag({:#X}) nor gso_type({:#X})",
+                    request.flags, request.gso_type
+                );
+                return Err(());
+            }
+
+            let mut descriptor_id = request_descriptor.next;
+            let mut total_size = 0;
+            let size = request_descriptor.length as usize - size_of::<VirtioNetHdr>();
+
+            if size > 0 {
+                let frame = request_descriptor.address as usize + size_of::<VirtioNetHdr>();
+                number_of_frames += 1;
+                total_size += size;
+
+                callback(unsafe { core::slice::from_raw_parts(frame as *const u8, size) });
+                if (request_descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) == 0 {
+                    queue.write_used(request_descriptor_id, total_size as u32);
+                    continue;
+                }
+            }
+            if (request_descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) == 0 {
+                println!("Invalid Request: Broken Descriptor");
+                return Err(());
+            }
+
+            loop {
+                let Some(descriptor) = queue.get_descriptor(descriptor_id) else {
+                    println!("Failed to get next descriptor");
+                    return Err(());
+                };
+                let frame = descriptor.address as usize;
+                let size = descriptor.length as usize;
+                total_size += size;
+                number_of_frames += 1;
+
+                callback(unsafe { core::slice::from_raw_parts(frame as *const u8, size) });
+                if (descriptor.flags & VIRT_QUEUE_DESC_FLAGS_NEXT) != 0 {
+                    descriptor_id = descriptor.next;
+                } else {
+                    break;
+                }
+            }
+            queue.write_used(request_descriptor_id, total_size as u32);
+        }
+        Ok(number_of_frames)
+    }
+
+    fn transmit(&mut self, queue_id: u8) {
+        assert!(self.lock.is_locked());
+        let Some(linked_virtio) =
+            Self::get_linked_struct(cpu::mpidr_to_affinity(cpu::get_mpidr_el1()))
+                .or_else(|| Self::get_linked_struct_bsp(self.affinity))
+        else {
+            println!("Failed to get the linked VirtIO");
+            return;
+        };
+        let mut should_interrupt: bool = false;
+
+        let number_of_frames =
+            Self::process_transmit_frames(&mut self.queue[queue_id as usize], |frame| {
+                if linked_virtio.lock.try_lock_weak().is_err() {
+                    self.lock.unlock();
+                    loop {
+                        while linked_virtio.lock.try_lock_weak().is_err() {
+                            core::hint::spin_loop();
+                        }
+                        if self.lock.try_lock_weak().is_ok() {
+                            break;
+                        }
+                        linked_virtio.lock.unlock();
+                    }
+                }
+                if linked_virtio.is_ready() {
+                    if linked_virtio.queue[0].is_avail_ring_empty() {
+                        println!("VirtQueue is full");
+                    } else {
+                        Self::process_receive_frame(&mut linked_virtio.queue[0], frame)
+                            .expect("Failed to transmit frame");
+                        should_interrupt = true;
+                    }
+                } else {
+                    println!("Linked device is not ready.");
+                }
+                linked_virtio.lock.unlock();
+            })
+            .expect("Failed to process frame");
+        if number_of_frames > 0 {
+            self.trigger_interrupt(1);
+            if should_interrupt {
+                if linked_virtio.lock.try_lock_weak().is_err() {
+                    self.lock.unlock();
+                    loop {
+                        while linked_virtio.lock.try_lock_weak().is_err() {
+                            core::hint::spin_loop();
+                        }
+                        if self.lock.try_lock_weak().is_ok() {
+                            break;
+                        }
+                        linked_virtio.lock.unlock();
+                    }
+                }
+                linked_virtio.trigger_interrupt(0);
+                linked_virtio.lock.unlock();
+            }
+        }
+    }
+
+    fn get_target_struct(affinity: u64, base_address: usize) -> Option<&'static mut Self> {
+        unsafe { (&raw mut VIRTIO_NET_LIST).as_mut().unwrap() }
+            .iter_mut()
+            .find(|e| e.affinity == affinity && e.base_address == base_address)
+    }
+
+    fn get_target_struct_bsp(base_address: usize) -> Option<&'static mut Self> {
+        unsafe { (&raw mut BSP_VIRTIO_NET_LIST).as_mut().unwrap() }
+            .iter_mut()
+            .find(|e| e.base_address == base_address)
+    }
+
+    fn get_linked_struct(affinity: u64) -> Option<&'static mut Self> {
+        unsafe { (&raw mut BSP_VIRTIO_NET_LIST).as_mut().unwrap() }
+            .iter_mut()
+            .find(|e| e.affinity == affinity && e.base_address != 0)
+    }
+
+    fn get_linked_struct_bsp(affinity: u64) -> Option<&'static mut Self> {
+        unsafe { (&raw mut VIRTIO_NET_LIST).as_mut().unwrap() }
+            .iter_mut()
+            .find(|e| e.affinity == affinity && e.base_address != 0)
+    }
+
+    pub fn setup_new_device(int_id: u32, mmio_base_address: usize) {
+        let mut should_add_handler = true;
+        for e in unsafe { (&raw mut VIRTIO_NET_LIST).as_mut().unwrap() }.iter_mut() {
+            e.lock.lock();
+            if e.affinity == 0 && e.int_id == 0 {
+                /* Empty Entry */
+                e.init(
+                    cpu::mpidr_to_affinity(cpu::get_mpidr_el1()),
+                    int_id,
+                    mmio_base_address,
+                );
+                e.lock.unlock();
+                break;
+            }
+            if e.base_address == mmio_base_address {
+                should_add_handler = false;
+            }
+            e.lock.unlock();
+        }
+
+        paging::add_memory_access_trap(
+            mmio_base_address & common::STAGE_2_PAGE_MASK,
+            common::STAGE_2_PAGE_SIZE,
+            false,
+            false,
+        )
+        .expect("Failed to setup memory trap.");
+
+        if should_add_handler {
+            add_memory_load_access_handler(LoadAccessHandlerEntry::new(
+                mmio_base_address,
+                Self::MMIO_SIZE,
+                0,
+                Self::load_handler,
+            ))
+            .expect("Failed to add the handler");
+            add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+                mmio_base_address,
+                Self::MMIO_SIZE,
+                0,
+                Self::store_handler,
+            ))
+            .expect("Failed to add the handler");
+        }
+    }
+
+    pub fn setup_new_device_bsp(int_id: u32, mmio_base_address: usize, linked_mpidr: u64) {
+        for e in unsafe { (&raw mut BSP_VIRTIO_NET_LIST).as_mut().unwrap() }.iter_mut() {
+            e.lock.lock();
+            if e.affinity == 0 && e.int_id == 0 {
+                /* Empty Entry */
+                e.init(
+                    cpu::mpidr_to_affinity(linked_mpidr),
+                    int_id,
+                    mmio_base_address,
+                );
+                e.lock.unlock();
+                break;
+            }
+            e.lock.unlock();
+        }
+
+        paging::add_memory_access_trap(
+            mmio_base_address & common::STAGE_2_PAGE_MASK,
+            common::STAGE_2_PAGE_SIZE,
+            false,
+            false,
+        )
+        .expect("Failed to setup memory trap.");
+
+        add_memory_load_access_handler(LoadAccessHandlerEntry::new(
+            mmio_base_address,
+            Self::MMIO_SIZE,
+            0,
+            Self::load_handler,
+        ))
+        .expect("Failed to add the handler");
+        add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+            mmio_base_address,
+            Self::MMIO_SIZE,
+            0,
+            Self::store_handler,
+        ))
+        .expect("Failed to add the handler");
+    }
+
     const fn is_ready(&self) -> bool {
         (self.status & 4) != 0
     }
@@ -408,12 +398,14 @@ impl VirtioNetwork {
     ) -> LoadHookResult {
         let offset = accessing_memory_address - entry.get_target_address();
         let mut value = 0u64;
-        let device_address = entry.get_data();
-        if device_address == 0 {
-            println!("There is not device to handle");
-            return LoadHookResult::Data(0);
-        }
-        let net = unsafe { &*(device_address as *const VirtioNetwork) };
+        let net = Self::get_target_struct(
+            cpu::mpidr_to_affinity(cpu::get_mpidr_el1()),
+            entry.get_target_address(),
+        )
+        .unwrap_or_else(|| {
+            Self::get_target_struct_bsp(entry.get_target_address())
+                .expect("Failed to find the descriptor")
+        });
 
         if offset < 0x100 {
             match offset {
@@ -480,12 +472,14 @@ impl VirtioNetwork {
         entry: &StoreAccessHandlerEntry,
     ) -> StoreHookResult {
         let offset = accessing_memory_address - entry.get_target_address();
-        let device_address = entry.get_data();
-        if device_address == 0 {
-            println!("There is not device to handle");
-            return StoreHookResult::Cancel;
-        }
-        let net = unsafe { &mut *(device_address as *mut VirtioNetwork) };
+        let net = Self::get_target_struct(
+            cpu::mpidr_to_affinity(cpu::get_mpidr_el1()),
+            entry.get_target_address(),
+        )
+        .unwrap_or_else(|| {
+            Self::get_target_struct_bsp(entry.get_target_address())
+                .expect("Failed to find the descriptor")
+        });
 
         match offset {
             VIRTIO_MMIO_DEVICE_FEATURES_SEL => {
@@ -522,7 +516,7 @@ impl VirtioNetwork {
             VIRTIO_MMIO_QUEUE_NOTIFY => {
                 net.lock.lock();
                 if net.queue_selector == 1 {
-                    let _ = net.receive_frames(net.queue_selector);
+                    net.transmit(net.queue_selector);
                 }
                 net.lock.unlock();
             }

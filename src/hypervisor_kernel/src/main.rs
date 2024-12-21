@@ -22,6 +22,7 @@ use common::{
 #[macro_use]
 mod drivers;
 mod acpi_protect;
+mod boot_linux;
 mod emulation;
 #[cfg(feature = "fast_restore")]
 mod fast_restore;
@@ -231,6 +232,12 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             #[cfg(feature = "fast_restore")]
             fast_restore::HVC_AFTER_EXIT_BOOT_SERVICE_TRAP => {
                 fast_restore::after_exit_boot_service_trap_main(regs, elr_el2);
+            }
+            boot_linux::HVC_BOOT_LINUX => {
+                boot_linux::boot(regs);
+            }
+            boot_linux::HVC_BOOT_LINUX_AFTER => {
+                boot_linux::jump_to_linux(regs);
             }
             hvc_number => {
                 println!("Hypervisor Call: {:#X}", hvc_number);

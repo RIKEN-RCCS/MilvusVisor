@@ -25,6 +25,8 @@ const GICR_WAKER_PROCESSOR_SLEEP: u32 = 1 << 1;
 const GICR_PROPBASER: usize = 0x0070;
 const GICR_PROPBASER_PTZ: u64 = 1 << 62;
 
+const GICD_MAP_SIZE: usize = 0x10000;
+
 const GICD_CTLR: usize = 0x00;
 #[cfg(feature = "virtio")]
 const GICD_ISPENDR: usize = 0x0200;
@@ -33,6 +35,12 @@ const GICD_SGIR: usize = 0xF00;
 #[cfg(feature = "fast_restore")]
 const GICD_CPENDSGIR: usize = 0xF10;
 const GICD_ICPIDR2: usize = 0xFE8;
+const GICD_IGROUPR: usize = 0x0080;
+const GICD_ICENABLER: usize = 0x0180;
+const GICD_IPRIORITYR: usize = 0x400;
+const GICD_ICFGR: usize = 0xC00;
+const GICD_IGRPMODR: usize = 0x0D00;
+const GICD_IROUTER: usize = 0x6000;
 
 const GITS_CTLR: usize = 0x00;
 const GITS_CTLR_ENABLED: u32 = 0x01;
@@ -273,3 +281,273 @@ fn gic_redistributor_fast_restore_store_handler(
         _ => StoreHookResult::PassThrough,
     }
 }
+
+static mut GICD_PROTECT_LIST: [(u64 /* Affinity */, u32 /* INTID */); 8] = [(0, 0); 8];
+
+pub fn add_gic_distributor_protector(target_mpidr: u64, int_id: u32) {
+    let mut is_first = true;
+    for e in unsafe { (&raw mut GICD_PROTECT_LIST).as_mut().unwrap() }.iter_mut() {
+        if e.0 == 0 && e.1 == 0 {
+            e.0 = cpu::mpidr_to_affinity(target_mpidr);
+            e.1 = int_id;
+            break;
+        }
+        is_first = false;
+    }
+    let gic_distributor_address = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };
+    let int_id = int_id as usize;
+    assert_ne!(
+        gic_distributor_address, 0,
+        "GIC Distributor is not available"
+    );
+    add_memory_access_trap(gic_distributor_address, GICD_MAP_SIZE, true, false)
+        .expect("Failed to add access trap of GIC Distributor");
+
+    println!("Protect INTID#{int_id} for CPU#{:X}", target_mpidr);
+
+    if !is_first {
+        return;
+    }
+
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_CTLR,
+        4,
+        gic_distributor_address,
+        gic_ctlr_protect_handler,
+    ))
+    .expect("Failed to protect GICD_CTLR");
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_IGROUPR,
+        4 * 32,
+        gic_distributor_address,
+        gic_igroupr_protect_handler,
+    ))
+    .expect("Failed to protect GICD_IGROUPR");
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_ICENABLER,
+        4 * 32,
+        gic_distributor_address,
+        gic_icenabler_protect_handler,
+    ))
+    .expect("Failed to protect GICD_ICENABLER");
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_IPRIORITYR,
+        4 * 255,
+        gic_distributor_address,
+        gic_ipriorityr_protect_handler,
+    ))
+    .expect("Failed to protect GICD_IPRIORITYR");
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_ICFGR,
+        4 * 64,
+        gic_distributor_address,
+        gic_icfgr_protect_handler,
+    ))
+    .expect("Failed to protect GICD_ICFGR");
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_IGRPMODR,
+        4 * 32,
+        gic_distributor_address,
+        gic_igrpmodr_protect_handler,
+    ))
+    .expect("Failed to protect GICD_IGRPMODR");
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address + GICD_IROUTER,
+        8 * 1020,
+        gic_distributor_address,
+        gic_irouter_protect_handler,
+    ))
+    .expect("Failed to protect GICD_IROUTER");
+    /* Currently, handlers are sorted by the registration order.
+       Therefore, this handler will be called as default handler of GIC.
+    */
+    fn gic_default_handler(
+        _: usize,
+        _: &mut GeneralPurposeRegisters,
+        _: u8,
+        _: u64,
+        _: &StoreAccessHandlerEntry,
+    ) -> StoreHookResult {
+        StoreHookResult::PassThrough
+    }
+    add_memory_store_access_handler(StoreAccessHandlerEntry::new(
+        gic_distributor_address,
+        GICD_MAP_SIZE,
+        gic_distributor_address,
+        gic_default_handler,
+    ))
+    .unwrap();
+}
+
+pub fn add_gic_distributor_protector_ap() {
+    let gic_distributor_address = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };
+    assert_ne!(
+        gic_distributor_address, 0,
+        "GIC Distributor is not available"
+    );
+    add_memory_access_trap(gic_distributor_address, GICD_MAP_SIZE, true, false)
+        .expect("Failed to add access trap of GIC Distributor");
+}
+
+fn gic_ctlr_protect_handler(
+    accessing_address: usize,
+    _: &mut GeneralPurposeRegisters,
+    access_size: u8,
+    data: u64,
+    _e: &StoreAccessHandlerEntry,
+) -> StoreHookResult {
+    assert_eq!(access_size, 0b10);
+    let original_data = unsafe { read_volatile(accessing_address as *const u32) };
+    pr_debug!(
+        "GIC: {:#X} <= {:#X}({{original: {:#X}, writing: {:#X}}})",
+        accessing_address - _e.get_data(),
+        data | (original_data as u64),
+        original_data,
+        data
+    );
+    StoreHookResult::Data(data | (original_data as u64))
+}
+
+fn create_masked_data(
+    _distributor_address: usize,
+    accessing_address: usize,
+    access_size: u8,
+    mask: u64,
+    writing_dara: u64,
+    should_ignore_original_data: bool,
+) -> StoreHookResult {
+    if mask == 0 {
+        return StoreHookResult::PassThrough;
+    }
+    let original_data = if should_ignore_original_data {
+        0
+    } else {
+        unsafe {
+            match access_size {
+                0b00 => read_volatile(accessing_address as *const u8) as u64,
+                0b01 => read_volatile(accessing_address as *const u16) as u64,
+                0b10 => read_volatile(accessing_address as *const u32) as u64,
+                0b11 => read_volatile(accessing_address as *const u64),
+                _ => unreachable!(),
+            }
+        }
+    };
+    let masked_data = writing_dara & !mask;
+    let result = masked_data | (original_data & mask);
+    pr_debug!(
+        "GIC: {:#X} <= {:#X}({{original: {:#X}, writing: {:#X}, mask: {:#b}}})",
+        accessing_address - _distributor_address,
+        result,
+        original_data,
+        writing_dara,
+        mask
+    );
+    StoreHookResult::Data(result)
+}
+
+macro_rules! create_protect_handler {
+    ($handler_name:ident, $expected_access_size:expr, $register_base:expr, $register_bits:expr, $num_of_fields: expr,
+     $bits_per_fields:expr, $mask_pattern:expr, $should_ignore_original_data:expr) => {
+        fn $handler_name(
+            accessing_address: usize,
+            _: &mut GeneralPurposeRegisters,
+            access_size: u8,
+            data: u64,
+            handler: &StoreAccessHandlerEntry,
+        ) -> StoreHookResult {
+            if access_size != $expected_access_size {
+                println!("Access Size is not aligned");
+                return StoreHookResult::Cancel;
+            }
+            let offset = accessing_address & (GICD_MAP_SIZE - 1);
+            let register_offset = offset - $register_base;
+            let affinity = cpu::mpidr_to_affinity(cpu::get_mpidr_el1());
+            let int_id_start = ((register_offset / $register_bits) * $num_of_fields) as u32;
+            let int_id_end = int_id_start + $num_of_fields - 1;
+            let mut register_mask = 0u64;
+
+            for e in unsafe { (&raw const GICD_PROTECT_LIST).as_ref().unwrap() }.iter() {
+                if int_id_start <= e.1 && e.1 <= int_id_end {
+                    if e.0 == affinity {
+                        continue;
+                    }
+                    register_mask |= $mask_pattern << ((e.1 - int_id_start) * $bits_per_fields);
+                }
+            }
+            create_masked_data(
+                handler.get_data(),
+                accessing_address,
+                access_size,
+                register_mask,
+                data,
+                $should_ignore_original_data,
+            )
+        }
+    };
+}
+
+create_protect_handler!(
+    gic_icenabler_protect_handler,
+    0b10,
+    GICD_ICENABLER,
+    4,
+    32,
+    1,
+    1,
+    true
+);
+
+create_protect_handler!(
+    gic_igroupr_protect_handler,
+    0b10,
+    GICD_IGROUPR,
+    4,
+    32,
+    1,
+    1,
+    false
+);
+
+create_protect_handler!(
+    gic_ipriorityr_protect_handler,
+    0b10,
+    GICD_IPRIORITYR,
+    4,
+    4,
+    8,
+    0xFF,
+    false
+);
+
+create_protect_handler!(
+    gic_icfgr_protect_handler,
+    0b10,
+    GICD_ICFGR,
+    4,
+    16,
+    2,
+    0b11,
+    false
+);
+
+create_protect_handler!(
+    gic_igrpmodr_protect_handler,
+    0b10,
+    GICD_IGRPMODR,
+    4,
+    32,
+    1,
+    1,
+    false
+);
+
+create_protect_handler!(
+    gic_irouter_protect_handler,
+    0b11,
+    GICD_IROUTER,
+    8,
+    1,
+    64,
+    u64::MAX,
+    false
+);

@@ -13,8 +13,8 @@ use core::mem::MaybeUninit;
 
 use common::GeneralPurposeRegisters;
 
-const DEFAULT_LOAD_EMULATION_RESULT: LoadHookResult = LoadHookResult::PassThrough;
-const DEFAULT_STORE_EMULATION_RESULT: StoreHookResult = StoreHookResult::PassThrough;
+const DEFAULT_LOAD_EMULATION_RESULT: LoadHookResult = LoadHookResult::Data(0);
+const DEFAULT_STORE_EMULATION_RESULT: StoreHookResult = StoreHookResult::Cancel;
 const NUMBER_OF_HANDLER_ENTRIES: usize = 256;
 
 /// The return value of LoadAccessHandler
