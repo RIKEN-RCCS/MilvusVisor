@@ -1,0 +1,86 @@
+/dts-v1/;
+
+/ {
+	interrupt-parent = <0x8005>;
+	model = "linux,dummy-virt";
+	#size-cells = <0x02>;
+	#address-cells = <0x02>;
+
+	memory@ffffffffffffffff {
+		reg = <0x00 0x00 0x00 0x00>;
+		device_type = "memory";
+	};
+
+	pl011@1000000 {
+		clock-names = "uartclk\0apb_pclk";
+		clocks = <0x8000 0x8000>;
+		interrupts = <0x00 0x18 0x04>;
+		reg = <0x00 0x1000000 0x00 0x1000>;
+		compatible = "arm,pl011\0arm,primecell";
+	};
+
+	virtio_mmio@a000000 {
+		dma-coherent;
+		interrupts = <0x00 0x00 0x01>;
+		reg = <0x00 0xa000000 0x00 0x200>;
+		compatible = "virtio,mmio";
+	};
+
+	intc@12000000 {
+		phandle = <0x8005>;
+		interrupts = <0x01 0x09 0x04>;
+		reg = <0x00 0x12000000 0x00 0x10000 0x00 0x12200000 0x00 0x00200000>;
+		#redistributor-regions = <0x01>;
+		compatible = "arm,gic-v3";
+		ranges;
+		#size-cells = <0x02>;
+		#address-cells = <0x02>;
+		interrupt-controller;
+		#interrupt-cells = <0x03>;
+	};
+
+
+	cpus {
+		#size-cells = <0x00>;
+		#address-cells = <0x01>;
+        cpu-map {
+			socket0 {
+				cluster0 {
+					core0 {
+						cpu = <0x8004>;
+					};
+
+				};
+			};
+		};
+		cpu {
+			phandle = <0x8004>;
+			reg = <0x00>;
+			compatible = "arm,cortex-a72";
+			device_type = "cpu";
+		};
+	};
+
+	timer {
+		interrupts = <0x01 0x0d 0xf04 0x01 0x0e 0xf04 0x01 0x0b 0xf04 0x01 0x0a 0xf04>;
+		always-on;
+		compatible = "arm,armv8-timer\0arm,armv7-timer";
+	};
+
+	apb-pclk {
+		phandle = <0x8000>;
+		clock-output-names = "clk24mhz";
+		clock-frequency = <0x16e3600>;
+		#clock-cells = <0x00>;
+		compatible = "fixed-clock";
+	};
+
+	chosen {
+		stdout-path = "/pl011@1000000";
+		rng-seed = <0x40ec3684 0xfe54b5f 0x457abc31 0xacc6a4e2 0x9e0fb76 0xe0bdaeb8 0x906fbca9 0xaeb7c9b8>;
+		bootargs = "earlycon=pl011,0x1000000 console=ttyAMA0 root=/dev/ram";
+		kaslr-seed = <0x3928fc27 0x9caa495e>;
+		linux,initrd-start = <0x00 0x00>;
+		linux,initrd-end   = <0x00 0x00>;
+	};
+};

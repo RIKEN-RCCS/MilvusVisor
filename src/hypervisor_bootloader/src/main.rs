@@ -23,6 +23,7 @@ use uefi::{EfiStatus, pxe};
 
 #[macro_use]
 mod console;
+mod boot_linux;
 mod dtb;
 mod elf;
 mod paging;
@@ -30,6 +31,7 @@ mod panic;
 mod pci;
 mod serial_port;
 mod smmu;
+mod virt;
 
 static mut ORIGINAL_PAGE_TABLE: usize = 0;
 static mut ORIGINAL_VECTOR_BASE: u64 = 0;
@@ -1151,6 +1153,11 @@ extern "C" fn el1_main() -> ! {
 
     assert_eq!(get_current_el() >> 2, 1, "Failed to jump to EL1");
     println!("Hello,world! from EL1");
+
+    boot_linux::boot_linux(0x100);
+    boot_linux::boot_linux(0x101);
+    boot_linux::boot_linux(0x200);
+    boot_linux::boot_linux(0x201);
 
     exit_bootloader();
 }

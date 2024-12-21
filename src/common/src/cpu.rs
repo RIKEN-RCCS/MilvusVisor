@@ -583,6 +583,11 @@ pub fn get_midr_el1() -> u64 {
 }
 
 #[inline(always)]
+pub const fn mpidr_to_affinity(mpidr: u64) -> u64 {
+    mpidr & !((1 << 31) | (1 << 30))
+}
+
+#[inline(always)]
 pub fn advance_elr_el2() {
     set_elr_el2(get_elr_el2() + AA64_INSTRUCTION_SIZE as u64);
 }

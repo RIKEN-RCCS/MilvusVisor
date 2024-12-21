@@ -79,7 +79,6 @@ impl DtbNode {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn match_name(mut pointer: usize, s: &[u8]) -> bool {
         for c in s {
             if unsafe { &*(pointer as *const u8) } != c {
@@ -461,6 +460,144 @@ impl DtbNode {
         }
     }
 
+    pub fn get_reg(&self, dtb: &DtbAnalyser, index: usize) -> Result<(usize, usize), ()> {
+        let mut s = self.clone();
+        if let Some((mut p, _)) = s.search_pointer_to_property(PROP_REG, dtb)? {
+            p += index * ((self.address_cells + self.size_cells) as usize) * TOKEN_SIZE;
+            let mut address = 0usize;
+            let mut size = 0usize;
+            for _ in 0..self.address_cells {
+                address <<= u32::BITS;
+                address |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
+                p += TOKEN_SIZE;
+            }
+            for _ in 0..self.size_cells {
+                size <<= u32::BITS;
+                size |= u32::from_be(unsafe { *(p as *const u32) }) as usize;
+                p += TOKEN_SIZE;
+            }
+            return Ok((address, size));
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn edit_reg(
+        &self,
+        dtb: &DtbAnalyser,
+        index: usize,
+        address: usize,
+        size: usize,
+    ) -> Result<(), ()> {
+        let mut s = self.clone();
+        if let Some((mut p, _)) = s.search_pointer_to_property(PROP_REG, dtb)? {
+            p += index * ((self.address_cells + self.size_cells) as usize) * TOKEN_SIZE;
+            for i in (0..(self.address_cells as usize)).rev() {
+                let a = ((address >> (u32::BITS as usize * i)) & (u32::MAX as usize)) as u32;
+                unsafe { core::ptr::write_volatile(p as *mut u32, a.to_be()) };
+                p += TOKEN_SIZE;
+            }
+            for i in (0..(self.size_cells as usize)).rev() {
+                let a = ((size >> (u32::BITS as usize * i)) & (u32::MAX as usize)) as u32;
+                unsafe { core::ptr::write_volatile(p as *mut u32, a.to_be()) };
+                p += TOKEN_SIZE;
+            }
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn edit_address_property(
+        &self,
+        dtb: &DtbAnalyser,
+        prop_name: &[u8],
+        address: usize,
+    ) -> Result<(), ()> {
+        let mut s = self.clone();
+        if let Some((mut p, _)) = s.search_pointer_to_property(prop_name, dtb)? {
+            for i in (0..(self.address_cells as usize)).rev() {
+                let a = ((address >> (u32::BITS as usize * i)) & (u32::MAX as usize)) as u32;
+                unsafe { core::ptr::write_volatile(p as *mut u32, a.to_be()) };
+                p += TOKEN_SIZE;
+            }
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn edit_property(
+        &self,
+        dtb: &DtbAnalyser,
+        prop_name: &[u8],
+        index: usize,
+        value: u32,
+    ) -> Result<(), ()> {
+        let mut s = self.clone();
+        if let Some((p, _)) = s.search_pointer_to_property(prop_name, dtb)? {
+            unsafe {
+                core::ptr::write_volatile((p + TOKEN_SIZE * index) as *mut u32, value.to_be())
+            };
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn edit_offset(&self, offset: usize) -> Result<(), ()> {
+        let mut pointer = self.base_pointer;
+        Self::skip_nop(&mut pointer);
+        if unsafe { *(pointer as *const u32) } != FDT_BEGIN_NODE {
+            println!(
+                "Expected FDT_BEGIN_NODE, but found {:#X}",
+                u32::from_be(unsafe { *(pointer as *const u32) })
+            );
+            return Err(());
+        }
+        pointer += TOKEN_SIZE;
+        while unsafe { *(pointer as *const u8) } != b'@' {
+            if unsafe { *(pointer as *const u8) } == 0 {
+                return Err(());
+            }
+            pointer += 1;
+        }
+        pointer += 1;
+        let mut first = true;
+        for i in (0..((usize::BITS / 4) as usize)).rev() {
+            let c = ((offset >> (i * 4)) & 0xF) as u8;
+            if c == 0 && first {
+                continue;
+            }
+            first = false;
+            let c = if c < 9 { b'0' + c } else { b'a' + (c - 10) };
+            if unsafe { *(pointer as *const u8) } == 0 {
+                return Err(());
+            }
+            unsafe { core::ptr::write_volatile(pointer as *mut u8, c) };
+            pointer += 1;
+        }
+        if unsafe { *(pointer as *const u8) } != 0 {
+            unsafe { core::ptr::write_volatile(pointer as *mut u8, 0) };
+            pointer += 1;
+            let mut limit = pointer;
+            while unsafe { *(limit as *const u8) } != 0 {
+                limit += 1;
+            }
+            limit = ((limit - 1) & !(TOKEN_SIZE - 1)) + TOKEN_SIZE;
+            while (pointer & (TOKEN_SIZE - 1)) != 0 {
+                unsafe { core::ptr::write_volatile(pointer as *mut u8, 0) };
+                pointer += 1;
+            }
+            assert!(limit >= pointer);
+            while limit > pointer {
+                unsafe { core::ptr::write_volatile(pointer as *mut u32, FDT_NOP) };
+                pointer += TOKEN_SIZE;
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_offset(&self) -> usize {
         self.address_offset
     }
@@ -482,7 +619,6 @@ impl DtbNode {
 }
 
 impl DtbNodeNameSearchHolder {
-    #[allow(dead_code)]
     pub fn search_next_device_by_node_name(
         &mut self,
         node_name: &[u8],

@@ -36,6 +36,10 @@ pub const HYPERVISOR_HASH_INFO: Option<&'static str> = option_env!("PROJECT_HASH
 pub const COMPILER_INFO: Option<&'static str> = option_env!("RUSTC_VERSION");
 /// The path of hypervisor_kernel
 pub const HYPERVISOR_PATH: &str = "\\EFI\\BOOT\\hypervisor_kernel";
+/// The path of Linux Kernel
+pub const LINUX_PATH: &str = "\\EFI\\BOOT\\Image";
+/// The path of Linux initramfs
+pub const LINUX_INITRAMFS: &str = "\\EFI\\BOOT\\initramfs";
 /// The path of DTB written
 pub const DTB_WRITTEN_PATH: &str = "\\EFI\\BOOT\\dtb";
 /// The path of hypervisor_kernel of tftp
@@ -112,4 +116,16 @@ pub struct SystemInformation {
     pub ecam_info: Option<EcamInfo>,
     pub smmu_v3_base_address: Option<NonZeroUsize>,
     pub exit_boot_service_address: Option<NonZeroUsize>,
+}
+
+/// For passing Linux Boot Information
+#[repr(C)]
+#[derive(Clone)]
+pub struct LinuxBootInformation {
+    pub ram_physical_address: usize,
+    pub ram_size: usize,
+    pub boot_address: usize,
+    pub dtb_address: usize,
+    pub mpidr_el1: u64,
+    pub virtio_int_id: u32,
 }
