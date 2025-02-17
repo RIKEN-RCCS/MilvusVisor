@@ -24,7 +24,7 @@ impl SerialPortDevice for SerialArmPl011 {
 
     fn write_char(&mut self, c: u8) -> Result<(), ()> {
         unsafe { ptr::write_volatile((self.base_address + UART_DR) as *mut u8, c) };
-        return Ok(());
+        Ok(())
     }
 
     fn is_write_fifo_full(&self) -> bool {

@@ -18,7 +18,7 @@ pub mod madt;
 const RSDP_SIGNATURE: [u8; 8] = *b"RSD PTR ";
 const XSDT_SIGNATURE: [u8; 4] = *b"XSDT";
 
-pub const XSDT_STRUCT_SIZE: usize = core::mem::size_of::<XSDT>();
+pub const XSDT_STRUCT_SIZE: usize = size_of::<XSDT>();
 
 #[repr(C, packed)]
 pub struct RSDP {

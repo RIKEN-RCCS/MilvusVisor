@@ -9,34 +9,27 @@
 //! Console with UEFI Output Protocol
 //!
 
-use uefi::{output::EfiOutputProtocol, EfiStatus};
+use uefi::{EfiStatus, output::EfiOutputProtocol};
 
 use core::fmt;
-use core::mem::MaybeUninit;
 
-pub struct Console {
-    uefi_output_console: MaybeUninit<&'static EfiOutputProtocol>,
-    //write_lock: SpinLockFlag, // Currently, Bootloader runs only BSP. Therefore the lock is not necessary.
+pub struct Console<'a> {
+    efi_output_protocol: &'a EfiOutputProtocol,
 }
 
-pub static mut DEFAULT_CONSOLE: Console = Console::new();
+static mut DEFAULT_CONSOLE: Option<Console> = None;
 
-impl Console {
-    pub const fn new() -> Self {
+impl<'a> Console<'a> {
+    pub const fn new(efi_output_protocol: &'a EfiOutputProtocol) -> Self {
         Self {
-            uefi_output_console: MaybeUninit::uninit(),
+            efi_output_protocol,
         }
     }
-
-    pub fn init(&mut self, efi_output_protocol: *const EfiOutputProtocol) {
-        self.uefi_output_console = MaybeUninit::new(unsafe { &*efi_output_protocol });
-    }
 }
 
-impl fmt::Write for Console {
+impl fmt::Write for Console<'_> {
     fn write_str(&mut self, string: &str) -> fmt::Result {
-        let result = unsafe { self.uefi_output_console.assume_init().output(string) };
-        if result == EfiStatus::EfiSuccess {
+        if self.efi_output_protocol.output(string) == EfiStatus::EfiSuccess {
             Ok(())
         } else {
             Err(fmt::Error)
@@ -44,11 +37,16 @@ impl fmt::Write for Console {
     }
 }
 
+pub fn init_default_console(efi_output_protocol: &'static EfiOutputProtocol) {
+    unsafe { (&raw mut DEFAULT_CONSOLE).write(Some(Console::new(efi_output_protocol))) };
+}
+
 pub fn print(args: fmt::Arguments) {
     use fmt::Write;
-    let result = unsafe { DEFAULT_CONSOLE.write_fmt(args) };
-    if result.is_err() {
-        panic!("write_fmt was failed.");
+    if let Some(Some(console)) = unsafe { (&raw mut DEFAULT_CONSOLE).as_mut() } {
+        if console.write_fmt(args).is_err() {
+            panic!("write_fmt was failed.");
+        }
     }
 }
 

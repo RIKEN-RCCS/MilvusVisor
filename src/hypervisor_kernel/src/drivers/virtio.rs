@@ -9,8 +9,6 @@
 //! This module provides virtio common interface and virtio queue
 //!
 
-use core::mem::size_of;
-
 pub(super) const VIRTIO_MMIO_MAGIC: usize = 0x000;
 pub(super) const VIRTIO_MMIO_MAGIC_VALUE: u32 = 0x74726976;
 pub(super) const VIRTIO_MMIO_VERSION: usize = 0x04;
@@ -92,7 +90,7 @@ impl VirtQueue {
     }
 
     #[allow(dead_code)]
-    pub(super) const fn is_avail_ring_empty(&self) -> bool {
+    pub(super) fn is_avail_ring_empty(&self) -> bool {
         self.last_avail_id == unsafe { &*self.avail_ring }.idx
     }
 
@@ -155,7 +153,7 @@ impl VirtQueue {
                     + size_of::<VirtQueueUsedElement>() * (used_id as usize))
                     as *mut VirtQueueUsedElement,
                 VirtQueueUsedElement {
-                    id: (id as u32),
+                    id: id as u32,
                     length,
                 },
             )
@@ -164,7 +162,7 @@ impl VirtQueue {
     }
 }
 
-pub(super) fn append_virtio_ssdt(
+pub fn append_virtio_ssdt(
     rsdp_address: usize,
     device_name: [u8; 4],
     mmio_address: usize,
@@ -186,9 +184,7 @@ pub(super) fn append_virtio_ssdt(
     const INTID_OFFSET: usize = 69;
 
     /* Modify AML */
-    for i in 0..4 {
-        ssdt_template[DEVICE_NAME_OFFSET + i] = device_name[i];
-    }
+    ssdt_template[DEVICE_NAME_OFFSET..(4 + DEVICE_NAME_OFFSET)].copy_from_slice(&device_name);
     if mmio_address > u32::MAX as usize {
         println!(
             "MMIO Base Address({:#X}) is not 32bit address",

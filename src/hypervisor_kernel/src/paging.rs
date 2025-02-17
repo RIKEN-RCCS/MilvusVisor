@@ -27,7 +27,7 @@ fn _remake_stage2_page_table(
     let page_table = unsafe {
         core::slice::from_raw_parts_mut(
             table_address as *mut u64,
-            (PAGE_TABLE_SIZE * number_of_tables) / core::mem::size_of::<u64>(),
+            (PAGE_TABLE_SIZE * number_of_tables) / size_of::<u64>(),
         )
     };
     let shift_level = table_level_to_table_shift(STAGE_2_PAGE_SHIFT, table_level);
@@ -58,7 +58,7 @@ fn _remake_stage2_page_table(
             *e = (next_table_address as u64) | 0b11;
         }
     }
-    return Ok(());
+    Ok(())
 }
 
 pub fn remake_stage2_page_table() -> Result<usize, ()> {
@@ -91,7 +91,7 @@ pub fn remake_stage2_page_table() -> Result<usize, ()> {
         vtcr_el2_t0sz,
     )?;
 
-    return Ok(table_address);
+    Ok(table_address)
 }
 
 /// Map physical address recursively
@@ -109,6 +109,7 @@ pub fn remake_stage2_page_table() -> Result<usize, ()> {
 /// * `permission` - The attribute for memory, Bit0: is_readable, Bit1: is_writable, Bit2: is_executable
 /// * `memory_attribute` - The index of MAIR_EL2 to apply the mapping area
 /// * `t0sz` - The value of TCR_EL2::T0SZ
+#[allow(clippy::too_many_arguments)]
 fn map_address_recursive(
     physical_address: &mut usize,
     virtual_address: &mut usize,
@@ -123,9 +124,8 @@ fn map_address_recursive(
     let mut table_index = (*virtual_address >> shift_level) & 0x1FF;
 
     if table_level == 3 {
-        let current_table = unsafe {
-            &mut *(table_address as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
-        };
+        let current_table =
+            unsafe { &mut *(table_address as *mut [u64; PAGE_TABLE_SIZE / size_of::<u64>()]) };
         let num_of_pages = if *num_of_remaining_pages + table_index > 512 {
             512 - table_index
         } else {
@@ -133,17 +133,20 @@ fn map_address_recursive(
         };
         let attributes = create_attributes_for_stage_1(permission, memory_attribute, false);
 
-        for index in table_index..(table_index + num_of_pages) {
-            current_table[index] = *physical_address as u64 | attributes;
+        for e in current_table
+            .iter_mut()
+            .skip(table_index)
+            .take(num_of_pages)
+        {
+            *e = *physical_address as u64 | attributes;
             *physical_address += PAGE_SIZE;
             *virtual_address += PAGE_SIZE;
         }
         *num_of_remaining_pages -= num_of_pages;
         return Ok(());
     }
-    let current_table = unsafe {
-        &mut *(table_address as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
-    };
+    let current_table =
+        unsafe { &mut *(table_address as *mut [u64; PAGE_TABLE_SIZE / size_of::<u64>()]) };
 
     while *num_of_remaining_pages != 0 {
         pr_debug!(
@@ -202,7 +205,7 @@ fn map_address_recursive(
                         *target_descriptor ^ (block_physical_address as u64);
                     let next_level_page = unsafe {
                         &mut *(allocated_table_address
-                            as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
+                            as *mut [u64; PAGE_TABLE_SIZE / size_of::<u64>()])
                     };
 
                     if table_level + 1 == 3 {
@@ -219,7 +222,7 @@ fn map_address_recursive(
                     /* set_mem */
                     for e in unsafe {
                         &mut *(allocated_table_address
-                            as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
+                            as *mut [u64; PAGE_TABLE_SIZE / size_of::<u64>()])
                     } {
                         *e = 0;
                     }
@@ -247,7 +250,7 @@ fn map_address_recursive(
         }
         table_index += 1;
     }
-    return Ok(());
+    Ok(())
 }
 
 /// Map address
@@ -312,9 +315,9 @@ pub fn map_address(
         &mut num_of_needed_pages,
         TTBR::new(get_ttbr0_el2()).get_base_address(),
         table_level,
-        (readable as u8) << MEMORY_PERMISSION_READABLE_BIT
-            | (writable as u8) << MEMORY_PERMISSION_WRITABLE_BIT
-            | (executable as u8) << MEMORY_PERMISSION_EXECUTABLE_BIT,
+        ((readable as u8) << MEMORY_PERMISSION_READABLE_BIT)
+            | ((writable as u8) << MEMORY_PERMISSION_WRITABLE_BIT)
+            | ((executable as u8) << MEMORY_PERMISSION_EXECUTABLE_BIT),
         get_suitable_memory_attribute_index_from_mair_el2(is_device),
         tcr_el2_t0sz as u8,
     )?;
@@ -329,12 +332,13 @@ pub fn map_address(
         aligned_size >> PAGE_SHIFT
     );
     flush_tlb_el2();
-    return Ok(());
+    Ok(())
 }
 
 /// Map physical Address Recursively into Stage2 translation table
 ///
 /// permission: Bit0:Readable, Bit1: Writable, Bit2: Executable
+#[allow(clippy::too_many_arguments)]
 fn map_address_recursive_stage2(
     physical_address: &mut usize,
     virtual_address: &mut usize,
@@ -352,8 +356,7 @@ fn map_address_recursive_stage2(
         (*virtual_address >> shift_level) & (0x200 * (concatenated_tables as usize) - 1);
 
     if table_level == 3 {
-        let table_len =
-            (PAGE_TABLE_SIZE * (concatenated_tables as usize)) / core::mem::size_of::<u64>();
+        let table_len = (PAGE_TABLE_SIZE * (concatenated_tables as usize)) / size_of::<u64>();
 
         let current_table =
             unsafe { core::slice::from_raw_parts_mut(table_address as *mut u64, table_len) };
@@ -369,19 +372,23 @@ fn map_address_recursive_stage2(
         }
         let attributes = create_attributes_for_stage_2(permission, is_dummy_page, is_unmap, false);
         let end_index = table_index + num_of_pages;
-        for index in table_index..end_index {
+        for (index, e) in current_table
+            .iter_mut()
+            .enumerate()
+            .take(end_index)
+            .skip(table_index)
+        {
+            *e = *physical_address as u64 | attributes;
+
+            #[cfg(feature = "contiguous_bit")]
             if STAGE_2_PAGE_SIZE == 0x1000
                 && (index & 0xF) == 0
                 && !is_dummy_page
                 && (end_index - index) >= 16
                 && (*physical_address & ((16 * STAGE_2_PAGE_SIZE) - 1)) == 0
-                && cfg!(feature = "contiguous_bit")
             {
                 pr_debug!("Enable CONTIGUOUS_BIT({:#X} ~ {:#X})", index, end_index);
-                current_table[index] =
-                    *physical_address as u64 | attributes | PAGE_DESCRIPTORS_CONTIGUOUS;
-            } else {
-                current_table[index] = *physical_address as u64 | attributes;
+                *e |= PAGE_DESCRIPTORS_CONTIGUOUS;
             }
             if !is_dummy_page {
                 *physical_address += STAGE_2_PAGE_SIZE;
@@ -395,7 +402,7 @@ fn map_address_recursive_stage2(
     let current_table = unsafe {
         core::slice::from_raw_parts_mut(
             table_address as *mut u64,
-            (PAGE_TABLE_SIZE * concatenated_tables as usize) / core::mem::size_of::<u64>(),
+            (PAGE_TABLE_SIZE * concatenated_tables as usize) / size_of::<u64>(),
         )
     };
 
@@ -435,9 +442,6 @@ fn map_address_recursive_stage2(
             }
 
             *physical_address += 1 << shift_level;
-            /*for i in 0..(1 << (shift_level - STAGE_2_PAGE_SHIFT)) {
-                flush_tlb_ipa_is((*virtual_address + (i << STAGE_2_PAGE_SHIFT)) as u64);
-            }*/
             *virtual_address += 1 << shift_level;
             *num_of_remaining_pages -= 512usize.pow((3 - table_level) as u32);
         } else {
@@ -459,7 +463,7 @@ fn map_address_recursive_stage2(
                         *target_descriptor ^ (block_physical_address as u64);
                     let next_level_page = unsafe {
                         &mut *(allocated_table_address
-                            as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
+                            as *mut [u64; PAGE_TABLE_SIZE / size_of::<u64>()])
                     };
 
                     if table_level + 1 == 3 {
@@ -476,7 +480,7 @@ fn map_address_recursive_stage2(
                     /* set_mem */
                     for e in unsafe {
                         &mut *(allocated_table_address
-                            as *mut [u64; PAGE_TABLE_SIZE / core::mem::size_of::<u64>()])
+                            as *mut [u64; PAGE_TABLE_SIZE / size_of::<u64>()])
                     } {
                         *e = 0;
                     }
@@ -507,7 +511,7 @@ fn map_address_recursive_stage2(
         }
         table_index += 1;
     }
-    return Ok(());
+    Ok(())
 }
 
 /// Set up to trap memory access from EL1/EL0
@@ -576,7 +580,7 @@ pub fn add_memory_access_trap(
     assert_eq!(physical_address, address);
     pr_debug!("Unmapped {:#X} Bytes({} Pages)", size, size >> PAGE_SHIFT);
     flush_tlb_el1();
-    return Ok(());
+    Ok(())
 }
 
 /// Remove the trap of memory access from EL1/EL0
@@ -630,7 +634,7 @@ pub fn remove_memory_access_trap(mut address: usize, size: usize) -> Result<(), 
     assert_eq!(num_of_needed_pages, 0);
     pr_debug!("Unmapped {:#X} Bytes({} Pages)", size, size >> PAGE_SHIFT);
     flush_tlb_el1();
-    return Ok(());
+    Ok(())
 }
 
 /// Allocate page table for stage 1 with suitable address alignment
@@ -641,7 +645,7 @@ fn allocate_page_table_for_stage_1(
     is_for_ttbr: bool,
 ) -> Result<usize, ()> {
     let alignment = if is_for_ttbr {
-        ((64 - ((PAGE_SHIFT - 3) * (4 - look_up_level) as usize) - t0sz as usize).max(4)).min(12)
+        (64 - ((PAGE_SHIFT - 3) * (4 - look_up_level) as usize) - t0sz as usize).clamp(4, 12)
     } else {
         PAGE_SHIFT
     };
@@ -664,8 +668,7 @@ fn allocate_page_table_for_stage_2(
 ) -> Result<usize, ()> {
     assert_ne!(number_of_tables, 0);
     let alignment = if is_for_ttbr {
-        ((64 - ((PAGE_SHIFT - 3) as usize * (4 - look_up_level) as usize) - t0sz as usize).max(4))
-            .min(12)
+        (64 - ((PAGE_SHIFT - 3) * (4 - look_up_level) as usize) - t0sz as usize).clamp(4, 12)
             + (number_of_tables as usize - 1)
     } else {
         assert_eq!(number_of_tables, 1);
@@ -862,6 +865,7 @@ pub fn dump_page_table_stage2(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dump_page_table_recursive(
     table_address: usize,
     start_virtual_address: usize,
@@ -915,7 +919,7 @@ fn dump_page_table_recursive(
                 }
             }
             *virtual_base_address += granule;
-            processing_descriptor_address += core::mem::size_of::<u64>();
+            processing_descriptor_address += size_of::<u64>();
         }
     } else {
         for _ in 0..number_of_entries {
@@ -968,7 +972,7 @@ fn dump_page_table_recursive(
                     512,
                 );
             }
-            processing_descriptor_address += core::mem::size_of::<u64>();
+            processing_descriptor_address += size_of::<u64>();
         }
     }
 }

@@ -10,14 +10,12 @@
 
 pub mod acpi;
 pub mod cpu;
-#[cfg(feature = "advanced_memory_manager")]
-pub mod memory_allocator;
+mod memory_allocator;
 pub mod paging;
 pub mod serial_port;
 pub mod smmu;
 pub mod spin_flag;
-#[cfg(not(feature = "advanced_memory_manager"))]
-pub mod stack_memory_allocator;
+mod stack_memory_allocator;
 
 #[cfg(feature = "advanced_memory_manager")]
 pub use memory_allocator::MemoryAllocator;
@@ -31,19 +29,19 @@ use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 
 /// The name of this hypervisor
-pub const HYPERVISOR_NAME: &'static str = "MilvusVisor";
+pub const HYPERVISOR_NAME: &str = "MilvusVisor";
 /// The hash value of VCS from the environment variable
 pub const HYPERVISOR_HASH_INFO: Option<&'static str> = option_env!("PROJECT_HASH");
 /// The compiler information from the environment variables
 pub const COMPILER_INFO: Option<&'static str> = option_env!("RUSTC_VERSION");
 /// The path of hypervisor_kernel
-pub const HYPERVISOR_PATH: &'static str = "\\EFI\\BOOT\\hypervisor_kernel";
+pub const HYPERVISOR_PATH: &str = "\\EFI\\BOOT\\hypervisor_kernel";
 /// The path of DTB written
-pub const DTB_WRITTEN_PATH: &'static str = "\\EFI\\BOOT\\dtb";
+pub const DTB_WRITTEN_PATH: &str = "\\EFI\\BOOT\\dtb";
 /// The path of hypervisor_kernel of tftp
-pub const HYPERVISOR_TFTP_PATH: &'static str = "/uefi/hypervisor_kernel";
+pub const HYPERVISOR_TFTP_PATH: &str = "/uefi/hypervisor_kernel";
 /// The path of payload uefi application
-pub const UEFI_PAYLOAD_PATH: &'static str = "/uefi/grubaa64.efi";
+pub const UEFI_PAYLOAD_PATH: &str = "/uefi/grubaa64.efi";
 /// The virtual address to map hypervisor_kernel (same as hypervisor_kernel/config/linkerscript.ld)
 pub const HYPERVISOR_VIRTUAL_BASE_ADDRESS: usize = 0x7FC0000000;
 /// The virtual address of serial port MMIO
@@ -64,10 +62,12 @@ pub const STACK_PAGES: usize = 16;
 
 pub type HypervisorKernelMainType = fn(&mut SystemInformation);
 
+pub type GeneralPurposeRegisters = [u64; 32];
+
 #[macro_export]
 macro_rules! bitmask {
     ($high:expr,$low:expr) => {
-        ((1 << (($high - $low) + 1)) - 1) << $low
+        (((1 << (($high - $low) + 1)) - 1) << $low)
     };
 }
 

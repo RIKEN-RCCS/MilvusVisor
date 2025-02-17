@@ -15,11 +15,11 @@ use core::ptr::NonNull;
 
 use common::{cpu::*, *};
 use uefi::{
-    boot_service, boot_service::EfiBootServices, EfiConfigurationTable, EfiHandle, EfiSystemTable,
-    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID,
+    EFI_ACPI_20_TABLE_GUID, EFI_DTB_TABLE_GUID, EfiConfigurationTable, EfiHandle, EfiSystemTable,
+    boot_service, boot_service::EfiBootServices,
 };
 #[cfg(feature = "tftp")]
-use uefi::{pxe, EfiStatus};
+use uefi::{EfiStatus, pxe};
 
 #[macro_use]
 mod console;
@@ -34,7 +34,7 @@ mod smmu;
 static mut ORIGINAL_PAGE_TABLE: usize = 0;
 static mut ORIGINAL_VECTOR_BASE: u64 = 0;
 static mut ORIGINAL_TCR_EL2: u64 = 0;
-static mut INTERRUPT_FLAG: MaybeUninit<InterruptFlag> = MaybeUninit::uninit();
+static mut INTERRUPT_FLAG: InterruptFlag = InterruptFlag::new();
 
 static mut IMAGE_HANDLE: EfiHandle = 0;
 static mut SYSTEM_TABLE: *const EfiSystemTable = core::ptr::null();
@@ -44,15 +44,15 @@ static mut MEMORY_ALLOCATOR: MaybeUninit<MemoryAllocator> = MaybeUninit::uninit(
 #[cfg(feature = "tftp")]
 static mut PXE_PROTOCOL: *const pxe::EfiPxeBaseCodeProtocol = core::ptr::null();
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTable) -> ! {
     let system_table = unsafe { &*system_table };
     let b_s = unsafe { &*system_table.efi_boot_services };
     unsafe {
         IMAGE_HANDLE = image_handle;
         SYSTEM_TABLE = system_table;
-        console::DEFAULT_CONSOLE.init((*system_table).console_output_protocol);
     }
+    console::init_default_console(unsafe { &*system_table.console_output_protocol });
 
     if let Some(hash_info) = HYPERVISOR_HASH_INFO {
         println!(
@@ -119,7 +119,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     #[cfg(feature = "smmu")]
     let smmu_v3_base_address = if let Some(acpi_address) = unsafe { ACPI_20_TABLE_ADDRESS } {
-        smmu::detect_smmu(acpi_address.get()).and_then(|a| NonZeroUsize::new(a))
+        smmu::detect_smmu(acpi_address.get()).and_then(NonZeroUsize::new)
     } else {
         None
     };
@@ -161,23 +161,37 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
         );
     }
 
+    let exit_boot_service_address = if system_table.efi_boot_services as usize != 0 {
+        if let Some(b_s) = unsafe { (&raw const *system_table.efi_boot_services).as_ref() } {
+            NonZeroUsize::new(b_s.exit_boot_services as usize)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     println!("Call the hypervisor(Entry Point: {:#X})", entry_point);
 
     let mut system_info = SystemInformation {
         acpi_rsdp_address: unsafe { ACPI_20_TABLE_ADDRESS },
         vbar_el2: 0,
-        available_memory_info: unsafe { MEMORY_ALLOCATOR.assume_init_mut().get_all_memory() },
+        available_memory_info: unsafe {
+            (&raw mut MEMORY_ALLOCATOR)
+                .as_mut()
+                .unwrap()
+                .assume_init_mut()
+        }
+        .get_all_memory(),
         spin_table_info,
         memory_save_list,
         serial_port: serial,
         ecam_info,
         smmu_v3_base_address,
-        exit_boot_service_address: NonZeroUsize::new(unsafe {
-            (*(*SYSTEM_TABLE).efi_boot_services).exit_boot_services
-        } as usize),
+        exit_boot_service_address,
     };
     unsafe {
-        (core::mem::transmute::<usize, HypervisorKernelMainType>(entry_point))(&mut system_info)
+        core::mem::transmute::<usize, HypervisorKernelMainType>(entry_point)(&mut system_info)
     };
 
     /* Do not call allocate_memory/free_memory from here */
@@ -186,7 +200,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     /* Disable IRQ/FIQ */
     /* After disabling IRQ/FIQ, we should avoid calling UEFI functions */
-    unsafe { INTERRUPT_FLAG.write(local_irq_fiq_save()) };
+    unsafe { INTERRUPT_FLAG = local_irq_fiq_save() };
 
     /* Setup registers */
     unsafe { ORIGINAL_VECTOR_BASE = get_vbar_el2() };
@@ -198,7 +212,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
     el2_to_el1(el1_main as *const fn() as usize, stack_address);
 
     /* Never come here */
-    local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
+    local_irq_fiq_restore(unsafe { (&raw const INTERRUPT_FLAG).read() });
     panic!("Failed to jump EL1");
 }
 
@@ -210,8 +224,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 fn detect_acpi_and_dtb(system_table: &EfiSystemTable) {
     for i in 0..system_table.num_table_entries {
         let table = unsafe {
-            &*((system_table.configuration_table
-                + i * core::mem::size_of::<EfiConfigurationTable>())
+            &*((system_table.configuration_table + i * size_of::<EfiConfigurationTable>())
                 as *const EfiConfigurationTable)
         };
         pr_debug!("GUID: {:#X?}", table.vendor_guid);
@@ -249,7 +262,9 @@ fn init_memory_pool(b_s: &EfiBootServices) -> usize {
         allocated_address + ALLOC_SIZE
     );
     unsafe {
-        MEMORY_ALLOCATOR
+        (&raw mut MEMORY_ALLOCATOR)
+            .as_mut()
+            .unwrap()
             .assume_init_mut()
             .init(allocated_address, ALLOC_SIZE)
     };
@@ -297,7 +312,9 @@ fn map_memory_pool(allocated_memory_address: usize, alloc_size: usize) {
 /// If the allocation is succeeded, Ok(start_address), otherwise Err(())
 pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
     unsafe {
-        MEMORY_ALLOCATOR
+        (&raw mut MEMORY_ALLOCATOR)
+            .as_mut()
+            .unwrap()
             .assume_init_mut()
             .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT))
     }
@@ -313,7 +330,9 @@ pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, Memo
 /// If succeeded, Ok(()), otherwise Err(())
 pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationError> {
     unsafe {
-        MEMORY_ALLOCATOR
+        (&raw mut MEMORY_ALLOCATOR)
+            .as_mut()
+            .unwrap()
             .assume_init_mut()
             .free(address, pages << PAGE_SHIFT)
     }
@@ -344,7 +363,7 @@ fn detect_spin_table(
     };
     let base_address = ((u32::from_be(release_addr[0]) as usize) << u32::BITS)
         | (u32::from_be(release_addr[1]) as usize);
-    let mut length = core::mem::size_of::<u64>();
+    let mut length = size_of::<u64>();
     while let Ok(Some(node)) = search_holder.search_next_device_by_node_name(b"cpu", &dtb_analyzer)
     {
         let Ok(Some(release_addr)) = node.get_prop_as_u32(b"cpu-release-addr", &dtb_analyzer)
@@ -353,16 +372,16 @@ fn detect_spin_table(
         };
         let release_address = ((u32::from_be(release_addr[0]) as usize) << u32::BITS)
             | (u32::from_be(release_addr[1]) as usize);
-        length = release_address + core::mem::size_of::<u64>() - base_address;
+        length = release_address + size_of::<u64>() - base_address;
         pr_debug!("CPU Release Address: {:#X}", release_address);
     }
     Some((base_address, NonZeroUsize::new(length).unwrap()))
 }
 
-/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] via TFTP
+/// Load hypervisor_kernel to [`HYPERVISOR_VIRTUAL_BASE_ADDRESS`] via TFTP
 ///
 /// This function loads hypervisor_kernel according to ELF header.
-/// The hypervisor_kernel will be loaded from [`common::HYPERVISOR_PATH`]
+/// The hypervisor_kernel will be loaded from [`HYPERVISOR_PATH`]
 ///
 /// Before loads the hypervisor, this will save original TTBR0_EL2 into [`ORIGINAL_PAGE_TABLE`] and
 /// create new TTBR0_EL2 by copying original page table tree.
@@ -447,7 +466,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     if let Err(e) = b_s.free_pool(kernel_pool) {
         println!("Failed to free the pool: {:?}", e);
     }
-    return entry_point;
+    entry_point
 }
 
 /// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`] from the embedded binary
@@ -547,7 +566,7 @@ fn load_hypervisor(image_handle: EfiHandle, b_s: &EfiBootServices) -> usize {
     entry_point
 }
 
-/// Load hypervisor_kernel to [`common::HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
+/// Load hypervisor_kernel to [`HYPERVISOR_VIRTUAL_BASE_ADDRESS`]
 ///
 /// This function loads hypervisor_kernel according to ELF header.
 /// The data will be loaded by `read_data`
@@ -573,7 +592,7 @@ where
 {
     /* Read ElfHeader */
     let mut elf_header: MaybeUninit<elf::Elf64Header> = MaybeUninit::uninit();
-    const ELF64_HEADER_SIZE: usize = core::mem::size_of::<elf::Elf64Header>();
+    const ELF64_HEADER_SIZE: usize = size_of::<elf::Elf64Header>();
     let read_size = read_data(elf_header.as_mut_ptr() as *mut u8, 0, ELF64_HEADER_SIZE)
         .expect("Failed to read Elf header");
     assert_eq!(
@@ -686,7 +705,7 @@ where
 
 /// Save DTB
 ///
-/// This function saves DTB into [`common::DTB_WRITTEN_PATH`]
+/// This function saves DTB into [`DTB_WRITTEN_PATH`]
 /// This process needed by passing the edited DTB to U-Boot.
 ///
 /// # Panics
@@ -733,7 +752,7 @@ fn create_memory_save_list(b_s: &EfiBootServices) -> &'static mut [MemorySaveLis
             allocate_memory(MEMORY_SAVE_LIST_PAGES, None)
                 .expect("Failed to allocate memory for memory saving list")
                 as *mut MemorySaveListEntry,
-            MEMORY_SAVE_LIST_SIZE / core::mem::size_of::<MemorySaveListEntry>(),
+            MEMORY_SAVE_LIST_SIZE / size_of::<MemorySaveListEntry>(),
         )
     };
 
@@ -799,7 +818,7 @@ fn dump_memory_map(b_s: &EfiBootServices) {
             return;
         }
     };
-    let default_descriptor_size = core::mem::size_of::<boot_service::EfiMemoryDescriptor>();
+    let default_descriptor_size = size_of::<boot_service::EfiMemoryDescriptor>();
 
     if default_descriptor_size != memory_map_info.actual_descriptor_size {
         println!(
@@ -827,6 +846,8 @@ fn dump_memory_map(b_s: &EfiBootServices) {
 
 fn set_up_el1() {
     let is_e2h_enabled = (get_hcr_el2() & HCR_EL2_E2H) != 0;
+    let id_aa64pfr0_el1 = get_id_aa64pfr0_el1();
+    let id_aa64pfr1_el1 = get_id_aa64pfr1_el1();
 
     /* CNTHCTL_EL2 & CNTVOFF_EL2 */
     set_cnthctl_el2(CNTHCTL_EL2_EL1PCEN | CNTHCTL_EL2_EL1PCTEN);
@@ -850,66 +871,59 @@ fn set_up_el1() {
     /* Ignore it currently... */
 
     /* CPACR_EL1 & CPTR_EL2 */
-    #[cfg(feature = "raspberrypi")]
-    set_cptr_el2(0x0);
-    let cptr_el2_current = get_cptr_el2();
+    let cptr_el2 = get_cptr_el2();
     let mut cpacr_el1: u64 = 0;
 
-    cpacr_el1 |= ((((cptr_el2_current) & CPTR_EL2_ZEN) >> CPTR_EL2_ZEN_BITS_OFFSET)
-        << CPACR_EL1_ZEN_BITS_OFFSET)
-        | ((((cptr_el2_current) & CPTR_EL2_FPEN) >> CPTR_EL2_FPEN_BITS_OFFSET)
-            << CPACR_EL1_FPEN_BITS_OFFSET);
-    cpacr_el1 |= 0b11 << CPACR_EL1_FPEN_BITS_OFFSET; /* TODO: inspect why we must set 0b11 */
-
     if is_e2h_enabled {
-        cpacr_el1 |= ((cptr_el2_current & CPTR_EL2_TTA_WITH_E2H)
-            >> CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H)
-            << CPACR_EL1_TTA_BIT_OFFSET;
+        cpacr_el1 = cptr_el2;
+        cpacr_el1 &= !(CPTR_EL2_TCPAC | CPTR_EL2_TAM);
     } else {
-        cpacr_el1 |= ((cptr_el2_current & CPTR_EL2_TTA_WITHOUT_E2H)
-            >> CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H)
+        cpacr_el1 |= ((cptr_el2 & CPTR_EL2_TTA_WITHOUT_E2H) >> CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H)
             << CPACR_EL1_TTA_BIT_OFFSET;
+        if (cptr_el2 & CPTR_EL2_TSM) == CPTR_EL2_TSM_TRAP {
+            cpacr_el1 |= CPACR_EL1_SMEN_TRAP_ALL;
+        } else {
+            cpacr_el1 |= CPACR_EL1_SMEN_TRAP_NONE;
+        }
+        if (cptr_el2 & CPTR_EL2_TFP) == CPTR_EL2_TFP_TRAP {
+            cpacr_el1 |= CPACR_EL1_FPEN_TRAP_ALL;
+        } else {
+            cpacr_el1 |= CPACR_EL1_FPEN_TRAP_NONE;
+        }
+        if (cptr_el2 & CPTR_EL2_TZ) == CPTR_EL2_TZ_TRAP {
+            cpacr_el1 |= CPACR_EL1_ZEN_TRAP_ALL;
+        } else {
+            cpacr_el1 |= CPACR_EL1_ZEN_TRAP_NONE;
+        }
     }
 
-    let mut cptr_el2: u64 = cptr_el2_current | CPTR_EL2_ZEN_NO_TRAP | CPTR_EL2_FPEN_NO_TRAP /*| CPTR_EL2_RES1*/;
-    cptr_el2 &= !((1 << 28) | (1 << 30) | (1 << 31));
-    set_cpacr_el1(cpacr_el1);
-    isb();
-    /* CPTR_EL2 will be set after HCR_EL2 */
-
-    let id_aa64pfr0_el1 = get_id_aa64pfr0_el1();
+    let mut cptr_el2 = CPTR_EL2_RES1;
+    if (id_aa64pfr1_el1 & ID_AA64PFR1_EL1_SME) != 0 {
+        cptr_el2 &= !CPTR_EL2_TSM;
+    }
     if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_SVE) != 0 {
-        /* ZCR_EL2 */
-        unsafe {
-            asm!("  mov {t}, 0x1ff
-                msr S3_4_C1_C2_0, {t}", t = out(reg) _)
-        };
+        cptr_el2 &= !CPTR_EL2_TZ;
+
+        let zcr_el2 = MAX_ZCR_EL2_LEN;
+        unsafe { asm!("msr S3_4_C1_C2_0, {:x}", in(reg)zcr_el2) };
     }
 
     if (id_aa64pfr0_el1 & ID_AA64PFR0_EL1_GIC) != 0 {
-        /* GICv3~ */
-        /*unsafe {
-            asm!("  mrs {t}, icc_sre_el2
-                    orr {t}, {t}, 1 << 0
-                    orr {t}, {t}, 1 << 3
-                    msr icc_sre_el2, {t}
-                    isb
-                    mrs {t}, icc_sre_el2
-                    tbz {t}, 0, 1f
-                    msr ich_hcr_el2, xzr
-                    1:", t = out(reg) _)
-        };*/
+        let icc_sre_el2 = ICC_SRE_EL2_ENABLE | ICC_SRE_EL2_SRE;
+        set_icc_sre_el2(icc_sre_el2);
+        isb();
+        set_ich_hcr_el2(0);
     }
 
     /* MAIR_EL1(Copy MAIR_EL2) */
-    set_mair_el1(get_mair_el2());
+    let mair_el1 = get_mair_el2();
 
     /* TTBR0_EL1 */
-    set_ttbr0_el1(unsafe { ORIGINAL_PAGE_TABLE } as u64);
+    let ttbr0_el1 = unsafe { ORIGINAL_PAGE_TABLE } as u64;
 
     /* TCR_EL1 */
-    if is_e2h_enabled {
-        set_tcr_el1(unsafe { ORIGINAL_TCR_EL2 });
+    let tcr_el1 = if is_e2h_enabled {
+        unsafe { ORIGINAL_TCR_EL2 }
     } else {
         let mut tcr_el1: u64 = 0;
         let tcr_el2 = unsafe { ORIGINAL_TCR_EL2 };
@@ -936,15 +950,24 @@ fn set_up_el1() {
             << TCR_EL1_IPS_BITS_OFFSET;
         tcr_el1 |= TCR_EL1_EPD1; /* Disable TTBR1_EL1 */
 
-        set_tcr_el1(tcr_el1);
-    }
+        tcr_el1
+    };
 
     /* SCTLR_EL1(Copy SCTLR_EL2) */
-    set_sctlr_el1(get_sctlr_el2());
+    let sctlr_el1 = get_sctlr_el2();
 
     /* VBAR_EL1 */
-    set_vbar_el1(unsafe { ORIGINAL_VECTOR_BASE });
+    let vbar_el1 = unsafe { ORIGINAL_VECTOR_BASE };
 
+    /* A64FX specific registers */
+    #[cfg(feature = "a64fx")]
+    let mut imp_fj_tag_address_ctrl_el1: u32;
+    #[cfg(feature = "a64fx")]
+    let imp_sccr_ctrl_el1: u64;
+    #[cfg(feature = "a64fx")]
+    let imp_pf_ctrl_el1: u64;
+    #[cfg(feature = "a64fx")]
+    let imp_barrier_ctrl_el1: u64;
     #[cfg(feature = "a64fx")]
     {
         const IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET: u32 = 0;
@@ -967,18 +990,18 @@ fn set_up_el1() {
         const IMP_BARRIER_CTRL_EL1_EL0AE: u64 = 1 << 62;
 
         let mut imp_fj_tag_address_ctrl_el2: u32;
-        let mut imp_fj_tag_address_ctrl_el1: u32 = 0;
         /* Is it ok including IMP_SCCR_CTRL_EL1_EL0AE? */
-        let imp_sccr_ctrl_el1: u64 = IMP_SCCR_CTRL_EL1_EL1AE | IMP_SCCR_CTRL_EL1_EL0AE;
+        imp_sccr_ctrl_el1 = IMP_SCCR_CTRL_EL1_EL1AE | IMP_SCCR_CTRL_EL1_EL0AE;
         /* Is it ok including IMP_PF_CTRL_EL1_EL0AE? */
-        let imp_pf_ctrl_el1: u64 = IMP_PF_CTRL_EL1_EL1AE | IMP_PF_CTRL_EL1_EL0AE;
+        imp_pf_ctrl_el1 = IMP_PF_CTRL_EL1_EL1AE | IMP_PF_CTRL_EL1_EL0AE;
         /* Is it ok including IMP_BARRIER_CTRL_EL1_EL0AE? */
-        let imp_barrier_ctrl_el1: u64 = IMP_BARRIER_CTRL_EL1_EL1AE | IMP_BARRIER_CTRL_EL1_EL0AE;
+        imp_barrier_ctrl_el1 = IMP_BARRIER_CTRL_EL1_EL1AE | IMP_BARRIER_CTRL_EL1_EL0AE;
 
         unsafe { asm!("mrs {:x}, S3_4_C11_C2_0", out(reg) imp_fj_tag_address_ctrl_el2) };
         if is_e2h_enabled {
             imp_fj_tag_address_ctrl_el1 = imp_fj_tag_address_ctrl_el2;
         } else {
+            imp_fj_tag_address_ctrl_el1 = 0;
             imp_fj_tag_address_ctrl_el1 |= ((imp_fj_tag_address_ctrl_el2
                 & IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0)
                 >> IMP_FJ_TAG_ADDRESS_CTRL_EL2_TBO0_BIT_OFFSET)
@@ -994,17 +1017,29 @@ fn set_up_el1() {
         }
         imp_fj_tag_address_ctrl_el2 = 0;
         unsafe { asm!("msr S3_4_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el2) };
-        unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
-        unsafe { asm!("msr S3_0_C11_C8_0, {:x}", in(reg) imp_sccr_ctrl_el1) };
-        unsafe { asm!("msr S3_0_C11_C4_0, {:x}", in(reg) imp_pf_ctrl_el1) };
-        unsafe { asm!("msr S3_0_C11_C12_0, {:x}", in(reg) imp_barrier_ctrl_el1) };
     }
 
     /* HCR_EL2 */
     let hcr_el2 = HCR_EL2_FIEN | HCR_EL2_API | HCR_EL2_APK | HCR_EL2_RW | HCR_EL2_TSC | HCR_EL2_VM;
     set_hcr_el2(hcr_el2);
     isb();
+
+    /* Now, HCR_EL2.E2H == 0 */
     set_cptr_el2(cptr_el2);
+    set_cpacr_el1(cpacr_el1);
+    set_sctlr_el1(sctlr_el1);
+    set_vbar_el1(vbar_el1);
+    set_mair_el1(mair_el1);
+    set_tcr_el1(tcr_el1);
+    set_ttbr0_el1(ttbr0_el1);
+
+    #[cfg(feature = "a64fx")]
+    {
+        unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C8_0, {:x}", in(reg) imp_sccr_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C4_0, {:x}", in(reg) imp_pf_ctrl_el1) };
+        unsafe { asm!("msr S3_0_C11_C12_0, {:x}", in(reg) imp_barrier_ctrl_el1) };
+    }
 }
 
 #[cfg(feature = "tftp")]
@@ -1112,7 +1147,7 @@ fn exit_bootloader() -> ! {
 }
 
 extern "C" fn el1_main() -> ! {
-    local_irq_fiq_restore(unsafe { INTERRUPT_FLAG.assume_init_ref().clone() });
+    local_irq_fiq_restore(unsafe { (&raw const INTERRUPT_FLAG).read() });
 
     assert_eq!(get_current_el() >> 2, 1, "Failed to jump to EL1");
     println!("Hello,world! from EL1");
@@ -1120,20 +1155,21 @@ extern "C" fn el1_main() -> ! {
     exit_bootloader();
 }
 
-fn el2_to_el1(el1_entry_point: usize, el1_stack_pointer: usize) {
+fn el2_to_el1(el1_entry_point: usize, el2_stack_pointer: usize) {
     unsafe {
         asm!("
             msr elr_el2, {entry_point}
             mov {tmp}, sp
             msr sp_el1, {tmp}
             mov sp, {stack_pointer}
-            mov {tmp}, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
+            mov {tmp}, {SPSR_EL2}
             msr spsr_el2, {tmp}
             isb
             eret",
         tmp = in(reg) 0u64,
         entry_point = in(reg) el1_entry_point,
-        stack_pointer = in(reg) el1_stack_pointer,
+        stack_pointer = in(reg) el2_stack_pointer,
+        SPSR_EL2 = const SPSR_EL2_DEFAULT,
         options(noreturn)
         )
     }
