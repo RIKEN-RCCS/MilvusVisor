@@ -15,7 +15,7 @@ use crate::allocate_memory;
 use crate::paging::map_address;
 
 use common::cpu::{get_vtcr_el2, get_vttbr_el2};
-use common::{acpi, paging::page_align_up, smmu::*, PAGE_SHIFT};
+use common::{PAGE_SHIFT, acpi, paging::page_align_up, smmu::*};
 
 use core::ptr::{read_volatile, write_volatile};
 
@@ -36,7 +36,7 @@ use core::ptr::{read_volatile, write_volatile};
 /// * acpi_address: RSDP of ACPI 2.0 or later
 ///
 /// # Result
-/// If the initialization is succeed, return Some(smmuv3_base_address), otherwise none
+/// If the initialization is succeeded, return Some(smmuv3_base_address), otherwise none
 pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
     let iort = match acpi::get_acpi_table(acpi_address, &acpi::iort::IORT::SIGNATURE) {
         Ok(address) => unsafe { &*(address as *const acpi::iort::IORT) },
@@ -109,15 +109,14 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
     const STREAM_TABLE_SPLIT: u32 = 6;
 
     let level2_table_address = allocate_memory(
-        page_align_up((1 << STREAM_TABLE_SPLIT) * core::mem::size_of::<StreamTableEntry>())
-            >> PAGE_SHIFT,
+        page_align_up((1 << STREAM_TABLE_SPLIT) * size_of::<StreamTableEntry>()) >> PAGE_SHIFT,
         None,
     )
     .expect("Failed to allocate memory for Level2 Stream Table");
     let level2_table =
         unsafe { &mut *(level2_table_address as *mut [StreamTableEntry; 1 << STREAM_TABLE_SPLIT]) };
     for e in level2_table {
-        core::mem::forget(core::mem::replace(e, ste.clone()));
+        *e = ste;
     }
 
     /* Find max_stream_id */
@@ -144,8 +143,7 @@ pub fn detect_smmu(acpi_address: usize) -> Option<usize> {
     /* Create Stream Table (Level1)*/
     let number_of_level1_context_descriptors = (max_stream_id + 1) >> STREAM_TABLE_SPLIT;
     let level1_table_address = allocate_memory(
-        page_align_up(number_of_level1_context_descriptors * core::mem::size_of::<u64>())
-            >> PAGE_SHIFT,
+        page_align_up(number_of_level1_context_descriptors * size_of::<u64>()) >> PAGE_SHIFT,
         None,
     )
     .expect("Failed to allocate memory for Level1 Stream Table");

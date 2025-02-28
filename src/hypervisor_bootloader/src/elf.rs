@@ -83,7 +83,7 @@ impl Elf64Header {
             println!("Unsupported ELF version: {}", self.e_version);
             return false;
         }
-        return true;
+        true
     }
 
     pub fn get_entry_point(&self) -> usize {

@@ -12,31 +12,39 @@
 use core::arch::asm;
 
 use common::cpu::{
-    convert_virtual_address_to_intermediate_physical_address_el0_read,
+    SPSR_EL2_M, SPSR_EL2_M_EL0T, convert_virtual_address_to_intermediate_physical_address_el0_read,
     convert_virtual_address_to_intermediate_physical_address_el1_read,
     convert_virtual_address_to_intermediate_physical_address_el1_write,
     convert_virtual_address_to_physical_address_el2_read,
-    convert_virtual_address_to_physical_address_el2_write, SPSR_EL2_M, SPSR_EL2_M_EL0T,
+    convert_virtual_address_to_physical_address_el2_write,
 };
-use common::{bitmask, PAGE_MASK, PAGE_SIZE};
+use common::{GeneralPurposeRegisters, PAGE_MASK, PAGE_SIZE, bitmask};
+
 pub use load::read_memory;
 
-use crate::{handler_panic, paging::map_address, StoredRegisters};
+use crate::paging::map_address;
 
 mod load;
 mod store;
 
 const REGISTER_NUMBER_XZR: u8 = 31;
 
+#[derive(Copy, Clone, Debug)]
+pub enum EmulationError {
+    InvalidAddress,
+    Unsupported,
+    AlignmentError,
+}
+
 #[allow(unused_variables)]
 pub fn data_abort_handler(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     esr: u64,
     elr: u64,
     far: u64,
     hpfar: u64,
     spsr: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     #[cfg(debug_assertions)]
     if (esr & (1 << 24)) != 0 {
         let sas = (esr >> 22) & 0b11;
@@ -89,16 +97,17 @@ pub fn data_abort_handler(
 }
 
 fn emulate_instruction(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     _elr: u64,
     far: u64,
     hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     /* ARM DDI 0487G.a ID011921 C4-280 */
     let op0 = ((target_instruction & bitmask!(28, 25)) >> 25) as u8;
     if (op0 & 0b0101) != 0b0100 {
-        handler_panic!(s_r, "Not Load/Store Instruction: {:#X}", target_instruction);
+        println!("Not Load/Store Instruction: {:#X}", target_instruction);
+        return Err(EmulationError::Unsupported);
     }
     let op1 = (op0 >> 1) & 1;
     let op0 = ((target_instruction & bitmask!(31, 28)) >> 28) as u8;
@@ -120,7 +129,8 @@ fn emulate_instruction(
             /* unsigned immediate (No post|pre indexing) */
             if op1 != 0 {
                 /* V */
-                handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+                println!("SIMD is not supported: {:#X}", target_instruction);
+                return Err(EmulationError::Unsupported);
             }
             let opc = ((target_instruction & bitmask!(23, 22)) >> 22) as u8;
             return if opc == 0b00 {
@@ -144,7 +154,8 @@ fn emulate_instruction(
                     pr_debug!("Load/Store Register Offset");
                     if op1 != 0 {
                         /* V */
-                        handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+                        println!("SIMD is not supported: {:#X}", target_instruction);
+                        return Err(EmulationError::Unsupported);
                     }
                     let opc = ((target_instruction & bitmask!(23, 22)) >> 22) as u8;
                     return if opc == 0b00 {
@@ -173,7 +184,8 @@ fn emulate_instruction(
         } else {
             if op1 != 0 {
                 /* V */
-                handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+                println!("SIMD is not supported: {:#X}", target_instruction);
+                return Err(EmulationError::Unsupported);
             }
             let opc = ((target_instruction & bitmask!(23, 22)) >> 22) as u8;
             return if opc == 0b00 {
@@ -189,7 +201,8 @@ fn emulate_instruction(
         pr_debug!("Load/Store Register Pair");
         if op1 != 0 {
             /* V */
-            handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+            println!("SIMD is not supported: {:#X}", target_instruction);
+            return Err(EmulationError::Unsupported);
         }
         return if (target_instruction & (1 << 22)) != 0 {
             pr_debug!("LDP");
@@ -204,18 +217,19 @@ fn emulate_instruction(
                 pr_debug!("Load Register Literal");
                 if op1 != 0 {
                     /* V */
-                    handler_panic!(s_r, "SIMD is not supported: {:#X}", target_instruction);
+                    println!("SIMD is not supported: {:#X}", target_instruction);
+                    return Err(EmulationError::Unsupported);
                 }
                 return load::emulate_literal_load_register(s_r, target_instruction, far, hpfar);
             }
         }
     }
     println!("Unknown Instruction: {:#X}", target_instruction);
-    Err(())
+    Err(EmulationError::Unsupported)
 }
 
 #[cfg(feature = "mrs_msr_emulation")]
-pub fn mrs_msr_handler(s_r: &mut StoredRegisters, esr: u64) -> Result<(), ()> {
+pub fn mrs_msr_handler(s_r: &mut GeneralPurposeRegisters, esr: u64) -> Result<(), EmulationError> {
     let op0 = ((esr & bitmask!(21, 20)) >> 20) as u8;
     let op2 = ((esr & bitmask!(19, 17)) >> 17) as u8;
     let op1 = ((esr & bitmask!(16, 14)) >> 14) as u8;
@@ -227,7 +241,7 @@ pub fn mrs_msr_handler(s_r: &mut StoredRegisters, esr: u64) -> Result<(), ()> {
     let reg = if target_register == REGISTER_NUMBER_XZR {
         &mut xzr
     } else {
-        get_register_reference_mut(s_r, target_register)
+        &mut s_r[target_register as usize]
     };
 
     macro_rules! emulate_mrs_msr_if_matched {
@@ -277,28 +291,30 @@ pub fn mrs_msr_handler(s_r: &mut StoredRegisters, esr: u64) -> Result<(), ()> {
         "Unknown Register: S{}_{}_C{}_C{}_{}",
         op0, op1, crn, crm, op2
     );
-    Err(())
+    Err(EmulationError::Unsupported)
 }
 
-fn faulting_va_to_ipa_load(far: u64) -> Result<usize, ()> {
+fn faulting_va_to_ipa_load(far: u64) -> Result<usize, EmulationError> {
     convert_virtual_address_to_intermediate_physical_address_el1_read(far as usize)
+        .or(Err(EmulationError::InvalidAddress))
 }
 
-fn faulting_va_to_ipa_store(far: u64) -> Result<usize, ()> {
+fn faulting_va_to_ipa_store(far: u64) -> Result<usize, EmulationError> {
     convert_virtual_address_to_intermediate_physical_address_el1_write(far as usize)
+        .or(Err(EmulationError::InvalidAddress))
 }
 
 fn get_virtual_address_to_access_ipa(
     intermediate_physical_address: usize,
     is_write_access: bool,
-) -> Result<usize, ()> {
+) -> Result<usize, EmulationError> {
     if is_write_access {
         if let Ok(pa) =
             convert_virtual_address_to_physical_address_el2_write(intermediate_physical_address)
         {
             return if pa != intermediate_physical_address {
                 println!("IPA({:#X}) != VA({:#X})", intermediate_physical_address, pa);
-                Err(())
+                Err(EmulationError::InvalidAddress)
             } else {
                 Ok(intermediate_physical_address)
             };
@@ -308,7 +324,7 @@ fn get_virtual_address_to_access_ipa(
     {
         return if pa != intermediate_physical_address {
             println!("IPA({:#X}) != VA({:#X})", intermediate_physical_address, pa);
-            Err(())
+            Err(EmulationError::InvalidAddress)
         } else {
             Ok(intermediate_physical_address)
         };
@@ -322,17 +338,9 @@ fn get_virtual_address_to_access_ipa(
         true,
         false,
         true,
-    )?;
+    )
+    .or(Err(EmulationError::InvalidAddress))?;
     Ok(intermediate_physical_address)
-}
-
-fn get_register_reference_mut(s_r: &mut StoredRegisters, index: u8) -> &mut u64 {
-    unsafe {
-        &mut core::mem::transmute::<
-            &mut StoredRegisters,
-            &mut [u64; core::mem::size_of::<StoredRegisters>() / core::mem::size_of::<u64>()],
-        >(s_r)[index as usize]
-    }
 }
 
 fn write_back_index_register_imm9(base_register: &mut u64, imm9_u32: u32) {
@@ -341,8 +349,8 @@ fn write_back_index_register_imm9(base_register: &mut u64, imm9_u32: u32) {
             sbfx {imm9}, {imm9}, #0, #9
             add  {base_reg}, {base_reg}, {imm9}
             ",
-            imm9 = inout(reg) (imm9_u32 as u64) => _ ,
-            base_reg = inout(reg) *base_register)
+        imm9 = inout(reg) imm9_u32 as u64 => _,
+        base_reg = inout(reg) *base_register)
     };
 }
 
@@ -352,7 +360,7 @@ fn write_back_index_register_imm7(base_register: &mut u64, imm7_u32: u32) {
             sbfx {imm7}, {imm7}, #0, #7
             add  {base_reg}, {base_reg}, {imm7}
             ",
-        imm7 = inout(reg) (imm7_u32 as u64) => _ ,
+        imm7 = inout(reg) imm7_u32 as u64 => _,
         base_reg = inout(reg) *base_register)
     };
 }

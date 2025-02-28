@@ -1,28 +1,24 @@
-name: Build Hypervisor
+name: Build Hypervisor (Stable)
 
 on:
   push:
     branches:
       - main
-      - develop
   pull_request:
     branches:
       - main
-      - develop
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 0 1 * *'
 
 jobs:
-  build:
+  build_stable:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup the environment
-        run: rustup default nightly
       - name: Build
-        run: cd src && cargo xtask build
+        run: cd src && cargo xtask build -r -p
       - uses: actions/upload-artifact@v4
         with:
           name: MilvusVisor
-          path: src/bin/
+          path: bin/
           compression-level: 9

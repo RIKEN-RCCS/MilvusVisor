@@ -10,19 +10,24 @@ use crate::cpu::{clean_and_invalidate_data_cache, isb};
 
 pub struct SpinLockFlag(AtomicBool);
 
+impl Default for SpinLockFlag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpinLockFlag {
     pub const fn new() -> Self {
         Self(AtomicBool::new(false))
     }
 
     #[inline(always)]
-    pub fn try_lock_weak(&self) -> Result<(), ()> {
+    pub fn try_lock_weak(&self) -> Result<(), bool> {
         clean_and_invalidate_data_cache(self.0.as_ptr() as usize);
         isb();
         self.0
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .and_then(|old| if old == false { Ok(()) } else { Err(false) })
-            .or(Err(()))
+            .and_then(|old| if !old { Ok(()) } else { Err(false) })
     }
 
     #[inline(always)]

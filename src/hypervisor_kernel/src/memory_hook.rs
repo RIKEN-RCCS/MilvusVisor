@@ -11,7 +11,7 @@
 
 use core::mem::MaybeUninit;
 
-use crate::StoredRegisters;
+use common::GeneralPurposeRegisters;
 
 const DEFAULT_LOAD_EMULATION_RESULT: LoadHookResult = LoadHookResult::PassThrough;
 const DEFAULT_STORE_EMULATION_RESULT: StoreHookResult = StoreHookResult::PassThrough;
@@ -39,7 +39,7 @@ pub enum StoreHookResult {
 
 pub type LoadAccessHandler = fn(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     is_64bit_register: bool,
     is_sign_extend_required: bool,
@@ -48,7 +48,7 @@ pub type LoadAccessHandler = fn(
 
 pub type StoreAccessHandler = fn(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
     entry: &StoreAccessHandlerEntry,
@@ -161,9 +161,10 @@ static mut NUM_OF_STORE_HANDLER_ENABLED_ENTRIES: usize = 0;
 macro_rules! get_load_handler_list {
     () => {
         unsafe {
-            (&*core::ptr::addr_of!(LOAD_HANDLER_LIST))
+            (&raw const LOAD_HANDLER_LIST)
+                .as_ref()
+                .unwrap()
                 .assume_init()
-                .iter()
         }
     };
 }
@@ -171,9 +172,10 @@ macro_rules! get_load_handler_list {
 macro_rules! get_load_handler_list_mut {
     () => {
         unsafe {
-            (&mut *core::ptr::addr_of_mut!(LOAD_HANDLER_LIST))
+            (&raw mut LOAD_HANDLER_LIST)
+                .as_mut()
+                .unwrap()
                 .assume_init_mut()
-                .iter_mut()
         }
     };
 }
@@ -181,9 +183,10 @@ macro_rules! get_load_handler_list_mut {
 macro_rules! get_store_handler_list {
     () => {
         unsafe {
-            (&*core::ptr::addr_of!(STORE_HANDLER_LIST))
+            (&raw const STORE_HANDLER_LIST)
+                .as_ref()
+                .unwrap()
                 .assume_init()
-                .iter()
         }
     };
 }
@@ -191,19 +194,22 @@ macro_rules! get_store_handler_list {
 macro_rules! get_store_handler_list_mut {
     () => {
         unsafe {
-            (&mut *core::ptr::addr_of_mut!(STORE_HANDLER_LIST))
+            (&raw mut STORE_HANDLER_LIST)
+                .as_mut()
+                .unwrap()
                 .assume_init_mut()
-                .iter_mut()
         }
     };
 }
 
 pub fn init_memory_access_handler() {
-    for e in get_load_handler_list_mut!() {
+    let list = get_load_handler_list_mut!();
+    for e in list.iter_mut() {
         e.target_address = 0;
         e.range = 0;
     }
-    for e in get_store_handler_list_mut!() {
+    let list = get_store_handler_list_mut!();
+    for e in list.iter_mut() {
         e.target_address = 0;
         e.range = 0;
     }
@@ -219,7 +225,8 @@ pub fn add_memory_load_access_handler(entry: LoadAccessHandlerEntry) -> Result<(
     if entry.range == 0 {
         return Err(());
     }
-    for e in get_load_handler_list_mut!() {
+    let list = get_load_handler_list_mut!();
+    for e in list.iter_mut() {
         if e.range == 0 {
             *e = entry;
             unsafe { NUM_OF_LOAD_HANDLER_ENABLED_ENTRIES += 1 };
@@ -232,14 +239,15 @@ pub fn add_memory_load_access_handler(entry: LoadAccessHandlerEntry) -> Result<(
 /// Register StoreAccessHandlerEntry
 ///
 /// This function will add StoreAccessHandlerEntry into list.
-/// Function will return Err if entry.range == 0 or list is full.
+/// Function will return Err if `entry.range == 0` or list is full.
 ///
 /// This function **does not** add paging trap. Please call [`crate::paging::add_memory_access_trap`].
 pub fn add_memory_store_access_handler(entry: StoreAccessHandlerEntry) -> Result<(), ()> {
     if entry.range == 0 {
         return Err(());
     }
-    for e in get_store_handler_list_mut!() {
+    let list = get_store_handler_list_mut!();
+    for e in list.iter_mut() {
         if e.range == 0 {
             *e = entry;
             unsafe { NUM_OF_STORE_HANDLER_ENABLED_ENTRIES += 1 };
@@ -257,7 +265,8 @@ pub fn add_memory_store_access_handler(entry: StoreAccessHandlerEntry) -> Result
 /// This function **does not** remove paging trap. Please call [`crate::paging::remove_memory_access_trap`].
 /// If you call [`crate::paging::remove_memory_access_trap`], be careful if other handlers need the page trap.
 pub fn remove_memory_load_access_handler(entry: LoadAccessHandlerEntry) -> Result<(), ()> {
-    for e in get_load_handler_list_mut!() {
+    let list = get_load_handler_list_mut!();
+    for e in list.iter_mut() {
         if e.target_address == entry.target_address && e.range == entry.range {
             e.target_address = 0;
             e.range = 0;
@@ -276,7 +285,8 @@ pub fn remove_memory_load_access_handler(entry: LoadAccessHandlerEntry) -> Resul
 /// This function **does not** remove paging trap. Please call [`crate::paging::remove_memory_access_trap`].
 /// If you call [`crate::paging::remove_memory_access_trap`], be careful if other handlers need the page trap.
 pub fn remove_memory_store_access_handler(entry: StoreAccessHandlerEntry) -> Result<(), ()> {
-    for e in get_store_handler_list_mut!() {
+    let list = get_store_handler_list_mut!();
+    for e in list.iter_mut() {
         if e.target_address == entry.target_address && e.range == entry.range {
             e.target_address = 0;
             e.range = 0;
@@ -289,20 +299,21 @@ pub fn remove_memory_store_access_handler(entry: StoreAccessHandlerEntry) -> Res
 
 pub fn memory_load_hook_handler(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     is_64bit_register: bool,
     is_sign_extend_required: bool,
 ) -> LoadHookResult {
     let mut num_of_check_entries = 0;
-    for e in get_load_handler_list!() {
+    let list = get_load_handler_list!();
+    for e in list.iter() {
         if e.range == 0 {
             continue;
         }
         if (e.target_address..(e.target_address + e.range)).contains(&accessing_memory_address) {
             return (e.handler)(
                 accessing_memory_address,
-                stored_registers,
+                regs,
                 access_size,
                 is_64bit_register,
                 is_sign_extend_required,
@@ -319,20 +330,15 @@ pub fn memory_load_hook_handler(
 
 pub fn memory_store_hook_handler(
     accessing_memory_address: usize,
-    stored_registers: &mut StoredRegisters,
+    regs: &mut GeneralPurposeRegisters,
     access_size: u8,
     data: u64,
 ) -> StoreHookResult {
     let mut num_of_check_entries = 0;
-    for e in get_store_handler_list!() {
+    let list = get_store_handler_list!();
+    for e in list.iter() {
         if (e.target_address..(e.target_address + e.range)).contains(&accessing_memory_address) {
-            return (e.handler)(
-                accessing_memory_address,
-                stored_registers,
-                access_size,
-                data,
-                e,
-            );
+            return (e.handler)(accessing_memory_address, regs, access_size, data, e);
         }
         num_of_check_entries += 1;
         if num_of_check_entries == unsafe { NUM_OF_STORE_HANDLER_ENABLED_ENTRIES } {

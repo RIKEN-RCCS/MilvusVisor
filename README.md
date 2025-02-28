@@ -16,9 +16,9 @@ to the users without virtualization overhead.
 
 Currently, MilvusVisor provides the following function.
 
-You can build with enabling some functions by `./builder.rs build -f feature1,feautre2,...`.(`featureN` is described
+You can build with enabling some functions by `cargo xtask build -f feature1,feautre2,...`.(`featureN` is described
 like `Feature Name: feature_name` in each section.)  
-If you want to build with extra features, you can build by `make custom_all FEATURES=default,feature1,feature2,...`.
+If you want to build with extra features, you can build by `cargo xtask build -f default,feature1,feature2,...`.
 
 - Protecting non-volatile data in devices from guest OS (e.g. Firmware, MAC address)
     - Intel I210 (Feature Name: `i210`)
@@ -83,22 +83,22 @@ The following table shows which feature worked on which machines.
 
 ## How to build the hypervisor
 
-### By Rust toolchain
+### By Rust toolchains
 
 #### Requirements
 
-- `cargo`, `rustc`, and `rust-src` (you can install from https://rustup.rs/)
-    - Currently, nightly build is needed
+- Rust 1.87 or later
+  - cargo
+  - rustc
 
 #### Steps (commands list)
 
 ```bash
-rustup component add rust-src
 cd path/to/repo-root/src
-./builder.rs build
+cargo xtask build
 ```
 
-To customize build options, please see `./builder.rs help`.
+To customize build options, please see `cargo xtask help`.
 
 Next [How to run the hypervisor](#how-to-run-the-hypervisor)
 
@@ -115,7 +115,7 @@ Next [How to run the hypervisor](#how-to-run-the-hypervisor)
 
 ```bash
 cd path/to/repo-root/src
-./build_by_docker.sh # You can add arguments to pass the make command, like as `-f FEATURES=...`
+./build_by_docker.sh # You can add arguments to pass the cargo xtask command, like as `-f ...`
 ```
 
 For more detail, please see the scripts.
@@ -129,7 +129,7 @@ Then, run the following command to run the built hypervisor.
 
 ```bash
 cd path/to/repo-root/src
-./builder.rs run --bios /usr/share/qemu-efi/QEMU_EFI.fd #Please set the path of your QEMU_EFI.fd
+cargo xtask run --bios /usr/share/qemu-efi/QEMU_EFI.fd #Please set the path of your QEMU_EFI.fd
 ```
 
 ### On a physical machine from a USB memory stick
@@ -144,7 +144,7 @@ cd path/to/repo-root/src
 
 1. Attach your USB memory stick to the development machine which built the hypervisor binary.
 2. Identify the EFI partition (in the following description, `/dev/sdX1` is the EFI partition).
-3. Run `sudo ./builder.rs write -d /dev/sdX1` to copy the binary.
+3. Run `sudo cargo xtask write -d /dev/sdX1` to copy the binary.
    !! Please be careful not to specify a wrong partition as `DEVICE` because the script mount/unmount the partition and
    copies the binary file with root privilege.!!
 4. Detach the USB memory from the development machine, and attach it to the physical machine to run the hypervisor.
@@ -171,7 +171,7 @@ The default settings assume that files are deploy on tftp server likes below.
 
 #### Steps
 
-1. Build MilvusVisor with tfp feature like `./builder.rs build -f default,tftp`
+1. Build MilvusVisor with tfp feature like `cargo xtask build -f default,tftp`
 2. Deploy `BOOTAA64.EFI` and `hypervisor_kernel` on tftp server.(you can rename `BOOTAA64.EFI`)
 3. Modify DHCP setting to change the boot file to `BOOTAA64.EFI`(if you renamed, adjust the name).
 

@@ -10,11 +10,11 @@
 //!
 
 use crate::cpu::{
-    get_mair_el2, TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
+    TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H, TCR_EL2_DS_WITHOUT_E2H,
     TCR_EL2_T0SZ_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_T0SZ_WITHOUT_E2H,
-    TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_TG0_WITHOUT_E2H,
+    TCR_EL2_TG0_BITS_OFFSET_WITHOUT_E2H, TCR_EL2_TG0_WITHOUT_E2H, get_mair_el2,
 };
-use crate::{bitmask, PAGE_MASK, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use crate::{PAGE_MASK, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
 
 pub const PAGE_TABLE_SIZE: usize = 0x1000;
 
@@ -34,8 +34,8 @@ pub const MEMORY_PERMISSION_WRITABLE_BIT: u8 = 1;
 pub const MEMORY_PERMISSION_EXECUTABLE_BIT: u8 = 2;
 
 const STAGE_2_PAGE_ENTRY_ATTRIBUTE: u64 =
-    1 << 10 /* AF bit */|
-        0b11 << 8 /* SH bits (Inner sharable) */|
+    1 << 10 /* AF bit */ |
+        0b11 << 8 /* SH bits (Inner sharable) */ |
         0b1111 << 2 /* MemAttr(Write-back) */;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -180,14 +180,12 @@ pub const fn calculate_number_of_concatenated_page_tables(
     }
 }
 
-pub const fn page_align_up(size: usize) -> usize {
-    //assert_ne!(size, 0);
-    assert!(size != 0);
+pub fn page_align_up(size: usize) -> usize {
+    assert_ne!(size, 0);
     ((size - 1) & PAGE_MASK) + PAGE_SIZE
 }
 
-pub const fn stage2_page_align_up(size: usize) -> usize {
-    //assert_ne!(size, 0);
-    assert!(size != 0);
+pub fn stage2_page_align_up(size: usize) -> usize {
+    assert_ne!(size, 0);
     ((size - 1) & STAGE_2_PAGE_MASK) + STAGE_2_PAGE_SIZE
 }

@@ -24,7 +24,7 @@ impl SerialPortDevice for SerialMesonGxUart {
 
     fn write_char(&mut self, c: u8) -> Result<(), ()> {
         unsafe { ptr::write_volatile((self.base_address + UART_WR_FIFO) as *mut u32, c as u32) };
-        return Ok(());
+        Ok(())
     }
 
     fn is_write_fifo_full(&self) -> bool {

@@ -8,11 +8,10 @@ use core::ptr::{read_volatile, write_volatile};
 
 use common::acpi::{get_acpi_table, madt::MADT};
 use common::paging::{page_align_up, stage2_page_align_up};
-use common::{cpu, PAGE_SIZE};
+use common::{GeneralPurposeRegisters, PAGE_SIZE, cpu};
 
 use crate::memory_hook::*;
 use crate::paging::{add_memory_access_trap, map_address, remove_memory_access_trap};
-use crate::StoredRegisters;
 
 const GICR_MAP_SIZE: usize = 0x1000;
 
@@ -65,7 +64,7 @@ pub fn set_interrupt_pending(int_id: u32) {
         println!("Distributor is not available.");
         return;
     }
-    let register_index = ((int_id / u32::BITS) as usize) * core::mem::size_of::<u32>();
+    let register_index = ((int_id / u32::BITS) as usize) * size_of::<u32>();
     let register_offset = int_id & (u32::BITS - 1);
     unsafe {
         write_volatile(
@@ -121,10 +120,9 @@ pub fn remove_sgi() {
     }
 
     match version {
-        2 | 3 | 4 => {
+        2..=4 => {
             for i in 0..4 {
-                let r =
-                    (distributor + GICD_CPENDSGIR + i * core::mem::size_of::<u32>()) as *mut u32;
+                let r = (distributor + GICD_CPENDSGIR + i * size_of::<u32>()) as *mut u32;
                 unsafe { write_volatile(r, read_volatile(r)) };
             }
         }
@@ -219,7 +217,7 @@ pub fn restore_gic(acpi_address: usize) {
 
 fn gic_redistributor_fast_restore_load_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: bool,
     _: bool,
@@ -237,7 +235,7 @@ fn gic_redistributor_fast_restore_load_handler(
 
 fn gic_redistributor_fast_restore_store_handler(
     accessing_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,

@@ -9,8 +9,8 @@
 //! EFI Simple File System Protocol
 //!
 
-use crate::boot_service::{EfiBootServices, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL};
-use crate::loaded_image::{EfiLoadedImageProtocol, EFI_LOADED_IMAGE_PROTOCOL_GUID};
+use crate::boot_service::{EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL, EfiBootServices};
+use crate::loaded_image::{EFI_LOADED_IMAGE_PROTOCOL_GUID, EfiLoadedImageProtocol};
 use crate::{EfiHandle, EfiStatus, EfiTime, Guid};
 use core::mem::MaybeUninit;
 
@@ -213,7 +213,7 @@ impl EfiFileProtocol {
 
     pub fn get_file_info(&self) -> Result<EfiFileInfo, EfiStatus> {
         let mut result = MaybeUninit::<EfiFileInfo>::uninit();
-        let mut read_size = core::mem::size_of::<EfiFileInfo>();
+        let mut read_size = size_of::<EfiFileInfo>();
         let status = (self.get_info)(
             self,
             &EFI_FILE_INFO_GUID,
@@ -253,7 +253,7 @@ impl EfiFileProtocol {
     }
 
     pub fn close_file(&'static self) -> Result<(), EfiStatus> {
-        let s = ((*self).close)(self);
+        let s = (self.close)(self);
         if s == EfiStatus::EfiSuccess {
             Ok(())
         } else {
