@@ -7,6 +7,7 @@
 
 #![no_std]
 #![no_main]
+#![feature(naked_functions)]
 
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
