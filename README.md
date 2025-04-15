@@ -19,6 +19,7 @@ Currently, MilvusVisor provides the following function.
 You can build with enabling some functions by `cargo xtask build -f feature1,feautre2,...`.(`featureN` is described
 like `Feature Name: feature_name` in each section.)  
 If you want to build with extra features, you can build by `cargo xtask build -f default,feature1,feature2,...`.
+If you want to build without any features, you can build by `cargo xtask build -f minimum`.
 
 - Protecting non-volatile data in devices from guest OS (e.g. Firmware, MAC address)
     - Intel I210 (Feature Name: `i210`)
@@ -95,7 +96,8 @@ The following table shows which feature worked on which machines.
 
 ```bash
 cd path/to/repo-root/src
-cargo xtask build
+cargo xtask build # Debug Build
+cargo xtask build -r # Release build
 ```
 
 To customize build options, please see `cargo xtask help`.
@@ -125,12 +127,15 @@ For more detail, please see the scripts.
 ### On QEMU
 
 First, please install QEMU that supports emulating `QEMU ARM Virtual Machine`, `a64fx` CPU.
-Then, run the following command to run the built hypervisor.
+Then, you should build the hypervisor by the above method.
+After that, run the following command to run the built hypervisor.
 
 ```bash
 cd path/to/repo-root/src
 cargo xtask run --bios /usr/share/qemu-efi/QEMU_EFI.fd #Please set the path of your QEMU_EFI.fd
 ```
+
+For more options, please see `cargo xtask help`.
 
 ### On a physical machine from a USB memory stick
 
@@ -142,13 +147,18 @@ cargo xtask run --bios /usr/share/qemu-efi/QEMU_EFI.fd #Please set the path of y
 
 #### Steps
 
-1. Attach your USB memory stick to the development machine which built the hypervisor binary.
-2. Identify the EFI partition (in the following description, `/dev/sdX1` is the EFI partition).
-3. Run `sudo cargo xtask write -d /dev/sdX1` to copy the binary.
+1. Build the hypervisor by the above method.
+2. Attach your USB memory stick to the development machine which built the hypervisor binary.
+3. Identify the EFI partition (in the following description, `/dev/sdX1` is the EFI partition).
+4. Run `cargo xtask write -d /dev/sdX1` to copy the binary.
    !! Please be careful not to specify a wrong partition as `DEVICE` because the script mount/unmount the partition and
    copies the binary file with root privilege.!!
-4. Detach the USB memory from the development machine, and attach it to the physical machine to run the hypervisor.
-5. Boot the physical machine with UEFI, and specify `BOOTAA64.EFI` in the EFI partition as the EFI application to boot.
+5. Detach the USB memory from the development machine, and attach it to the physical machine to run the hypervisor.
+6. Boot the physical machine with UEFI, and specify `BOOTAA64.EFI` in the EFI partition as the EFI application to boot.
+
+`cargo xtask write` uses `sudo` command.
+If you can access the target device without the root privilege, you can add the `-u` option.
+For more options, please see `cargo xtask help`.
 
 ### PXE Boot
 

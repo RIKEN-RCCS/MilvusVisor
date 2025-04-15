@@ -8,6 +8,7 @@ extern crate toml;
 
 use std::env::Args;
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio, exit};
 
 const HYPERVISOR_BOOTLOADER_NAME: &str = "hypervisor_bootloader";
@@ -350,11 +351,32 @@ fn run(mut args: Args) {
     }
 }
 
+fn write_bin_all(from: &Path, to: &Path, path: &Path) -> std::io::Result<()> {
+    use std::fs;
+    let f = from.join(path);
+    let t = to.join(path);
+
+    fs::create_dir_all(&t)?;
+    for e in fs::read_dir(f)? {
+        let e = e?;
+        if e.file_type()?.is_dir() {
+            write_bin_all(from, to, path.join(e.file_name()).as_path())?;
+        } else {
+            // `std::fs::copy` may be failed on Linux
+            let mut original = fs::File::open(e.path())?;
+            let mut created = fs::File::create(t.join(e.file_name()))?;
+            std::io::copy(&mut original, &mut created)?;
+        }
+    }
+    Ok(())
+}
+
 fn write_bin(mut args: Args) {
     // default settings
     let mut mount_directory = "/mnt/".to_string();
-    let mut output_directory = "bin/EFI".to_string();
+    let mut output_directory = "bin".to_string();
     let mut device = "".to_string();
+    let mut should_use_sudo = true;
 
     // Parse options
     while let Some(v) = args.next() {
@@ -364,6 +386,8 @@ fn write_bin(mut args: Args) {
             try_get_argument!(args, output_directory, "Failed to get the path to copy", 1);
         } else if v == "-p" || v == "--mount-point" {
             try_get_argument!(args, mount_directory, "Failed to get the path to mount", 1);
+        } else if v == "-u" || v == "--user" {
+            should_use_sudo = false;
         }
     }
 
@@ -374,36 +398,59 @@ fn write_bin(mut args: Args) {
     }
 
     // Mount
-    let status = Command::new("mount")
+    let mut command;
+    if should_use_sudo {
+        command = Command::new("sudo");
+        command.args(["mount", "-o", "users,rw,umask=000"]);
+    } else {
+        command = Command::new("mount");
+    }
+    let status = command
         .args([device.as_str(), mount_directory.as_str()])
-        .spawn()
-        .expect("Failed to mount")
-        .wait()
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output()
         .expect("Failed to mount");
-    if !status.success() {
+
+    if !status.status.success() {
         eprintln!("Failed to mount the device");
-        exit(status.code().unwrap());
+        exit(status.status.code().unwrap());
     }
 
-    // Copy
-    let result = std::fs::copy(output_directory, mount_directory.as_str());
+    // Copy files
+    let result = write_bin_all(
+        Path::new(&output_directory),
+        Path::new(&mount_directory),
+        Path::new(""),
+    );
 
     // Umount
-    let status = Command::new("umount")
+    let mut command;
+    if should_use_sudo {
+        command = Command::new("sudo");
+        command.arg("umount");
+    } else {
+        command = Command::new("umount");
+    }
+    let status = command
         .arg(mount_directory.as_str())
-        .spawn()
-        .expect("Failed to umount")
-        .wait()
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output()
         .expect("Failed to umount");
-    if !status.success() {
-        eprintln!("Failed to umount the device");
-        exit(status.code().unwrap());
+
+    if !status.status.success() {
+        eprintln!("Failed to unmount the device");
+        exit(status.status.code().unwrap());
     }
 
     if result.is_err() {
         eprintln!("Failed to copy binaries: {:?}", result.unwrap_err());
         exit(1);
     }
+    println!("Success");
 }
 
 fn show_help() {
@@ -444,5 +491,6 @@ write:
   (-d | --device) : Specify the device to write (Required)
   (-p | --mount-point) : Modify the path to mount
   (-o | --output-dir) directory : Modify the output directory of built binaries
+  (-u | --user) : Access the device without sudo
         ");
 }
