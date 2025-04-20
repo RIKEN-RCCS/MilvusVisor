@@ -12,13 +12,14 @@
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
-
+use core::ptr;
 use common::cpu::*;
 use common::spin_flag::SpinLockFlag;
 use common::{
     COMPILER_INFO, GeneralPurposeRegisters, HYPERVISOR_HASH_INFO, HYPERVISOR_NAME,
     MemoryAllocationError, MemoryAllocator, PAGE_SHIFT, SystemInformation, acpi, bitmask,
 };
+use crate::drivers::shared_memory::SharedMemory;
 
 #[macro_use]
 mod drivers;
@@ -115,6 +116,24 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         fn vector_table_el2();
 
     }
+    let mut shared_memory: &mut [u8; 1024] = unsafe { ptr::with_exposed_provenance_mut::<[u8; 1024]>(0x8000000000).as_mut().unwrap()  };
+    println!("Shared Memory: {:#X?}", shared_memory);
+
+
+    let mut shared_memory: &mut SharedMemory = unsafe { ptr::with_exposed_provenance_mut::<SharedMemory>(0x8000000000).as_mut().unwrap()  };
+
+    if shared_memory.is_ready() {
+        if let Some(data)  = shared_memory.read() {
+            println!("Shared Memory: {:#X?}", data);
+        } else {
+            println!("Shared Memory: Not Ready");
+        }
+        shared_memory.clear();
+    } else {
+        println!("Waiting for Shared Memory...");
+        shared_memory.write(&[0xbe, 0xef, 0xde, 0xad]);
+    }
+
     system_information.vbar_el2 = vector_table_el2 as *const fn() as usize as u64;
 }
 
