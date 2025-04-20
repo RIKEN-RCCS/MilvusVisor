@@ -129,6 +129,13 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
             println!("Shared Memory: Not Ready");
         }
         shared_memory.clear();
+        loop {
+            println!("Wait for next data...");
+            while shared_memory.is_ready() {}
+            if let Some(data) = shared_memory.read() {
+                println!("Shared Memory: {:#X?}", data);
+            }
+        }
     } else {
         println!("Waiting for Shared Memory...");
         shared_memory.write(&[0xbe, 0xef, 0xde, 0xad]);
