@@ -9,6 +9,7 @@
 //! MultiCore Handling Functions
 //!
 
+use core::arch::naked_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu};
@@ -224,10 +225,9 @@ fn spin_table_store_access_handler(
 }
 
 /* cpu_boot must use position-relative code */
-#[naked]
+#[unsafe(naked)]
 extern "C" fn cpu_boot() {
-    unsafe {
-        core::arch::naked_asm!("
+    naked_asm!("
     ldp x1,   x2, [x0, 16 * 0]
     ldp x3,   x4, [x0, 16 * 1]
     ldp x5,   x6, [x0, 16 * 2]
@@ -292,7 +292,6 @@ extern "C" fn cpu_boot() {
     ICC_SRE_EL2 = const (cpu::ICC_SRE_EL2_ENABLE | cpu::ICC_SRE_EL2_SRE),
     A64FX = const cfg!(feature = "a64fx") as u64,
     SPSR_EL2 = const cpu::SPSR_EL2_DEFAULT)
-    }
 }
 
 /// # ATTENTION
@@ -300,10 +299,9 @@ extern "C" fn cpu_boot() {
 ///   adjust `SPIN_TABLE_STACK_ADDRESS_OFFSET` at spin_table_store_access_handler.
 /// # TODO
 /// Use atomic instructions(Currently "stlxr" fails to write zero).
-#[naked]
+#[unsafe(naked)]
 extern "C" fn spin_table_boot() {
-    unsafe {
-        core::arch::naked_asm!("
+    naked_asm!("
 .align  3
     adr     x1, 3f
 2:
@@ -318,5 +316,4 @@ extern "C" fn spin_table_boot() {
 3:
     .quad   0",
     CPU_BOOT = sym cpu_boot)
-    }
 }

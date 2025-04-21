@@ -88,7 +88,7 @@ The following table shows which feature worked on which machines.
 
 #### Requirements
 
-- Rust 1.87 or later
+- Rust 1.88 or later
   - cargo
   - rustc
 
