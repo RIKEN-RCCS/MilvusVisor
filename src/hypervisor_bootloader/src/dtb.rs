@@ -70,14 +70,13 @@ impl DtbNode {
         while unsafe { *(*pointer as *const u32) } == FDT_NOP {
             *pointer += TOKEN_SIZE;
         }
-        return;
     }
 
     fn skip_padding(pointer: &mut usize) -> Result<(), ()> {
         while (*pointer & (TOKEN_SIZE - 1)) != 0 {
             *pointer += 1;
         }
-        return Ok(());
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -124,7 +123,7 @@ impl DtbNode {
                 FDT_PROP => {
                     *pointer += TOKEN_SIZE;
                     let property_len = u32::from_be(unsafe { *(*pointer as *const u32) });
-                    *pointer += core::mem::size_of::<u32>() * 2;
+                    *pointer += size_of::<u32>() * 2;
                     *pointer += property_len as usize;
                     Self::skip_padding(pointer)?;
                 }
@@ -144,7 +143,7 @@ impl DtbNode {
             Self::skip_nop(pointer);
         }
         *pointer += TOKEN_SIZE;
-        return Ok(());
+        Ok(())
     }
 
     fn add_offset(&mut self, mut regs: usize, regs_len: u32) {
@@ -155,7 +154,7 @@ impl DtbNode {
                 address_cells |= u32::from_be(unsafe { *(regs as *const u32) }) as usize;
                 regs += TOKEN_SIZE;
             }
-            self.address_offset += address_cells as usize;
+            self.address_offset += address_cells;
         }
     }
 
@@ -186,9 +185,9 @@ impl DtbNode {
                 FDT_PROP => {
                     pointer += TOKEN_SIZE;
                     let property_len = u32::from_be(unsafe { *(pointer as *const u32) });
-                    pointer += core::mem::size_of::<u32>();
-                    let name_segment_offset = u32::from_be(unsafe { *((pointer) as *const u32) });
-                    pointer += core::mem::size_of::<u32>();
+                    pointer += size_of::<u32>();
+                    let name_segment_offset = u32::from_be(unsafe { *(pointer as *const u32) });
+                    pointer += size_of::<u32>();
 
                     let prop_name = dtb.get_name(name_segment_offset)?;
                     if Self::match_string(prop_name, PROP_ADDRESS_CELLS) {
@@ -217,7 +216,7 @@ impl DtbNode {
             }
             Self::skip_nop(&mut pointer);
         }
-        return Ok(None);
+        Ok(None)
     }
 
     fn _search_device_by_node_name(
@@ -263,9 +262,9 @@ impl DtbNode {
                 FDT_PROP => {
                     *pointer += TOKEN_SIZE;
                     let property_len = u32::from_be(unsafe { *(*pointer as *const u32) });
-                    *pointer += core::mem::size_of::<u32>();
+                    *pointer += size_of::<u32>();
                     let name_segment_offset = u32::from_be(unsafe { *((*pointer) as *const u32) });
-                    *pointer += core::mem::size_of::<u32>();
+                    *pointer += size_of::<u32>();
 
                     let prop_name = dtb.get_name(name_segment_offset)?;
                     if Self::match_string(prop_name, PROP_ADDRESS_CELLS) {
@@ -314,7 +313,7 @@ impl DtbNode {
             return Ok(Some(self.clone()));
         }
         *pointer += TOKEN_SIZE;
-        return Ok(None);
+        Ok(None)
     }
 
     fn _search_device_by_compatible(
@@ -360,9 +359,9 @@ impl DtbNode {
                 FDT_PROP => {
                     *pointer += TOKEN_SIZE;
                     let property_len = u32::from_be(unsafe { *(*pointer as *const u32) });
-                    *pointer += core::mem::size_of::<u32>();
+                    *pointer += size_of::<u32>();
                     let name_segment_offset = u32::from_be(unsafe { *((*pointer) as *const u32) });
-                    *pointer += core::mem::size_of::<u32>();
+                    *pointer += size_of::<u32>();
 
                     let prop_name = dtb.get_name(name_segment_offset)?;
                     if Self::match_string(prop_name, PROP_COMPATIBLE) {
@@ -425,7 +424,7 @@ impl DtbNode {
             return Ok(Some((self.clone(), index)));
         }
         *pointer += TOKEN_SIZE;
-        return Ok(None);
+        Ok(None)
     }
 
     pub fn get_search_holder(&self) -> Result<DtbNodeNameSearchHolder, ()> {
@@ -474,10 +473,7 @@ impl DtbNode {
         let mut s = self.clone();
         if let Some((p, len)) = s.search_pointer_to_property(prop_name, dtb)? {
             Ok(Some(unsafe {
-                core::slice::from_raw_parts(
-                    p as *const u32,
-                    len as usize / core::mem::size_of::<u32>(),
-                )
+                core::slice::from_raw_parts(p as *const u32, len as usize / size_of::<u32>())
             }))
         } else {
             Ok(None)
@@ -498,18 +494,18 @@ impl DtbNodeNameSearchHolder {
         if let Some(t) = &result {
             self.pointer = t.base_pointer;
             DtbNode::skip_to_end_of_node(&mut self.pointer)?;
-        } else {
-            if unsafe { *(self.pointer as *const u32) } != FDT_END {
-                if self.pointer >= dtb.get_struct_block_limit() {
-                    println!("Broken DTB");
-                    return Err(());
-                }
-                self.node = dtb.get_root_node();
-                self.node.base_pointer = self.pointer;
-                return self.search_next_device_by_node_name(node_name, dtb);
+            Ok(result)
+        } else if unsafe { *(self.pointer as *const u32) } != FDT_END {
+            if self.pointer >= dtb.get_struct_block_limit() {
+                println!("Broken DTB");
+                return Err(());
             }
+            self.node = dtb.get_root_node();
+            self.node.base_pointer = self.pointer;
+            self.search_next_device_by_node_name(node_name, dtb)
+        } else {
+            Ok(result)
         }
-        return Ok(result);
     }
 
     pub fn search_next_device_by_compatible(
@@ -523,18 +519,18 @@ impl DtbNodeNameSearchHolder {
         if let Some((t, _)) = &result {
             self.pointer = t.base_pointer;
             DtbNode::skip_to_end_of_node(&mut self.pointer)?;
-        } else {
-            if unsafe { *(self.pointer as *const u32) } != FDT_END {
-                if self.pointer >= dtb.get_struct_block_limit() {
-                    println!("Broken DTB");
-                    return Err(());
-                }
-                self.node = dtb.get_root_node();
-                self.node.base_pointer = self.pointer;
-                return self.search_next_device_by_compatible(compatible_devices, dtb);
+            Ok(result)
+        } else if unsafe { *(self.pointer as *const u32) } != FDT_END {
+            if self.pointer >= dtb.get_struct_block_limit() {
+                println!("Broken DTB");
+                return Err(());
             }
+            self.node = dtb.get_root_node();
+            self.node.base_pointer = self.pointer;
+            self.search_next_device_by_compatible(compatible_devices, dtb)
+        } else {
+            Ok(result)
         }
-        return Ok(result);
     }
 }
 
@@ -587,7 +583,7 @@ pub fn add_new_memory_reservation_entry_to_dtb(
     let original_dtb_header = unsafe { &*(original_base_address as *const DtbHeader) };
 
     let new_dtb_header = unsafe { &mut *(new_base_address as *mut DtbHeader) };
-    total_new_size += core::mem::size_of::<DtbHeader>();
+    total_new_size += size_of::<DtbHeader>();
     if new_size < total_new_size {
         return Err(());
     }
@@ -606,18 +602,18 @@ pub fn add_new_memory_reservation_entry_to_dtb(
     let mut pointer = original_reservation_block_address;
     loop {
         let address = unsafe { *(pointer as *const u64) };
-        pointer += core::mem::size_of::<u64>();
+        pointer += size_of::<u64>();
         let size = unsafe { *(pointer as *const u64) };
-        pointer += core::mem::size_of::<u64>();
+        pointer += size_of::<u64>();
         if address == 0 && size == 0 {
             break;
         }
     }
     // original reservation block size without terminal entry
     let reservation_block_section_size =
-        pointer - original_reservation_block_address - core::mem::size_of::<u64>() * 2;
+        pointer - original_reservation_block_address - size_of::<u64>() * 2;
     // new total size will be  the size of original reservation block + new entry + terminal entry
-    total_new_size += reservation_block_section_size + core::mem::size_of::<u64>() * 4;
+    total_new_size += reservation_block_section_size + size_of::<u64>() * 4;
     if new_size < total_new_size {
         return Err(());
     }
@@ -633,16 +629,14 @@ pub fn add_new_memory_reservation_entry_to_dtb(
         // write new entries
         let new_reservation_entry_address_filed_address =
             new_reservation_block_address + reservation_block_section_size;
-        let new_reservation_entry_size_field_address = new_reservation_block_address
-            + reservation_block_section_size
-            + core::mem::size_of::<u64>();
+        let new_reservation_entry_size_field_address =
+            new_reservation_block_address + reservation_block_section_size + size_of::<u64>();
         *(new_reservation_entry_address_filed_address as *mut usize) = reserved_address.to_be();
         *(new_reservation_entry_size_field_address as *mut usize) = reserved_size.to_be();
-        let new_termianal_entry_address = new_reservation_block_address
-            + reservation_block_section_size
-            + core::mem::size_of::<u64>() * 2;
+        let new_termianal_entry_address =
+            new_reservation_block_address + reservation_block_section_size + size_of::<u64>() * 2;
         *(new_termianal_entry_address as *mut usize) = 0;
-        *((new_termianal_entry_address + core::mem::size_of::<u64>()) as *mut usize) = 0;
+        *((new_termianal_entry_address + size_of::<u64>()) as *mut usize) = 0;
     }
 
     // copy struct section

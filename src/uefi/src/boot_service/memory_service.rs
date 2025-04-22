@@ -99,7 +99,7 @@ impl EfiBootServices {
         Ok(())
     }
 
-    /// Allocate highest memory which matches the demanded size and `border_address`
+    /// Allocate the highest memory which matches the demanded size and `border_address`
     ///
     /// # Arguments
     /// * `b_s` - EfiBootService

@@ -9,12 +9,24 @@
 //! CPU Specified Assembly functions
 //!
 
-use crate::{bitmask, PAGE_MASK, PAGE_SHIFT};
+use crate::{PAGE_MASK, PAGE_SHIFT, bitmask};
 
 use core::arch::asm;
 
 #[derive(Clone)]
 pub struct InterruptFlag(u64);
+
+impl Default for InterruptFlag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InterruptFlag {
+    pub const fn new() -> Self {
+        Self(0)
+    }
+}
 
 pub const AA64_INSTRUCTION_SIZE: usize = 4;
 
@@ -28,24 +40,37 @@ pub const CNTHCTL_EL2_EL1PCTEN: u64 = 1 << 0;
 
 /* CPACR_EL1 */
 pub const CPACR_EL1_TTA_BIT_OFFSET: u64 = 28;
-//pub const CPACR_EL1_TTA: u64 = 1 << CPACR_EL1_TTA_BIT_OFFSET;
+// pub const CPACR_EL1_TTA: u64 = 1 << CPACR_EL1_TTA_BIT_OFFSET;
+pub const CPACR_EL1_SMEN_BITS_OFFSET: u64 = 24;
+// pub const CPACR_EL1_SMEN: u64 = 0b11 << CPACR_EL1_SMEN_BITS_OFFSET;
+pub const CPACR_EL1_SMEN_TRAP_ALL: u64 = 0b00 << CPACR_EL1_SMEN_BITS_OFFSET;
+pub const CPACR_EL1_SMEN_TRAP_NONE: u64 = 0b11 << CPACR_EL1_SMEN_BITS_OFFSET;
 pub const CPACR_EL1_FPEN_BITS_OFFSET: u64 = 20;
-//pub const CPACR_EL1_FPEN: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
+// pub const CPACR_EL1_FPEN: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
+pub const CPACR_EL1_FPEN_TRAP_ALL: u64 = 0b00 << CPACR_EL1_FPEN_BITS_OFFSET;
+pub const CPACR_EL1_FPEN_TRAP_NONE: u64 = 0b11 << CPACR_EL1_FPEN_BITS_OFFSET;
 pub const CPACR_EL1_ZEN_BITS_OFFSET: u64 = 16;
-//pub const CPACR_EL1_ZEN: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
+// pub const CPACR_EL1_ZEN: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
+pub const CPACR_EL1_ZEN_TRAP_NONE: u64 = 0b11 << CPACR_EL1_ZEN_BITS_OFFSET;
+pub const CPACR_EL1_ZEN_TRAP_ALL: u64 = 0b00 << CPACR_EL1_ZEN_BITS_OFFSET;
 
 /* CPTR_EL2 */
-pub const CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H: u64 = 28;
-pub const CPTR_EL2_TTA_WITH_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITH_E2H;
+pub const CPTR_EL2_TCPAC_BIT_OFFSET: u64 = 31;
+pub const CPTR_EL2_TCPAC: u64 = 1 << CPTR_EL2_TCPAC_BIT_OFFSET;
+pub const CPTR_EL2_TAM_BIT_OFFSET: u64 = 30;
+pub const CPTR_EL2_TAM: u64 = 1 << CPTR_EL2_TAM_BIT_OFFSET;
 pub const CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H: u64 = 20;
 pub const CPTR_EL2_TTA_WITHOUT_E2H: u64 = 1 << CPTR_EL2_TTA_BIT_OFFSET_WITHOUT_E2H;
-pub const CPTR_EL2_FPEN_BITS_OFFSET: u64 = 20;
-pub const CPTR_EL2_FPEN: u64 = 0b11 << CPTR_EL2_FPEN_BITS_OFFSET;
-pub const CPTR_EL2_FPEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_FPEN_BITS_OFFSET;
-pub const CPTR_EL2_ZEN_BITS_OFFSET: u64 = 16;
-pub const CPTR_EL2_ZEN: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
-pub const CPTR_EL2_ZEN_NO_TRAP: u64 = 0b11 << CPTR_EL2_ZEN_BITS_OFFSET;
-//pub const CPTR_EL2_RES1: u64 = 0b11111111 | (1 << 9) | (0b11 << 12);
+pub const CPTR_EL2_TSM_BIT_OFFSET: u64 = 12;
+pub const CPTR_EL2_TSM: u64 = 1 << CPTR_EL2_TSM_BIT_OFFSET;
+pub const CPTR_EL2_TSM_TRAP: u64 = 1 << CPTR_EL2_TSM_BIT_OFFSET;
+pub const CPTR_EL2_TFP_BIT_OFFSET: u64 = 10;
+pub const CPTR_EL2_TFP: u64 = 1 << CPTR_EL2_TFP_BIT_OFFSET;
+pub const CPTR_EL2_TFP_TRAP: u64 = 1 << CPTR_EL2_TFP_BIT_OFFSET;
+pub const CPTR_EL2_TZ_BIT_OFFSET: u64 = 8;
+pub const CPTR_EL2_TZ: u64 = 1 << CPTR_EL2_TZ_BIT_OFFSET;
+pub const CPTR_EL2_TZ_TRAP: u64 = 1 << CPTR_EL2_TZ_BIT_OFFSET;
+pub const CPTR_EL2_RES1: u64 = (1 << 13) | (1 << 9) | bitmask!(7, 0);
 
 /* TCR_EL2 */
 pub const TCR_EL2_DS_BIT_OFFSET_WITHOUT_E2H: u64 = 32;
@@ -122,10 +147,14 @@ pub const VTCR_EL2_T0SZ: u64 = 0b111111 << VTCR_EL2_T0SZ_BITS_OFFSET;
 /* SPSR_EL2 */
 pub const SPSR_EL2_M: u64 = 0b1111;
 pub const SPSR_EL2_M_EL0T: u64 = 0b0000;
+pub const SPSR_EL2_DEFAULT: u64 = (1 << 7) | (1 << 6) | (1 << 2) | (1) /* EL1h(EL1 + Use SP_EL1) */;
 
 /* ID_AA64PFR0_EL1 */
 pub const ID_AA64PFR0_EL1_SVE: u64 = 0b1111 << 32;
 pub const ID_AA64PFR0_EL1_GIC: u64 = 0b1111 << 24;
+
+/* ID_AA64PFR1_EL1 */
+pub const ID_AA64PFR1_EL1_SME: u64 = 0b1111 << 24;
 
 /* ID_AA64MMFR0_EL1 */
 pub const ID_AA64MMFR0_EL1_PARANGE: u64 = 0b1111;
@@ -145,48 +174,35 @@ pub const CCSIDR_EL1_LINE_SIZE: u64 = 0b111 << CCSIDR_EL1_LINE_SIZE_BITS_OFFSET;
 /* ZCR_EL2 */
 pub const MAX_ZCR_EL2_LEN: u64 = 0x1ff;
 
+/* ICC_SRE_EL2 */
+pub const ICC_SRE_EL2_ENABLE_BIT_OFFSET: u64 = 3;
+pub const ICC_SRE_EL2_ENABLE: u64 = 1 << ICC_SRE_EL2_ENABLE_BIT_OFFSET;
+pub const ICC_SRE_EL2_SRE_BIT_OFFSET: u64 = 0;
+pub const ICC_SRE_EL2_SRE: u64 = 1 << ICC_SRE_EL2_SRE_BIT_OFFSET;
+
 /// Execute SMC #0 with SMC Calling Convention 1.2
-pub fn secure_monitor_call(
-    x0: &mut u64,
-    x1: &mut u64,
-    x2: &mut u64,
-    x3: &mut u64,
-    x4: &mut u64,
-    x5: &mut u64,
-    x6: &mut u64,
-    x7: &mut u64,
-    x8: &mut u64,
-    x9: &mut u64,
-    x10: &mut u64,
-    x11: &mut u64,
-    x12: &mut u64,
-    x13: &mut u64,
-    x14: &mut u64,
-    x15: &mut u64,
-    x16: &mut u64,
-    x17: &mut u64,
-) {
+pub fn secure_monitor_call(regs: &mut [u64; 32]) {
     unsafe {
         asm!(
             "smc 0",
-            inout("x0") * x0,
-            inout("x1") * x1,
-            inout("x2") * x2,
-            inout("x3") * x3,
-            inout("x4") * x4,
-            inout("x5") * x5,
-            inout("x6") * x6,
-            inout("x7") * x7,
-            inout("x8") * x8,
-            inout("x9") * x9,
-            inout("x10") * x10,
-            inout("x11") * x11,
-            inout("x12") * x12,
-            inout("x13") * x13,
-            inout("x14") * x14,
-            inout("x15") * x15,
-            inout("x16") * x16,
-            inout("x17") * x17,
+            inout("x0") regs[0],
+            inout("x1") regs[1],
+            inout("x2") regs[2],
+            inout("x3") regs[3],
+            inout("x4") regs[4],
+            inout("x5") regs[5],
+            inout("x6") regs[6],
+            inout("x7") regs[7],
+            inout("x8") regs[8],
+            inout("x9") regs[9],
+            inout("x10") regs[10],
+            inout("x11") regs[11],
+            inout("x12") regs[12],
+            inout("x13") regs[13],
+            inout("x14") regs[14],
+            inout("x15") regs[15],
+            inout("x16") regs[16],
+            inout("x17") regs[17],
             clobber_abi("C")
         )
     };
@@ -546,6 +562,13 @@ pub fn get_id_aa64pfr0_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_id_aa64pfr1_el1() -> u64 {
+    let id_aa64pfr1_el1: u64;
+    unsafe { asm!("mrs {:x}, id_aa64pfr1_el1", out(reg) id_aa64pfr1_el1) };
+    id_aa64pfr1_el1
+}
+
+#[inline(always)]
 pub fn get_mpidr_el1() -> u64 {
     let mpidr_el1: u64;
     unsafe { asm!("mrs {:x}, mpidr_el1", out(reg) mpidr_el1) };
@@ -562,6 +585,16 @@ pub fn get_midr_el1() -> u64 {
 #[inline(always)]
 pub fn advance_elr_el2() {
     set_elr_el2(get_elr_el2() + AA64_INSTRUCTION_SIZE as u64);
+}
+
+#[inline(always)]
+pub fn set_icc_sre_el2(icc_sre_el2: u64) {
+    unsafe { asm!("msr icc_sre_el2, {:x}", in(reg) icc_sre_el2) };
+}
+
+#[inline(always)]
+pub fn set_ich_hcr_el2(ich_hcr_el2: u64) {
+    unsafe { asm!("msr ich_hcr_el2, {:x}", in(reg) ich_hcr_el2) };
 }
 
 #[inline(always)]
@@ -708,24 +741,24 @@ pub fn local_irq_fiq_restore(f: InterruptFlag) {
 /// * virtual_address - the virtual address to convert
 ///
 /// # Result
-/// If succeeded, returns Ok(physical_address), otherwise(the address is not accessible) returns Err(())
+/// If succeeded, returns Ok(physical_address), otherwise(the address is not accessible) returns Err(par_el1)
 pub fn convert_virtual_address_to_physical_address_el2_read(
     virtual_address: usize,
-) -> Result<usize, ()> {
+) -> Result<usize, u64> {
     let aligned_virtual_address = virtual_address & PAGE_MASK;
     let offset = virtual_address & !PAGE_MASK;
     let aligned_physical_address: usize;
     unsafe {
         asm!("  at S1E2R, {:x}
                 mrs {:x}, par_el1",
-        in(reg) (aligned_virtual_address),
+        in(reg) aligned_virtual_address,
         out(reg) aligned_physical_address)
     };
 
     if (aligned_physical_address & 1) == 0 {
         Ok((aligned_physical_address & bitmask!(51, PAGE_SHIFT)) + offset)
     } else {
-        Err(())
+        Err(aligned_physical_address as u64)
     }
 }
 
@@ -737,24 +770,24 @@ pub fn convert_virtual_address_to_physical_address_el2_read(
 /// * virtual_address - the virtual address to convert
 ///
 /// # Result
-/// If succeeded, returns Ok(physical_address), otherwise(the address is not accessible) returns Err(())
+/// If succeeded, returns Ok(physical_address), otherwise(the address is not accessible) returns Err(par_el1)
 pub fn convert_virtual_address_to_physical_address_el2_write(
     virtual_address: usize,
-) -> Result<usize, ()> {
+) -> Result<usize, u64> {
     let aligned_virtual_address = virtual_address & PAGE_MASK;
     let offset = virtual_address & !PAGE_MASK;
     let aligned_physical_address: usize;
     unsafe {
         asm!("  at S1E2W, {:x}
                 mrs {:x}, par_el1",
-        in(reg) (aligned_virtual_address),
+        in(reg) aligned_virtual_address,
         out(reg) aligned_physical_address)
     };
 
     if (aligned_physical_address & 1) == 0 {
         Ok((aligned_physical_address & bitmask!(51, PAGE_SHIFT)) + offset)
     } else {
-        Err(())
+        Err(aligned_physical_address as u64)
     }
 }
 
@@ -767,24 +800,24 @@ pub fn convert_virtual_address_to_physical_address_el2_write(
 ///
 /// # Result
 /// If succeeded, returns Ok(intermediate_physical_address),
-///  otherwise(the address is not accessible) returns Err(())
+///  otherwise(the address is not accessible) returns Err(par_el1)
 pub fn convert_virtual_address_to_intermediate_physical_address_el0_read(
     virtual_address: usize,
-) -> Result<usize, ()> {
+) -> Result<usize, u64> {
     let aligned_virtual_address = virtual_address & PAGE_MASK;
     let offset = virtual_address & !PAGE_MASK;
     let aligned_physical_address: usize;
     unsafe {
         asm!("  at S1E0R, {:x}
                 mrs {:x}, par_el1",
-        in(reg) (aligned_virtual_address),
+        in(reg) aligned_virtual_address,
         out(reg) aligned_physical_address)
     };
 
     if (aligned_physical_address & 1) == 0 {
         Ok((aligned_physical_address & bitmask!(51, PAGE_SHIFT)) + offset)
     } else {
-        Err(())
+        Err(aligned_physical_address as u64)
     }
 }
 
@@ -797,24 +830,24 @@ pub fn convert_virtual_address_to_intermediate_physical_address_el0_read(
 ///
 /// # Result
 /// If succeeded, returns Ok(intermediate_physical_address),
-///  otherwise(the address is not accessible) returns Err(())
+///  otherwise(the address is not accessible) returns `Err(par_el1)`
 pub fn convert_virtual_address_to_intermediate_physical_address_el1_read(
     virtual_address: usize,
-) -> Result<usize, ()> {
+) -> Result<usize, u64> {
     let aligned_virtual_address = virtual_address & PAGE_MASK;
     let offset = virtual_address & !PAGE_MASK;
     let aligned_physical_address: usize;
     unsafe {
         asm!("  at S1E1R, {:x}
                 mrs {:x}, par_el1",
-        in(reg) (aligned_virtual_address),
+        in(reg) aligned_virtual_address,
         out(reg) aligned_physical_address)
     };
 
     if (aligned_physical_address & 1) == 0 {
         Ok((aligned_physical_address & bitmask!(51, PAGE_SHIFT)) + offset)
     } else {
-        Err(())
+        Err(aligned_physical_address as u64)
     }
 }
 
@@ -827,24 +860,24 @@ pub fn convert_virtual_address_to_intermediate_physical_address_el1_read(
 ///
 /// # Result
 /// If succeeded, returns Ok(intermediate_physical_address),
-///  otherwise(the address is not accessible) returns Err(())
+///  otherwise(the address is not accessible) returns `Err(par_el1)`
 pub fn convert_virtual_address_to_intermediate_physical_address_el1_write(
     virtual_address: usize,
-) -> Result<usize, ()> {
+) -> Result<usize, u64> {
     let aligned_virtual_address = virtual_address & PAGE_MASK;
     let offset = virtual_address & !PAGE_MASK;
     let aligned_physical_address: usize;
     unsafe {
         asm!("  at S1E1W, {:x}
                 mrs {:x}, par_el1",
-        in(reg) (aligned_virtual_address),
+        in(reg) aligned_virtual_address,
         out(reg) aligned_physical_address)
     };
 
     if (aligned_physical_address & 1) == 0 {
         Ok((aligned_physical_address & bitmask!(51, PAGE_SHIFT)) + offset)
     } else {
-        Err(())
+        Err(aligned_physical_address as u64)
     }
 }
 

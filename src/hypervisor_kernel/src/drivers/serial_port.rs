@@ -93,7 +93,7 @@ impl SerialPort {
             }
             core::hint::spin_loop();
         }
-        return Ok(());
+        Ok(())
     }
 
     /// For panic_handler
@@ -102,13 +102,13 @@ impl SerialPort {
     }
 }
 
-pub unsafe fn init_default_serial_port(info: SerialPortInfo) {
-    DEFAULT_SERIAL_PORT = Some(SerialPort::new(info));
+pub fn init_default_serial_port(info: SerialPortInfo) {
+    unsafe { DEFAULT_SERIAL_PORT = Some(SerialPort::new(info)) };
 }
 
 pub unsafe fn force_release_serial_port_lock() {
-    if let Some(e) = &mut *core::ptr::addr_of_mut!(DEFAULT_SERIAL_PORT) {
-        e.force_release_write_lock();
+    if let Some(e) = unsafe { (&raw mut DEFAULT_SERIAL_PORT).as_mut() }.unwrap() {
+        unsafe { e.force_release_write_lock() };
     }
 }
 
@@ -131,14 +131,14 @@ impl fmt::Write for SerialPort {
             }
         }
         self.write_lock.unlock();
-        return Ok(());
+        Ok(())
     }
 }
 
 static mut DEFAULT_SERIAL_PORT: Option<SerialPort> = None;
 
 pub fn print(args: fmt::Arguments) {
-    if let Some(s) = unsafe { &mut *core::ptr::addr_of_mut!(DEFAULT_SERIAL_PORT) } {
+    if let Some(s) = unsafe { (&raw mut DEFAULT_SERIAL_PORT).as_mut().unwrap() } {
         use fmt::Write;
         let _ = s.write_fmt(args);
     }

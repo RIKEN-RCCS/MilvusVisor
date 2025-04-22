@@ -10,10 +10,11 @@
 //!
 //! Supported Version: ~2.0
 
+use common::GeneralPurposeRegisters;
 use common::cpu::{get_mpidr_el1, secure_monitor_call};
 
+use crate::handler_panic;
 use crate::multi_core::{power_off_cpu, setup_new_cpu};
-use crate::{handler_panic, StoredRegisters};
 
 /// PSCI Function ID List
 ///
@@ -114,16 +115,16 @@ impl TryFrom<i32> for PsciReturnCode {
     }
 }
 
-pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut StoredRegisters) {
+pub fn handle_psci_call(function_id: PsciFunctionId, regs: &mut GeneralPurposeRegisters) {
     pr_debug!("PSCI Function Call: {:?}", function_id);
 
     if function_id == PsciFunctionId::CpuOn {
-        pr_debug!("CPU ON: MPIDR: {:#X}", stored_registers.x1);
-        setup_new_cpu(stored_registers);
+        pr_debug!("CPU ON: MPIDR: {:#X}", regs[1]);
+        setup_new_cpu(regs);
     } else if function_id == PsciFunctionId::CpuOff {
         let result = power_off_cpu();
         handler_panic!(
-            stored_registers,
+            regs,
             "Failed to power off the cpu (MPIDR: {:#X}): {:?}",
             get_mpidr_el1(),
             PsciReturnCode::try_from(result)
@@ -137,39 +138,16 @@ pub fn handle_psci_call(function_id: PsciFunctionId, stored_registers: &mut Stor
             println!("Trap power_off/reboot");
             crate::fast_restore::enter_restore_process();
         }
-        secure_monitor_call(
-            &mut stored_registers.x0,
-            &mut stored_registers.x1,
-            &mut stored_registers.x2,
-            &mut stored_registers.x3,
-            &mut stored_registers.x4,
-            &mut stored_registers.x5,
-            &mut stored_registers.x6,
-            &mut stored_registers.x7,
-            &mut stored_registers.x8,
-            &mut stored_registers.x9,
-            &mut stored_registers.x10,
-            &mut stored_registers.x11,
-            &mut stored_registers.x12,
-            &mut stored_registers.x13,
-            &mut stored_registers.x14,
-            &mut stored_registers.x15,
-            &mut stored_registers.x16,
-            &mut stored_registers.x17,
-        );
+        secure_monitor_call(regs);
     }
 }
 
-pub fn call_psci_function(
-    function_id: PsciFunctionId,
-    mut arg0: u64,
-    mut arg1: u64,
-    mut arg2: u64,
-) -> u64 {
-    let mut x0 = function_id as u64;
-    secure_monitor_call(
-        &mut x0, &mut arg0, &mut arg1, &mut arg2, &mut 0, &mut 0, &mut 0, &mut 0, &mut 0, &mut 0,
-        &mut 0, &mut 0, &mut 0, &mut 0, &mut 0, &mut 0, &mut 0, &mut 0,
-    );
-    x0
+pub fn call_psci_function(function_id: PsciFunctionId, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+    let mut regs: GeneralPurposeRegisters = [0; 32];
+    regs[0] = function_id as u64;
+    regs[1] = arg0;
+    regs[2] = arg1;
+    regs[3] = arg2;
+    secure_monitor_call(&mut regs);
+    regs[0]
 }

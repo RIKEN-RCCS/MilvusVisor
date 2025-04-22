@@ -9,16 +9,17 @@
 //! MultiCore Handling Functions
 //!
 
+use core::arch::naked_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{cpu, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES};
+use common::{GeneralPurposeRegisters, PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu};
 
 use crate::memory_hook::{
-    add_memory_store_access_handler, StoreAccessHandlerEntry, StoreHookResult,
+    StoreAccessHandlerEntry, StoreHookResult, add_memory_store_access_handler,
 };
 use crate::paging::{add_memory_access_trap, map_address};
-use crate::psci::{call_psci_function, PsciFunctionId, PsciReturnCode};
-use crate::{allocate_memory, free_memory, StoredRegisters};
+use crate::psci::{PsciFunctionId, PsciReturnCode, call_psci_function};
+use crate::{allocate_memory, free_memory};
 
 pub static NUMBER_OF_RUNNING_AP: AtomicUsize = AtomicUsize::new(0);
 pub static STACK_TO_FREE_LATER: AtomicUsize = AtomicUsize::new(0);
@@ -39,14 +40,14 @@ struct HypervisorRegisters {
     el1_context_id: u64,
 }
 
-pub fn setup_new_cpu(regs: &mut StoredRegisters) {
+pub fn setup_new_cpu(regs: &mut GeneralPurposeRegisters) {
     let stack_address = (allocate_memory(STACK_PAGES, Some(STACK_PAGES))
         .expect("Failed to allocate stack")
         + (STACK_PAGES << PAGE_SHIFT)) as u64;
 
     /* Write System Registers */
     let register_buffer = unsafe {
-        &mut *((stack_address as usize - core::mem::size_of::<HypervisorRegisters>())
+        &mut *((stack_address as usize - size_of::<HypervisorRegisters>())
             as *mut HypervisorRegisters)
     };
     register_buffer.cnthctl_el2 = cpu::get_cnthctl_el2();
@@ -59,8 +60,8 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
     register_buffer.vtcr_el2 = cpu::get_vtcr_el2();
     register_buffer.sctlr_el2 = cpu::get_sctlr_el2();
     register_buffer.hcr_el2 = cpu::get_hcr_el2();
-    register_buffer.el1_entry_point = regs.x2;
-    register_buffer.el1_context_id = regs.x3;
+    register_buffer.el1_entry_point = regs[2];
+    register_buffer.el1_context_id = regs[3];
 
     cpu::dsb();
     /* Flush Memory Cache for Application Processors */
@@ -70,13 +71,13 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
         cpu::convert_virtual_address_to_physical_address_el2_read(cpu_boot as *const fn() as usize)
             .expect("Failed to convert virtual address to real address");
 
-    regs.x0 = call_psci_function(
+    regs[0] = call_psci_function(
         PsciFunctionId::CpuOn,
-        regs.x1,
+        regs[1],
         cpu_boot_address_real_address as u64,
         register_buffer as *const _ as usize as u64,
     );
-    if regs.x0 as i32 != PsciReturnCode::Success as i32 {
+    if regs[0] as i32 != PsciReturnCode::Success as i32 {
         if let Err(err) = free_memory(
             stack_address as usize - (STACK_PAGES << PAGE_SHIFT),
             STACK_PAGES,
@@ -85,8 +86,8 @@ pub fn setup_new_cpu(regs: &mut StoredRegisters) {
         }
         println!(
             "Failed to power on the cpu (MPIDR: {:#X}): {:?}",
-            regs.x1,
-            PsciReturnCode::try_from(regs.x0 as i32)
+            regs[1],
+            PsciReturnCode::try_from(regs[0] as i32)
         );
         return;
     }
@@ -151,7 +152,7 @@ pub fn setup_spin_table(base_address: usize, length: usize) {
 
 fn spin_table_store_access_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -163,7 +164,7 @@ fn spin_table_store_access_handler(
 
     /* Write System Registers */
     let register_buffer = unsafe {
-        &mut *((stack_address as usize - core::mem::size_of::<HypervisorRegisters>())
+        &mut *((stack_address as usize - size_of::<HypervisorRegisters>())
             as *mut HypervisorRegisters)
     };
     register_buffer.cnthctl_el2 = cpu::get_cnthctl_el2();
@@ -224,39 +225,9 @@ fn spin_table_store_access_handler(
 }
 
 /* cpu_boot must use position-relative code */
-#[naked]
+#[unsafe(naked)]
 extern "C" fn cpu_boot() {
-    unsafe {
-        core::arch::naked_asm!("
-    // MIDR_EL1 & MPIDR_EL1
-    mrs x15, midr_el1
-    msr vpidr_el2, x15
-    mrs x16, mpidr_el1
-    msr vmpidr_el2, x16
-
-    // SVE
-    mrs x17, id_aa64pfr0_el1
-    ubfx x18, x17, 32, 4
-    cbz x18, 2f
-    mov x15, {MAX_ZCR_EL2_LEN}
-    msr S3_4_C1_C2_0, x15 // ZCR_EL2
-
-2:
-    // GICv3~
-    mrs x15, icc_sre_el2
-    and x16, x15, 1
-    cbz x16, 3f
-    mov x17, 0xf
-    msr icc_sre_el2, x16
-    msr ich_hcr_el2, xzr
-    isb
-3:
-    // A64FX
-    mov x15, {A64FX}
-    cbz x15, 4f
-    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
-
-4:
+    naked_asm!("
     ldp x1,   x2, [x0, 16 * 0]
     ldp x3,   x4, [x0, 16 * 1]
     ldp x5,   x6, [x0, 16 * 2]
@@ -278,15 +249,49 @@ extern "C" fn cpu_boot() {
     msr sctlr_el2,       x9
     msr hcr_el2,        x10
 
-    mov x1, (1 << 7) |(1 << 6) | (1 << 2) | (1) // EL1h(EL1 + Use SP_EL1)
-    msr spsr_el2,        x1
-    msr elr_el2,        x11
-    mov x0, x12
+    // Do not use x11 and x12
+
+    // MIDR_EL1 & MPIDR_EL1
+    mrs x15, midr_el1
+    msr vpidr_el2, x15
+    mrs x16, mpidr_el1
+    msr vmpidr_el2, x16
+
+    mrs x17, id_aa64pfr0_el1
+
+    // SVE
+    ubfx x18, x17, 32, 4
+    cbz x18, 2f
+    mov x15, {MAX_ZCR_EL2_LEN}
+    msr S3_4_C1_C2_0, x15 // ZCR_EL2
+
+2:  // GIC v3/4/4.1
+    ubfx x18, x17, 24, 4
+    cbz x18, 3f
+    mrs x15, icc_sre_el2
+    and x16, x15, 1
+    cbz x16, 3f
+    mov x18, {ICC_SRE_EL2}
+    msr icc_sre_el2, x18
+    isb
+    msr ich_hcr_el2, xzr
+
+3:  // A64FX
+    mov x15, {A64FX}
+    cbz x15, 4f
+    msr S3_4_C11_C2_0, xzr // IMP_FJ_TAG_ADDRESS_CTRL_EL2
+
+4:
+    mov x1,         {SPSR_EL2}
+    msr spsr_el2,    x1
+    msr elr_el2,    x11
+    mov x0,         x12
     isb
     eret",
-        MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
-        A64FX = const cfg!(feature = "a64fx") as u64)
-    }
+    MAX_ZCR_EL2_LEN = const cpu::MAX_ZCR_EL2_LEN,
+    ICC_SRE_EL2 = const (cpu::ICC_SRE_EL2_ENABLE | cpu::ICC_SRE_EL2_SRE),
+    A64FX = const cfg!(feature = "a64fx") as u64,
+    SPSR_EL2 = const cpu::SPSR_EL2_DEFAULT)
 }
 
 /// # ATTENTION
@@ -294,10 +299,9 @@ extern "C" fn cpu_boot() {
 ///   adjust `SPIN_TABLE_STACK_ADDRESS_OFFSET` at spin_table_store_access_handler.
 /// # TODO
 /// Use atomic instructions(Currently "stlxr" fails to write zero).
-#[naked]
+#[unsafe(naked)]
 extern "C" fn spin_table_boot() {
-    unsafe {
-        core::arch::naked_asm!("
+    naked_asm!("
 .align  3
     adr     x1, 3f
 2:
@@ -311,6 +315,5 @@ extern "C" fn spin_table_boot() {
     b       {CPU_BOOT}
 3:
     .quad   0",
-        CPU_BOOT = sym cpu_boot)
-    }
+    CPU_BOOT = sym cpu_boot)
 }

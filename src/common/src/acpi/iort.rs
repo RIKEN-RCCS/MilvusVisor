@@ -106,7 +106,7 @@ impl Iterator for IdMappingIter {
         } else {
             let a = self.p;
             self.n -= 1;
-            self.p += core::mem::size_of::<Self::Item>();
+            self.p += size_of::<Self::Item>();
             Some(unsafe { read_unaligned(a as *const Self::Item) })
         }
     }

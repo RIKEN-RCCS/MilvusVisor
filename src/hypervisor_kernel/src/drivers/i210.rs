@@ -8,11 +8,11 @@
 //! Intel(R) Ethernet Controller I210
 //!
 
-use common::{bitmask, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE};
+use common::{GeneralPurposeRegisters, PAGE_SIZE, STAGE_2_PAGE_MASK, STAGE_2_PAGE_SIZE, bitmask};
 
 use crate::memory_hook::*;
+use crate::paging;
 use crate::pci::{get_configuration_space_data, get_ecam_target_address};
-use crate::{paging, StoredRegisters};
 
 pub const VENDOR_ID: u16 = 0x8086;
 pub const DEVICE_ID: u16 = 0x1533;
@@ -83,7 +83,7 @@ pub fn setup_device(ecam_address: usize, bus: u8, device: u8, function: u8) {
     let memory_bar = ((get_configuration_space_data(ecam_address, bus, device, function, 0x10, 4))
         & !0b1111) as usize
         | (if is_64bit_bar {
-            ((get_configuration_space_data(ecam_address, bus, device, function, 0x14, 4)) as usize)
+            (get_configuration_space_data(ecam_address, bus, device, function, 0x14, 4) as usize)
                 << 32
         } else {
             0
@@ -175,14 +175,14 @@ fn setup_memory_trap(new_memory_bar: usize) {
 
     /* Set up load access handlers */
     for e in &I210_LOAD_HANDLERS {
-        let mut e = e.clone();
+        let mut e = *e;
         e.set_target_address(e.get_target_address() + new_memory_bar);
         add_memory_load_access_handler(e).expect("Failed to set up the load handler");
     }
 
     /* Set up store access handlers */
     for e in &I210_STORE_HANDLERS {
-        let mut e = e.clone();
+        let mut e = *e;
         e.set_target_address(e.get_target_address() + new_memory_bar);
         add_memory_store_access_handler(e).expect("Failed to set up the store handler");
     }
@@ -205,14 +205,14 @@ fn remove_memory_trap(bar_address: usize) {
 
     /* Remove load access handlers */
     for e in &I210_LOAD_HANDLERS {
-        let mut e = e.clone();
+        let mut e = *e;
         e.set_target_address(e.get_target_address() + bar_address);
         remove_memory_load_access_handler(e).expect("Failed to remove the load handler");
     }
 
     /* Remove store access handlers */
     for e in &I210_STORE_HANDLERS {
-        let mut e = e.clone();
+        let mut e = *e;
         e.set_target_address(e.get_target_address() + bar_address);
         remove_memory_store_access_handler(e).expect("Failed to remove the store handler");
     }
@@ -244,7 +244,7 @@ fn remove_expansion_rom_memory_trap(expansion_rom_bar: usize) {
 
 fn i210_pci_bar_address_store_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -282,7 +282,7 @@ fn i210_pci_bar_address_store_handler(
 
 fn i210_pci_expansion_rom_bar_address_store_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -300,7 +300,7 @@ fn i210_pci_expansion_rom_bar_address_store_handler(
 
 fn i210_eeprom_write_register_load_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _: bool,
     _: bool,
@@ -314,7 +314,7 @@ fn i210_eeprom_write_register_load_handler(
 
 fn i210_eeprom_write_register_store_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -337,7 +337,7 @@ fn i210_eeprom_write_register_store_handler(
 
 fn i210_i_nvm_data_store_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -352,7 +352,7 @@ fn i210_i_nvm_data_store_handler(
 
 fn i210_i_flash_burst_registers_store_handler(
     accessing_memory_address: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     data: u64,
     _: &StoreAccessHandlerEntry,
@@ -371,7 +371,7 @@ fn i210_i_flash_burst_registers_store_handler(
 
 fn i210_expansion_rom_store_handler(
     _: usize,
-    _: &mut StoredRegisters,
+    _: &mut GeneralPurposeRegisters,
     _: u8,
     _data: u64,
     _: &StoreAccessHandlerEntry,

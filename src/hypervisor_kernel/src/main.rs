@@ -7,7 +7,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(naked_functions)]
 
 use core::arch::global_asm;
 use core::mem::MaybeUninit;
@@ -16,8 +15,8 @@ use core::num::NonZeroUsize;
 use common::cpu::*;
 use common::spin_flag::SpinLockFlag;
 use common::{
-    acpi, bitmask, MemoryAllocationError, MemoryAllocator, SystemInformation, COMPILER_INFO,
-    HYPERVISOR_HASH_INFO, HYPERVISOR_NAME, PAGE_SHIFT,
+    COMPILER_INFO, GeneralPurposeRegisters, HYPERVISOR_HASH_INFO, HYPERVISOR_NAME,
+    MemoryAllocationError, MemoryAllocator, PAGE_SHIFT, SystemInformation, acpi, bitmask,
 };
 
 #[macro_use]
@@ -46,43 +45,6 @@ static mut MEMORY_ALLOCATOR: (SpinLockFlag, MaybeUninit<MemoryAllocator>) =
 static mut ACPI_RSDP: Option<NonZeroUsize> = None;
 static mut BSP_MPIDR: u64 = 0;
 
-#[repr(C)]
-#[derive(Clone, Debug)]
-pub struct StoredRegisters {
-    x0: u64,
-    x1: u64,
-    x2: u64,
-    x3: u64,
-    x4: u64,
-    x5: u64,
-    x6: u64,
-    x7: u64,
-    x8: u64,
-    x9: u64,
-    x10: u64,
-    x11: u64,
-    x12: u64,
-    x13: u64,
-    x14: u64,
-    x15: u64,
-    x16: u64,
-    x17: u64,
-    x18: u64,
-    x19: u64,
-    x20: u64,
-    x21: u64,
-    x22: u64,
-    x23: u64,
-    x24: u64,
-    x25: u64,
-    x26: u64,
-    x27: u64,
-    x28: u64,
-    x29: u64,
-    x30: u64,
-    sp: u64,
-}
-
 #[macro_export]
 macro_rules! handler_panic {
     ($s_r:expr, $($t:tt)*) => {
@@ -90,21 +52,23 @@ macro_rules! handler_panic {
     };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(s_info) = &system_information.serial_port {
-        unsafe { drivers::serial_port::init_default_serial_port(s_info.clone()) };
+        drivers::serial_port::init_default_serial_port(s_info.clone());
     }
 
     show_kernel_info();
 
-    unsafe {
-        MEMORY_ALLOCATOR.1.assume_init_mut().init(
-            system_information.available_memory_info.0,
-            system_information.available_memory_info.1 << PAGE_SHIFT,
-        );
-        ACPI_RSDP = system_information.acpi_rsdp_address;
-    }
+    let (lock, allocator) = unsafe { (&raw mut MEMORY_ALLOCATOR).as_mut() }.unwrap();
+    lock.lock();
+    unsafe { allocator.assume_init_mut() }.init(
+        system_information.available_memory_info.0,
+        system_information.available_memory_info.1 << PAGE_SHIFT,
+    );
+    lock.unlock();
+
+    unsafe { ACPI_RSDP = system_information.acpi_rsdp_address };
 
     memory_hook::init_memory_access_handler();
 
@@ -146,8 +110,9 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     }
 
     unsafe { BSP_MPIDR = get_mpidr_el1() };
-    extern "C" {
+    unsafe extern "C" {
         fn vector_table_el2();
+
     }
     system_information.vbar_el2 = vector_table_el2 as *const fn() as usize as u64;
 }
@@ -206,15 +171,12 @@ fn show_kernel_info() {
 /// # Result
 /// If the allocation is succeeded, Ok(start_address), otherwise Err(())
 pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, MemoryAllocationError> {
-    unsafe {
-        MEMORY_ALLOCATOR.0.lock();
-        let result = MEMORY_ALLOCATOR
-            .1
-            .assume_init_mut()
-            .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT));
-        MEMORY_ALLOCATOR.0.unlock();
-        return result;
-    }
+    let (lock, allocator) = unsafe { (&raw mut MEMORY_ALLOCATOR).as_mut() }.unwrap();
+    lock.lock();
+    let result = unsafe { allocator.assume_init_mut() }
+        .allocate(pages << PAGE_SHIFT, align.unwrap_or(PAGE_SHIFT));
+    lock.unlock();
+    result
 }
 
 /// Free memory to memory pool
@@ -226,19 +188,15 @@ pub fn allocate_memory(pages: usize, align: Option<usize>) -> Result<usize, Memo
 /// # Result
 /// If succeeded, Ok(()), otherwise Err(())
 pub fn free_memory(address: usize, pages: usize) -> Result<(), MemoryAllocationError> {
-    unsafe {
-        MEMORY_ALLOCATOR.0.lock();
-        let result = MEMORY_ALLOCATOR
-            .1
-            .assume_init_mut()
-            .free(address, pages << PAGE_SHIFT);
-        MEMORY_ALLOCATOR.0.unlock();
-        return result;
-    }
+    let (lock, allocator) = unsafe { (&raw mut MEMORY_ALLOCATOR).as_mut() }.unwrap();
+    lock.lock();
+    let result = unsafe { allocator.assume_init_mut() }.free(address, pages << PAGE_SHIFT);
+    lock.unlock();
+    result
 }
 
-#[no_mangle]
-extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
+#[unsafe(no_mangle)]
+extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) {
     let esr_el2 = get_esr_el2();
     let elr_el2 = get_elr_el2();
     let far_el2 = get_far_el2();
@@ -285,30 +243,11 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
             pr_debug!("SecureMonitor Call: {:#X}", smc_number);
             pr_debug!("Registers: {:#X?}", regs);
             if smc_number == 0 {
-                if let Ok(psci_function_id) = psci::PsciFunctionId::try_from(regs.x0) {
+                if let Ok(psci_function_id) = psci::PsciFunctionId::try_from(regs[0]) {
                     psci::handle_psci_call(psci_function_id, regs);
                 } else {
-                    pr_debug!("Unknown Secure Monitor Call: {:#X}", regs.x0);
-                    secure_monitor_call(
-                        &mut regs.x0,
-                        &mut regs.x1,
-                        &mut regs.x2,
-                        &mut regs.x3,
-                        &mut regs.x4,
-                        &mut regs.x5,
-                        &mut regs.x6,
-                        &mut regs.x7,
-                        &mut regs.x8,
-                        &mut regs.x9,
-                        &mut regs.x10,
-                        &mut regs.x11,
-                        &mut regs.x12,
-                        &mut regs.x13,
-                        &mut regs.x14,
-                        &mut regs.x15,
-                        &mut regs.x16,
-                        &mut regs.x17,
-                    );
+                    pr_debug!("Unknown Secure Monitor Call: {:#X}", regs[0]);
+                    secure_monitor_call(regs);
                 }
             } else {
                 handler_panic!(regs, "SMC {:#X} is not implemented.", smc_number);
@@ -336,13 +275,13 @@ extern "C" fn synchronous_exception_handler(regs: &mut StoredRegisters) {
     pr_debug!("Return to EL1.");
 }
 
-#[no_mangle]
-extern "C" fn s_error_exception_handler(regs: &mut StoredRegisters) {
+#[unsafe(no_mangle)]
+extern "C" fn s_error_exception_handler(regs: &mut GeneralPurposeRegisters) {
     handler_panic!(regs, "S Error Exception!!");
 }
 
 #[track_caller]
-fn interrupt_handler_panic(s_r: &StoredRegisters, f: core::fmt::Arguments) -> ! {
+fn interrupt_handler_panic(s_r: &GeneralPurposeRegisters, f: core::fmt::Arguments) -> ! {
     let esr_el2 = get_esr_el2();
     let elr_el2 = get_elr_el2();
     let far_el2 = get_far_el2();
@@ -545,4 +484,4 @@ lower_aa64_restore_registers_and_eret:
     isb
     eret
 .size   lower_aa64_restore_registers_and_eret, . - lower_aa64_restore_registers_and_eret
-", SR_SIZE = const core::mem::size_of::<StoredRegisters>());
+", SR_SIZE = const size_of::<GeneralPurposeRegisters>());

@@ -8,7 +8,7 @@
 //! Stack Style Memory Allocator
 //!
 
-use crate::{paging::page_align_up, MemoryAllocationError, PAGE_SHIFT};
+use crate::{MemoryAllocationError, PAGE_SHIFT, paging::page_align_up};
 
 /// Stack Style Memory Allocator
 ///
@@ -21,7 +21,7 @@ pub struct MemoryAllocator {
 }
 
 impl MemoryAllocator {
-    /// Setup myself with with allocated address
+    /// Setup myself with allocated address
     ///
     /// All members of Self are uninitialized.
     /// Please be careful when you assign some value into the member which has a drop trait.

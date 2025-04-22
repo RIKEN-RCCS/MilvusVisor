@@ -8,13 +8,11 @@
 use crate::paging::{
     add_memory_access_trap, map_address, remake_stage2_page_table, remove_memory_access_trap,
 };
-use crate::{
-    allocate_memory, free_memory, gic, multi_core, psci, smmu, StoredRegisters, BSP_MPIDR,
-};
+use crate::{BSP_MPIDR, allocate_memory, free_memory, gic, multi_core, psci, smmu};
 
 use common::{
-    cpu, paging, MemorySaveListEntry, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, PAGE_MASK, PAGE_SHIFT,
-    PAGE_SIZE, STACK_PAGES,
+    GeneralPurposeRegisters, MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG, MemorySaveListEntry, PAGE_MASK,
+    PAGE_SHIFT, PAGE_SIZE, STACK_PAGES, cpu, paging,
 };
 
 use core::mem::MaybeUninit;
@@ -24,14 +22,15 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static IS_RESTORE_NEEDED: AtomicBool = AtomicBool::new(false);
 static mut MEMORY_SAVE_LIST: MaybeUninit<&'static mut [MemorySaveListEntry]> =
     MaybeUninit::uninit();
-static mut SAVED_SYSTEM_REGISTERS: MaybeUninit<SavedRegisters> = MaybeUninit::uninit();
-static mut SAVED_REGISTERS: MaybeUninit<StoredRegisters> = MaybeUninit::uninit();
+static mut SAVED_SYSTEM_REGISTERS: SavedSystemRegisters = SavedSystemRegisters::new();
+static mut SAVED_REGISTERS: GeneralPurposeRegisters = [0; 32];
 static mut ORIGINAL_VTTBR_EL2: u64 = 0;
 
 pub const HVC_EXIT_BOOT_SERVICE_TRAP: u16 = 0xFFF0;
 pub const HVC_AFTER_EXIT_BOOT_SERVICE_TRAP: u16 = 0xFFF1;
 
-struct SavedRegisters {
+#[derive(Clone)]
+struct SavedSystemRegisters {
     cpacr_el1: u64,
     ttbr0_el1: u64,
     /*ttbr1_el1: u64,*/
@@ -44,15 +43,41 @@ struct SavedRegisters {
     sp_el1: u64,
 }
 
+impl SavedSystemRegisters {
+    const fn new() -> Self {
+        Self {
+            cpacr_el1: 0,
+            ttbr0_el1: 0,
+            tcr_el1: 0,
+            mair_el1: 0,
+            sctlr_el1: 0,
+            vbar_el1: 0,
+            spsr_el2: 0,
+            elr_el2: 0,
+            sp_el1: 0,
+        }
+    }
+}
+
 pub fn add_memory_save_list(list: *mut [MemorySaveListEntry]) {
-    unsafe { MEMORY_SAVE_LIST.write(&mut *list) };
+    unsafe {
+        (&raw mut MEMORY_SAVE_LIST)
+            .as_mut()
+            .unwrap()
+            .write(&mut *list)
+    };
 }
 
 pub fn create_memory_trap_for_save_memory() {
     unsafe { ORIGINAL_VTTBR_EL2 = cpu::get_vttbr_el2() };
     let page_table = remake_stage2_page_table().expect("Failed to remake page table.");
     cpu::set_vttbr_el2(page_table as u64);
-    let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
+    let list = unsafe {
+        (&raw const MEMORY_SAVE_LIST)
+            .as_ref()
+            .unwrap()
+            .assume_init_read()
+    };
     for e in list {
         if e.num_of_pages == 0 && e.memory_start == 0 {
             break;
@@ -76,7 +101,7 @@ pub fn check_memory_access_for_memory_save_list(ec: u8, far_el2: u64) -> bool {
         add_memory_area_to_memory_save_list(far_el2);
         return true;
     }
-    return false;
+    false
 }
 
 fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> {
@@ -107,7 +132,7 @@ fn compress_memory_save_list(list: &mut [MemorySaveListEntry]) -> Option<usize> 
             }
         }
     }
-    return None;
+    None
 }
 
 #[inline(never)]
@@ -119,12 +144,20 @@ fn add_memory_area_to_memory_save_list(far_el2: u64) {
 
     pr_debug!("Fault Address: {:#X}", fault_address);
     let mut available_entry: Option<*mut MemorySaveListEntry> = None;
-    let list_length = unsafe { MEMORY_SAVE_LIST.assume_init_read() }.len();
+    let list_ptr = &raw const MEMORY_SAVE_LIST;
+    let mut is_registered = false;
+    let mut should_clear_next = false;
 
-    for (i, e) in unsafe { MEMORY_SAVE_LIST.assume_init_read() }
-        .iter_mut()
-        .enumerate()
-    {
+    for e in unsafe { list_ptr.as_ref().unwrap().assume_init_read() } {
+        if should_clear_next {
+            *e = MemorySaveListEntry {
+                memory_start: 0,
+                saved_address: 0,
+                num_of_pages: 0,
+            };
+            assert!(is_registered);
+            break;
+        }
         if e.num_of_pages == 0 && e.memory_start == 0 {
             let new_entry = MemorySaveListEntry {
                 memory_start: fault_address,
@@ -133,42 +166,41 @@ fn add_memory_area_to_memory_save_list(far_el2: u64) {
             };
             if let Some(available_entry) = available_entry {
                 unsafe { *available_entry = new_entry };
+                is_registered = true;
+                break;
             } else {
                 *e = new_entry;
-                if i + 1 != list_length {
-                    unsafe {
-                        MEMORY_SAVE_LIST.assume_init_read()[i + 1] = MemorySaveListEntry {
-                            memory_start: 0,
-                            saved_address: 0,
-                            num_of_pages: 0,
-                        }
-                    };
-                }
+                is_registered = true;
+                should_clear_next = true;
+                continue;
             }
-            break;
         }
         if e.saved_address == MEMORY_SAVE_ADDRESS_ONDEMAND_FLAG {
             available_entry = Some(e);
         } else if e.memory_start == fault_address + PAGE_SIZE {
             e.memory_start = fault_address;
             e.num_of_pages += 1;
+            is_registered = true;
             break;
         } else if e.memory_start + ((e.num_of_pages as usize) << PAGE_SHIFT) == fault_address {
             e.num_of_pages += 1;
+            is_registered = true;
             break;
         }
-        if i + 1 == list_length {
-            let list = unsafe { MEMORY_SAVE_LIST.assume_init_read() };
-            if let Some(i) = compress_memory_save_list(list) {
-                list[i] = MemorySaveListEntry {
+    }
+    if !is_registered {
+        if let Some(i) =
+            compress_memory_save_list(unsafe { list_ptr.as_ref().unwrap().assume_init_read() })
+        {
+            unsafe {
+                list_ptr.as_ref().unwrap().assume_init_read()[i] = MemorySaveListEntry {
                     memory_start: fault_address,
                     saved_address: 0,
                     num_of_pages: 1,
-                };
-                break;
-            } else {
-                panic!("There is no available entry");
-            }
+                }
+            };
+        } else {
+            panic!("There is no available entry");
         }
     }
     remove_memory_access_trap(fault_address, PAGE_SIZE).expect("Failed to remove memory trap");
@@ -239,7 +271,7 @@ pub fn save_original_instruction_and_insert_hvc(address: usize, hvc_number: u16)
         )
         .expect("Failed to map memory");
     }
-    let hvc_instruction = 0b11010100000 << 21 | (hvc_number as u32) << 5 | 0b00010;
+    let hvc_instruction = (0b11010100000 << 21) | ((hvc_number as u32) << 5) | 0b00010;
     unsafe {
         ORIGINAL_INSTRUCTION = *(address as *const u32);
         *(address as *mut u32) = hvc_instruction;
@@ -253,7 +285,7 @@ pub fn add_trap_to_exit_boot_service(address: usize) {
     save_original_instruction_and_insert_hvc(address, HVC_EXIT_BOOT_SERVICE_TRAP);
 }
 
-pub fn exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
+pub fn exit_boot_service_trap_main(regs: &mut GeneralPurposeRegisters, elr: u64) {
     if unsafe { ORIGINAL_INSTRUCTION } == 0 {
         return;
     }
@@ -261,10 +293,10 @@ pub fn exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
     let hvc_address = elr as usize - cpu::AA64_INSTRUCTION_SIZE;
     unsafe { *(hvc_address as *mut u32) = ORIGINAL_INSTRUCTION };
     cpu::set_elr_el2(hvc_address as u64);
-    save_original_instruction_and_insert_hvc(regs.x30 as usize, HVC_AFTER_EXIT_BOOT_SERVICE_TRAP);
+    save_original_instruction_and_insert_hvc(regs[30] as usize, HVC_AFTER_EXIT_BOOT_SERVICE_TRAP);
 }
 
-pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
+pub fn after_exit_boot_service_trap_main(regs: &mut GeneralPurposeRegisters, elr: u64) {
     if unsafe { ORIGINAL_INSTRUCTION } == 0 {
         return;
     }
@@ -277,15 +309,20 @@ pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
     cpu::set_elr_el2(hvc_address as u64);
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
-    pr_debug!("ExitBootServiceStatus: {:#X}", regs.x0);
-    if regs.x0 != 0 {
+    pr_debug!("ExitBootServiceStatus: {:#X}", regs[0]);
+    if regs[0] != 0 {
         panic!("ExitBootService is failed(TODO: reset trap point and continue...)");
     }
 
     /* Save current status */
-    save_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
+    save_memory(unsafe {
+        (&raw mut MEMORY_SAVE_LIST)
+            .as_ref()
+            .unwrap()
+            .assume_init_read()
+    });
     /* Store registers */
-    let r = SavedRegisters {
+    let r = SavedSystemRegisters {
         cpacr_el1: cpu::get_cpacr_el1(),
         ttbr0_el1: cpu::get_ttbr0_el1(),
         tcr_el1: cpu::get_tcr_el1(),
@@ -296,15 +333,15 @@ pub fn after_exit_boot_service_trap_main(regs: &mut StoredRegisters, elr: u64) {
         elr_el2: cpu::get_elr_el2(),
         sp_el1: cpu::get_sp_el1(),
     };
-    unsafe { SAVED_SYSTEM_REGISTERS.write(r) };
-    unsafe { SAVED_REGISTERS.write(regs.clone()) };
+    unsafe { *(&raw mut SAVED_SYSTEM_REGISTERS).as_mut().unwrap() = r };
+    unsafe { *(&raw mut SAVED_REGISTERS).as_mut().unwrap() = *regs };
     cpu::set_vttbr_el2(unsafe { ORIGINAL_VTTBR_EL2 }); /* TODO: free old page table */
     unsafe { ORIGINAL_VTTBR_EL2 = 0 };
     pr_debug!("Remove page table for memory save");
 }
 
 /// If you disable all entries of Stage2 Page Table,
-/// don't call [`super::paging::add_memory_access_trap`] and [`super::paging::remove_memory_access_trap`]
+/// don't call [`add_memory_access_trap`] and [`remove_memory_access_trap`]
 /// until you re-enable the entries.
 fn modify_all_enable_bit_of_stage2_top_level_entries(is_enabled: bool) {
     let stage_2_page_table = paging::TTBR::new(cpu::get_vttbr_el2()).get_base_address();
@@ -324,7 +361,7 @@ fn modify_all_enable_bit_of_stage2_top_level_entries(is_enabled: bool) {
     let table = unsafe {
         core::slice::from_raw_parts_mut(
             stage_2_page_table as *mut u64,
-            (paging::PAGE_TABLE_SIZE / core::mem::size_of::<u64>()) * num_of_pages as usize,
+            (paging::PAGE_TABLE_SIZE / size_of::<u64>()) * num_of_pages as usize,
         )
     };
     if is_enabled {
@@ -372,7 +409,10 @@ pub fn perform_restore_if_needed() {
 fn restore_main() -> ! {
     cpu::local_irq_fiq_save();
     if unsafe { BSP_MPIDR } != cpu::get_mpidr_el1() {
-        pr_debug!("This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)", cpu::get_mpidr_el1());
+        pr_debug!(
+            "This CPU(MPIDR: {:#X}) is not BSP, currently perform CPU_OFF(TODO: use AP to copy memory)",
+            cpu::get_mpidr_el1()
+        );
         let result = multi_core::power_off_cpu();
         panic!(
             "Failed to call CPU_OFF: {:#X?}",
@@ -410,7 +450,12 @@ fn restore_main() -> ! {
     smmu::restore_smmu_status();
 
     /* Restore saved registers */
-    let saved_registers = unsafe { SAVED_SYSTEM_REGISTERS.assume_init_read() };
+    let saved_registers = unsafe {
+        (&raw const SAVED_SYSTEM_REGISTERS)
+            .as_ref()
+            .unwrap()
+            .clone()
+    };
     cpu::set_cpacr_el1(saved_registers.cpacr_el1);
     cpu::set_ttbr0_el1(saved_registers.ttbr0_el1);
     cpu::set_tcr_el1(saved_registers.tcr_el1);
@@ -424,7 +469,12 @@ fn restore_main() -> ! {
 
     /* Restore memory */
     pr_debug!("Restore the memory");
-    restore_memory(unsafe { MEMORY_SAVE_LIST.assume_init_read() });
+    restore_memory(unsafe {
+        (&raw const MEMORY_SAVE_LIST)
+            .as_ref()
+            .unwrap()
+            .assume_init_read()
+    });
 
     cpu::flush_tlb_el1();
     cpu::clear_instruction_cache_all();
@@ -448,6 +498,6 @@ fn restore_main() -> ! {
             ldp  x4,  x5, [x0, #(  2 * 16)]
             ldp  x2,  x3, [x0, #(  1 * 16)]
             ldp  x0,  x1, [x0, #(  0 * 16)]
-            eret", in("x0") SAVED_REGISTERS.as_ptr() as usize, options(noreturn))
+            eret", in("x0") (&raw const SAVED_REGISTERS) as usize, options(noreturn))
     }
 }

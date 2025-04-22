@@ -88,7 +88,7 @@ pub const SMMU_CR0_VMW: u32 = 0b111 << 6;
 pub const SMMU_CR1_TABLE_SH_BITS_OFFSET: u32 = 10;
 pub const SMMU_CR1_QUEUE_SH: u32 = 0b11 << 4;
 pub const SMMU_CR1_QUEUE_OC: u32 = 0b11 << 2;
-pub const SMMU_CR1_QUEUE_IC: u32 = 0b11 << 0;
+pub const SMMU_CR1_QUEUE_IC: u32 = 0b11;
 
 pub const SMMU_CR2_E2H: u32 = 1;
 
@@ -110,8 +110,8 @@ pub const SMMU_GBPA_SHCFG_INCOMING: u32 = 0b01 << 12;
 pub const SMMU_VATOS_SID_SUBSTREAM_ID: u64 = bitmask!(51, 32);
 
 pub type SteArrayBaseType = u64;
-const STE_ARRAY_BASE_TYPE_BITS: SteArrayBaseType =
-    (core::mem::size_of::<SteArrayBaseType>() * 8) as SteArrayBaseType;
+
+const STE_ARRAY_BASE_TYPE_BITS: SteArrayBaseType = SteArrayBaseType::BITS as SteArrayBaseType;
 
 pub const STE_V_INDEX: usize = 0;
 pub const STE_V: SteArrayBaseType = 1 << 0;
@@ -205,8 +205,14 @@ const STE_S2TTB_INDEX: usize = (196 / STE_ARRAY_BASE_TYPE_BITS) as usize;
 const STE_S2TTB: SteArrayBaseType = (bitmask!(51, 4) >> 4) << STE_S2TTB_OFFSET;
 // MEMO: Set S2HWU** to 0 because the page table is shared with CPUs.
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct StreamTableEntry([SteArrayBaseType; 8]);
+
+impl Default for StreamTableEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl StreamTableEntry {
     pub const fn new() -> Self {
@@ -362,7 +368,7 @@ impl StreamTableEntry {
     }
 
     pub fn set_stage2_translation_table(&mut self, table_address: usize) {
-        assert_eq!(table_address & !(bitmask!(51, 4)), 0);
+        assert_eq!(table_address & !bitmask!(51, 4), 0);
         self.0[STE_S2TTB_INDEX] =
             (self.0[STE_S2TTB_INDEX] & (!STE_S2TTB)) | (table_address as SteArrayBaseType);
         self.set_s2aa64(true);
@@ -376,11 +382,11 @@ impl StreamTableEntry {
         is_traffic_can_pass: bool,
         is_stage1_bypassed: bool,
     ) {
+        use crate::STAGE_2_PAGE_SIZE;
         use crate::cpu::{
             VTCR_EL2_PS, VTCR_EL2_PS_BITS_OFFSET, VTCR_EL2_SL0, VTCR_EL2_SL0_BITS_OFFSET,
             VTCR_EL2_T0SZ, VTCR_EL2_T0SZ_BITS_OFFSET,
         };
-        use crate::STAGE_2_PAGE_SIZE;
 
         self.set_s2hwu(0b0000);
         self.set_s2fwb(0);
@@ -408,15 +414,11 @@ impl StreamTableEntry {
 
 /// This function will return false when the data is STE::config
 pub fn is_offset_configuration_about_stage2(offset: usize, data: SteArrayBaseType) -> bool {
-    assert_eq!(core::mem::size_of::<SteArrayBaseType>(), 8);
+    assert_eq!(size_of::<SteArrayBaseType>(), 8);
     match offset {
         1 => {
             let mask: SteArrayBaseType = (0b1111 << (72 - 64)) | (1 << (89 - 64));
-            if (data & mask) != 0 {
-                true
-            } else {
-                false
-            }
+            (data & mask) != 0
         }
         2 | 3 => true,
         _ => false,
@@ -428,11 +430,10 @@ pub const fn get_level1_table_size(log2_size: u32, split: u32) -> usize {
 }
 
 pub const fn get_level2_table_size(span: u64, _split: u32) -> usize {
-    (1usize << (span - 1)) * core::mem::size_of::<StreamTableEntry>()
+    (1usize << (span - 1)) * size_of::<StreamTableEntry>()
 }
 
 pub fn create_bitmask_of_stage2_configurations(ste_offset: usize) -> u64 {
-    use core::mem::size_of;
     let start_offset = ste_offset / size_of::<SteArrayBaseType>();
     let end_offset = (ste_offset + size_of::<u64>()) / size_of::<SteArrayBaseType>();
     let mut mask: u64 = 0;

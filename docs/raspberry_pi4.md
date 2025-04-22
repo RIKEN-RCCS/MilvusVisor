@@ -9,7 +9,7 @@ To enable Raspberry Pi 4 support, you need to add `raspberrypi` feature flag on 
 bootloader.
 
 ```shell
-./builder.rs -r -f raspberrypi
+cargo xtask build -r -f raspberrypi
 ```
 
 ## How to boot

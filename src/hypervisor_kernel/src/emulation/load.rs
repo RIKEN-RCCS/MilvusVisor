@@ -11,22 +11,22 @@
 //! Supported: ldr, ldp (except Atomic, SIMD)
 //!
 
-use common::{bitmask, cpu::advance_elr_el2, STAGE_2_PAGE_SHIFT};
+use common::{GeneralPurposeRegisters, STAGE_2_PAGE_SHIFT, bitmask, cpu::advance_elr_el2};
 
-use crate::memory_hook::{memory_load_hook_handler, LoadHookResult};
-use crate::StoredRegisters;
+use crate::memory_hook::{LoadHookResult, memory_load_hook_handler};
 
 use super::{
-    faulting_va_to_ipa_load, get_register_reference_mut, get_virtual_address_to_access_ipa,
-    write_back_index_register_imm7, write_back_index_register_imm9, REGISTER_NUMBER_XZR,
+    EmulationError, REGISTER_NUMBER_XZR, faulting_va_to_ipa_load,
+    get_virtual_address_to_access_ipa, write_back_index_register_imm7,
+    write_back_index_register_imm9,
 };
 
 pub fn emulate_load_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
     //let op2 = ((target_instruction & bitmask!(24, 23)) >> 23) as u8;
@@ -51,7 +51,8 @@ pub fn emulate_load_register(
         }
     );
     if op4 == 0b10 {
-        unimplemented!("UnPrivileged Access is not implemented...");
+        println!("UnPrivileged Access is not implemented...");
+        return Err(EmulationError::Unsupported);
     }
 
     let size = (target_instruction >> 30) as u8;
@@ -71,21 +72,20 @@ pub fn emulate_load_register(
     if (op4 & 1) != 0 {
         pr_debug!("Post/Pre Indexed");
         let imm9 = (target_instruction & bitmask!(20, 12)) >> 12;
-        let base_register =
-            get_register_reference_mut(s_r, ((target_instruction & bitmask!(9, 5)) >> 5) as u8);
+        let base_register = &mut s_r[((target_instruction & bitmask!(9, 5)) >> 5) as usize];
         write_back_index_register_imm9(base_register, imm9);
     }
 
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_unsigned_immediate_load_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
 
@@ -108,15 +108,15 @@ pub fn emulate_unsigned_immediate_load_register(
         sse,
     )?;
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_load_register_register_offset(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
 
@@ -139,15 +139,15 @@ pub fn emulate_load_register_register_offset(
         sse,
     )?;
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_literal_load_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let target_register = (target_instruction & bitmask!(4, 0)) as u8;
     let intermediate_physical_load_address = faulting_va_to_ipa_load(far)?;
 
@@ -171,15 +171,15 @@ pub fn emulate_literal_load_register(
         sse,
     )?;
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 pub fn emulate_load_pair(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     target_instruction: u32,
     far: u64,
     _hpfar: u64,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let op2 = ((target_instruction & bitmask!(24, 23)) >> 23) as u8;
     let opc = (target_instruction >> 30) as u8;
     let sf = (opc & (1 << 1)) != 0;
@@ -212,7 +212,7 @@ pub fn emulate_load_pair(
             >> STAGE_2_PAGE_SHIFT)
     {
         println!("LDP alignment error.");
-        return Err(());
+        return Err(EmulationError::AlignmentError);
     }
     load_from_address_and_store_into_register(
         s_r,
@@ -234,22 +234,21 @@ pub fn emulate_load_pair(
     if is_pre_or_post_indexed {
         pr_debug!("Post/Pre Indexed");
         let imm7 = (target_instruction & bitmask!(21, 15)) >> 15;
-        let base_register =
-            get_register_reference_mut(s_r, ((target_instruction & bitmask!(9, 5)) >> 5) as u8);
+        let base_register = &mut s_r[((target_instruction & bitmask!(9, 5)) >> 5) as usize];
         write_back_index_register_imm7(base_register, imm7);
     }
     advance_elr_el2();
-    return Ok(());
+    Ok(())
 }
 
 fn load_from_address_and_store_into_register(
-    s_r: &mut StoredRegisters,
+    s_r: &mut GeneralPurposeRegisters,
     intermediate_physical_load_address: usize,
     target_register: u8,
     size: u8,
     sf: bool, /* sf is usable only if sse is true */
     sse: bool,
-) -> Result<(), ()> {
+) -> Result<(), EmulationError> {
     let sf = !sse || sf;
 
     pr_debug!(
@@ -264,7 +263,7 @@ fn load_from_address_and_store_into_register(
 
     if !sf && size == 0b11 {
         println!("Invalid Instruction: Loading a 64bit data into the 32bit register.");
-        return Err(());
+        return Err(EmulationError::Unsupported);
     }
 
     let data =
@@ -281,9 +280,9 @@ fn load_from_address_and_store_into_register(
 
     pr_debug!("Data: {:#X}", data);
     if target_register != REGISTER_NUMBER_XZR {
-        *get_register_reference_mut(s_r, target_register) = data;
+        s_r[target_register as usize] = data;
     }
-    return Ok(());
+    Ok(())
 }
 
 fn _read_memory(load_virtual_address: usize, access_size: u8) -> u64 {

@@ -1,4 +1,3 @@
 [toolchain]
-channel = "nightly"
-components = ["rust-src"]
-targets = ["aarch64-unknown-none"]
+components = ["rustc", "cargo"]
+targets = ["aarch64-unknown-uefi", "aarch64-unknown-none-softfloat"]

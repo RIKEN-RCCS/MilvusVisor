@@ -8,8 +8,8 @@
 //! EFI PXE Base Code Protocol
 //!
 
-use crate::boot_service::{EfiBootServices, EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL};
-use crate::loaded_image::{EfiLoadedImageProtocol, EFI_LOADED_IMAGE_PROTOCOL_GUID};
+use crate::boot_service::{EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL, EfiBootServices};
+use crate::loaded_image::{EFI_LOADED_IMAGE_PROTOCOL_GUID, EfiLoadedImageProtocol};
 use crate::{EfiHandle, EfiStatus, Guid};
 
 const DEFAULT_BLOCK_SIZE: usize = 2048;
@@ -156,17 +156,17 @@ impl EfiPxeBaseCodeProtocol {
         Ok(unsafe { &*pxe_protocol })
     }
 
-    pub fn get_server_ip_v4(&self) -> Result<[u8; 4], ()> {
+    pub fn get_server_ip_v4(&self) -> Result<[u8; 4], EfiStatus> {
         if self.mode.is_null() {
-            return Err(());
+            return Err(EfiStatus::EfiUnsupported);
         }
         if unsafe { (*(self.mode)).dhcp_discover_valid } {
             Ok(unsafe {
-                &*(&(*self.mode).dhcp_ack as *const _ as usize as *const EfiPxeBaseCodeDhcpv4Packet)
+                &*(&(*self.mode).dhcp_ack as *const _ as *const EfiPxeBaseCodeDhcpv4Packet)
             }
             .bootp_si_addr)
         } else {
-            Err(())
+            Err(EfiStatus::EfiUnsupported)
         }
     }
 
