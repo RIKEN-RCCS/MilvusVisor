@@ -10,68 +10,106 @@ use std::env::Args;
 use std::fs;
 use std::process::{Command, Stdio, exit};
 
+use clap::Parser;
+
 const HYPERVISOR_BOOTLOADER_NAME: &str = "hypervisor_bootloader";
 const HYPERVISOR_KERNEL_NAME: &str = "hypervisor_kernel";
 const CARGO_FILE_NAME: &str = "Cargo.toml";
 const HYPERVISOR_BOOTLOADER_TRIPLE: &str = "aarch64-unknown-uefi";
 const HYPERVISOR_KERNEL_TRIPLE: &str = "aarch64-unknown-none-softfloat";
 
-fn main() {
-    // default settings
-    let mut cargo_path = "cargo".to_string();
-    let mut args = std::env::args();
-    // Skip xtask binary path
-    let _ = args.next().unwrap();
-
-    // Parse global option
-    let mut command: String = "".to_string();
-    while let Some(v) = args.next() {
-        if !v.starts_with('-') {
-            command = v;
-            break;
-        }
-        if v == "-m" || v == "--manager" {
-            let Some(manager) = args.next() else {
-                eprintln!("Missing the manager path");
-                show_help();
-                return;
-            };
-            cargo_path = manager;
-        }
-        if v == "-h" || v == "--help" {
-            show_help();
-            exit(0);
-        }
-    }
-    if command.is_empty() {
-        eprintln!("Command is not specified.");
-        show_help();
-        exit(1);
-    }
-
-    match command.as_str() {
-        "build" => build(args, &cargo_path),
-        "run" => run(args),
-        "write" => write_bin(args),
-        "help" => show_help(),
-        _ => {
-            eprintln!("Invalid command");
-            show_help();
-            exit(1);
-        }
-    }
+#[derive(clap::Parser)]
+#[command(author, version, about = "Hypervisor Builder", long_about = None)]
+struct TaskArgs {
+    /// Specify the path of package manager like cargo
+    #[arg(short = 'm', long)]
+    manager: Option<String>,
+    
+    #[command(subcommand)]
+    command: TaskCommand,
 }
 
-macro_rules! try_get_argument {
-    ($args:expr, $target:expr, $error_message:expr, $error_code:expr) => {
-        if let Some(a) = $args.next() {
-            $target = a;
-        } else {
-            eprintln!($error_message);
-            show_help();
-            exit($error_code);
-        }
-    };
+#[derive(clap::Subcommand)]
+enum TaskCommand {
+    /// Build the hypervisor
+    Build {
+        /// Build the bootloader and kernel in parallel
+        #[arg(short, long)]
+        parallel: bool,
+        
+        /// Specify build features (comma separated)
+        #[arg(short, long)]
+        features: Option<String>,
+        
+        /// Release Build
+        #[arg(short, long)]
+        release: bool,
+        
+        /// Modify the output directory of built binaries
+        #[arg(short, long)]
+        output_dir: Option<String>,
+    },
+    
+    /// Run the hypervisor on the emulator
+    Run {
+        /// Modify qemu path
+        #[arg(short = 'e', long)]
+        emulator: Option<String>,
+        
+        /// Modify the number of virtual processors
+        #[arg(short, long)]
+        smp: Option<String>,
+        
+        /// Modify the memory size
+        #[arg(short, long)]
+        memory: Option<String>,
+        
+        /// Modify the directory path to mount as virtual FAT device
+        #[arg(short = 'd', long)]
+        mount_directory: Option<String>,
+        
+        /// Enable debug system
+        #[arg(long)]
+        debug: bool,
+        
+        /// Specify the OVMF image
+        #[arg(long)]
+        bios: Option<String>,
+    },
+    
+    /// Write the hypervisor binaries into USB memory
+    Write {
+        /// Specify the device to write (Required)
+        #[arg(short = 'd', long, required = true)]
+        device: String,
+        
+        /// Modify the path to mount
+        #[arg(short = 'p', long)]
+        mount_point: Option<String>,
+        
+        /// Modify the output directory of built binaries
+        #[arg(short, long)]
+        output_dir: Option<String>,
+    },
+}
+
+fn main() {
+    let args = TaskArgs::parse();
+    
+    // Set default cargo path or use the one provided
+    let cargo_path = args.manager.unwrap_or_else(|| "cargo".to_string());
+    
+    match args.command {
+        TaskCommand::Build { parallel, features, release, output_dir } => {
+            build(parallel, features, release, output_dir, &cargo_path)
+        },
+        TaskCommand::Run { emulator, smp, memory, mount_directory, debug, bios } => {
+            run(emulator, smp, memory, mount_directory, debug, bios)
+        },
+        TaskCommand::Write { device, mount_point, output_dir } => {
+            write_bin(device, mount_point, output_dir)
+        },
+    }
 }
 
 fn get_features(cargo_toml_path: &str) -> Vec<String> {
@@ -86,14 +124,13 @@ fn get_features(cargo_toml_path: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-fn build(mut args: Args, cargo_path: &String) {
+fn build(parallel: bool, features: Option<String>, is_release: bool, output_dir: Option<String>, cargo_path: &String) {
     // Default settings
-    let mut is_parallel = false;
-    let mut is_release = false;
     let mut is_kernel_embedded = false;
+    let mut is_parallel = parallel; // Create a mutable copy of the parallel parameter
     let mut bootloader_cargo_args: Vec<String> = vec!["build".to_string()];
     let mut kernel_cargo_args: Vec<String> = vec!["build".to_string()];
-    let mut output_directory = "bin/EFI/BOOT".to_string();
+    let mut output_directory = output_dir.unwrap_or_else(|| "bin/EFI/BOOT".to_string());
     let hypervisor_bootloader_suffix = ".efi";
     let hypervisor_bootloader_output_name = "BOOTAA64.EFI";
 
@@ -105,67 +142,56 @@ fn build(mut args: Args, cargo_path: &String) {
     let bootloader_path = bootloader_path;
     let kernel_path = kernel_path;
 
-    // Parse options
-    while let Some(v) = args.next() {
-        if v == "-f" || v == "--features" {
-            // List up supported features
-            let mut bootloader_cargo_toml_path = bootloader_path.clone();
-            let mut kernel_cargo_toml_path = kernel_path.clone();
-            bootloader_cargo_toml_path.push(CARGO_FILE_NAME);
-            kernel_cargo_toml_path.push(CARGO_FILE_NAME);
-            let bootloader_features = get_features(bootloader_cargo_toml_path.to_str().unwrap());
-            let kernel_features = get_features(kernel_cargo_toml_path.to_str().unwrap());
+    // Process features if provided
+    if let Some(f) = features {
+        // List up supported features
+        let mut bootloader_cargo_toml_path = bootloader_path.clone();
+        let mut kernel_cargo_toml_path = kernel_path.clone();
+        bootloader_cargo_toml_path.push(CARGO_FILE_NAME);
+        kernel_cargo_toml_path.push(CARGO_FILE_NAME);
+        let bootloader_features = get_features(bootloader_cargo_toml_path.to_str().unwrap());
+        let kernel_features = get_features(kernel_cargo_toml_path.to_str().unwrap());
 
-            // Get features from command line
-            let f: String;
-            let mut hypervisor_bootloader_features_list = Vec::<String>::new();
-            let mut hypervisor_kernel_features_list = Vec::<String>::new();
-            try_get_argument!(args, f, "Failed to get features", 1);
+        // Process features
+        let mut hypervisor_bootloader_features_list = Vec::<String>::new();
+        let mut hypervisor_kernel_features_list = Vec::<String>::new();
 
-            for feature in f.split_terminator(',') {
-                let feature = feature.to_string();
-                let mut is_supported = false;
+        for feature in f.split_terminator(',') {
+            let feature = feature.to_string();
+            let mut is_supported = false;
 
-                if bootloader_features.contains(&feature) {
-                    hypervisor_bootloader_features_list.push(feature.clone());
-                    is_supported = true;
-                }
-                if kernel_features.contains(&feature) {
-                    hypervisor_kernel_features_list.push(feature.clone());
-                    is_supported = true;
-                }
-                if !is_supported {
-                    eprintln!(
-                        "'{feature}' is unknown feature\nSupported features:\n\tLoader: {:?},\n\tKernel: {:?}",
-                        bootloader_features, kernel_features
-                    );
-                    exit(1);
-                }
-                if feature == "embed_kernel" {
-                    is_kernel_embedded = true;
-                }
+            if bootloader_features.contains(&feature) {
+                hypervisor_bootloader_features_list.push(feature.clone());
+                is_supported = true;
             }
-
-            bootloader_cargo_args.push("--no-default-features".to_string());
-            kernel_cargo_args.push("--no-default-features".to_string());
-            bootloader_cargo_args.push("--features".to_string());
-            kernel_cargo_args.push("--features".to_string());
-            bootloader_cargo_args.push(hypervisor_bootloader_features_list.join(","));
-            kernel_cargo_args.push(hypervisor_kernel_features_list.join(","));
-        } else if v == "-p" || v == "--parallel" {
-            is_parallel = true;
-        } else if v == "-r" || v == "--release" {
-            is_release = true;
-            bootloader_cargo_args.push("--release".to_string());
-            kernel_cargo_args.push("--release".to_string());
-        } else if v == "-o" || v == "--output-dir" {
-            try_get_argument!(
-                args,
-                output_directory,
-                "Failed to get the output directory",
-                1
-            );
+            if kernel_features.contains(&feature) {
+                hypervisor_kernel_features_list.push(feature.clone());
+                is_supported = true;
+            }
+            if !is_supported {
+                eprintln!(
+                    "'{feature}' is unknown feature\nSupported features:\n\tLoader: {:?},\n\tKernel: {:?}",
+                    bootloader_features, kernel_features
+                );
+                exit(1);
+            }
+            if feature == "embed_kernel" {
+                is_kernel_embedded = true;
+            }
         }
+
+        bootloader_cargo_args.push("--no-default-features".to_string());
+        kernel_cargo_args.push("--no-default-features".to_string());
+        bootloader_cargo_args.push("--features".to_string());
+        kernel_cargo_args.push("--features".to_string());
+        bootloader_cargo_args.push(hypervisor_bootloader_features_list.join(","));
+        kernel_cargo_args.push(hypervisor_kernel_features_list.join(","));
+    }
+
+    // Add release flag if needed
+    if is_release {
+        bootloader_cargo_args.push("--release".to_string());
+        kernel_cargo_args.push("--release".to_string());
     }
 
     // Create the command line
@@ -288,52 +314,36 @@ fn build(mut args: Args, cargo_path: &String) {
         .expect("Failed to move hypervisor kernel");
 }
 
-fn run(mut args: Args) {
+fn run(
+    emulator: Option<String>, 
+    smp: Option<String>, 
+    memory: Option<String>, 
+    mount_directory: Option<String>, 
+    is_debug: bool, 
+    bios: Option<String>
+) {
     // default settings
-    let mut qemu = "qemu-system-aarch64".to_string();
-    let mut mount_directory = "bin/".to_string();
-    let mut smp = "4".to_string();
-    let mut memory = "1G".to_string();
-    let mut qemu_efi = "QEMU_EFI.fd".to_string();
-    let mut is_debug = false;
-
-    // Parse options
-    while let Some(v) = args.next() {
-        if v == "-e" || v == "--emulator" {
-            try_get_argument!(args, qemu, "Failed to get the emulator path", 1);
-        } else if v == "-p" || v == "--smp" {
-            try_get_argument!(args, smp, "Failed to get the number of processors", 1);
-        } else if v == "-m" || v == "--memory" {
-            try_get_argument!(args, memory, "Failed to get the memory size", 1);
-        } else if v == "-d" || v == "--mount-directory" {
-            try_get_argument!(
-                args,
-                mount_directory,
-                "Failed to get the mount directory to mount",
-                1
-            );
-        } else if v == "--debug" {
-            is_debug = true;
-        } else if v == "--bios" {
-            try_get_argument!(args, qemu_efi, "Failed to get the path of OVMF", 1);
-        }
-    }
+    let qemu = emulator.unwrap_or_else(|| "qemu-system-aarch64".to_string());
+    let mount_dir = mount_directory.unwrap_or_else(|| "bin/".to_string());
+    let smp_value = smp.unwrap_or_else(|| "4".to_string());
+    let memory_value = memory.unwrap_or_else(|| "1G".to_string());
+    let qemu_efi = bios.unwrap_or_else(|| "QEMU_EFI.fd".to_string());
 
     let mut qemu_command = Command::new(qemu);
     qemu_command.args([
         "-m",
-        memory.as_str(),
+        memory_value.as_str(),
         "-cpu",
         "a64fx",
         "-machine",
         "virt,virtualization=on,iommu=smmuv3",
         "-smp",
-        smp.as_str(),
+        smp_value.as_str(),
         "-nographic",
         "-bios",
         qemu_efi.as_str(),
         "-drive",
-        format!("file=fat:rw:{mount_directory},format=raw,media=disk").as_str(),
+        format!("file=fat:rw:{mount_dir},format=raw,media=disk").as_str(),
     ]);
     if is_debug {
         qemu_command.args(["-monitor", "telnet::1234,server,nowait"]);
@@ -350,28 +360,10 @@ fn run(mut args: Args) {
     }
 }
 
-fn write_bin(mut args: Args) {
+fn write_bin(device: String, mount_point: Option<String>, output_dir: Option<String>) {
     // default settings
-    let mut mount_directory = "/mnt/".to_string();
-    let mut output_directory = "bin/EFI".to_string();
-    let mut device = "".to_string();
-
-    // Parse options
-    while let Some(v) = args.next() {
-        if v == "-d" || v == "--device" {
-            try_get_argument!(args, device, "Failed to get the device to mount", 1);
-        } else if v == "-o" || v == "--output-dir" {
-            try_get_argument!(args, output_directory, "Failed to get the path to copy", 1);
-        } else if v == "-p" || v == "--mount-point" {
-            try_get_argument!(args, mount_directory, "Failed to get the path to mount", 1);
-        }
-    }
-
-    if device.is_empty() {
-        eprintln!("The device is not specified");
-        show_help();
-        exit(1);
-    }
+    let mount_directory = mount_point.unwrap_or_else(|| "/mnt/".to_string());
+    let output_directory = output_dir.unwrap_or_else(|| "bin/EFI".to_string());
 
     // Mount
     let status = Command::new("mount")
@@ -406,43 +398,4 @@ fn write_bin(mut args: Args) {
     }
 }
 
-fn show_help() {
-    println!("\
-Hypervisor Builder
-Copyright (c) 2022 National Institute of Advanced Industrial Science and Technology (AIST) All rights reserved.
-
-Usage: cargo xtask [global options] command [command options]
-
-Global Options:
-  (-m | --manager) package_manager_path : Specify the path of package manager like cargo
-  (-h | --help) : Show this message
-
-Command List:
-  build : Build the hypervisor
-  run   : Run the hypervisor on the emulator
-  write : Write the hypervisor binaries into USB memory
-  help  : Show this message
-
-Command Options:
-build:
-  -p | --parallel : Build the bootloader and kernel in parallel(This option is only for build without errors)
-  (-f | --features) features : Specify build features (`features` is comma separated)
-    Example: -f i210,mt27800
-  -r | --release  : Release Build
-  (-o | --output-dir) directory : Modify the output directory of built binaries
-
-run:
-  (-e | --emulator) qemu_path : Modify qemu path
-  (-o | --output-dir) directory : Modify the output directory of built binaries
-  (-p | --smp) smp : Modify the number of virtual processors
-  (-m | --memory) size : Modify the memory size
-  (-d | --mount-directory) : Modify the directory path to mount as virtual FAT device
-  --bios path : Specify the OVMF image
-  --debug : Enable debug system
-
-write:
-  (-d | --device) : Specify the device to write (Required)
-  (-p | --mount-point) : Modify the path to mount
-  (-o | --output-dir) directory : Modify the output directory of built binaries
-        ");
-}
+// The show_help function is removed as clap will auto-generate help

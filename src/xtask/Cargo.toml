@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 toml = "0.8"
+clap = { version = "4.0.32", features = ["derive"] }
