@@ -19,6 +19,7 @@ use common::{
     COMPILER_INFO, GeneralPurposeRegisters, HYPERVISOR_HASH_INFO, HYPERVISOR_NAME,
     MemoryAllocationError, MemoryAllocator, PAGE_SHIFT, SystemInformation, acpi, bitmask,
 };
+#[cfg(feature = "shared_memory")]
 use crate::drivers::shared_memory::SharedMemory;
 
 #[macro_use]
@@ -116,29 +117,29 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         fn vector_table_el2();
 
     }
-    let mut shared_memory: &mut [u8; 1024] = unsafe { ptr::with_exposed_provenance_mut::<[u8; 1024]>(0x8000000000).as_mut().unwrap()  };
-    println!("Shared Memory: {:#X?}", shared_memory);
 
+    #[cfg(feature = "shared_memory")]
+    {
+        let shared_memory: &mut SharedMemory = unsafe { ptr::with_exposed_provenance_mut::<SharedMemory>(0x8000000000).as_mut().unwrap()  };
 
-    let mut shared_memory: &mut SharedMemory = unsafe { ptr::with_exposed_provenance_mut::<SharedMemory>(0x8000000000).as_mut().unwrap()  };
-
-    if shared_memory.is_ready() {
-        if let Some(data)  = shared_memory.read() {
-            println!("Shared Memory: {:#X?}", data);
-        } else {
-            println!("Shared Memory: Not Ready");
-        }
-        shared_memory.clear();
-        loop {
-            println!("Wait for next data...");
-            while shared_memory.is_ready() {}
-            if let Some(data) = shared_memory.read() {
+        if cfg!(feature = "migration_receiver") {
+            if let Some(data)  = shared_memory.read() {
                 println!("Shared Memory: {:#X?}", data);
+            } else {
+                println!("Shared Memory: Not Ready");
             }
+            loop {
+                println!("Wait for next data...");
+                while !shared_memory.is_ready() {}
+                if let Some(data) = shared_memory.read() {
+                    println!("Shared Memory: {:#X?}", data);
+                }
+                shared_memory.clear();
+            }
+        } else if cfg!(feature = "migration_sender") {
+            println!("Waiting for Shared Memory...");
+            shared_memory.write(&[0xbe, 0xef, 0xde, 0xad]);
         }
-    } else {
-        println!("Waiting for Shared Memory...");
-        shared_memory.write(&[0xbe, 0xef, 0xde, 0xad]);
     }
 
     system_information.vbar_el2 = vector_table_el2 as *const fn() as usize as u64;

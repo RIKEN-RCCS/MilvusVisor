@@ -17,4 +17,5 @@ pub mod mt27800;
 pub mod virtio;
 #[cfg(feature = "virtio_net")]
 pub mod virtio_net;
+#[cfg(feature = "shared_memory")]
 pub mod shared_memory;

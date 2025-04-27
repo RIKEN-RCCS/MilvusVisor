@@ -5,7 +5,7 @@ pub struct SharedMemory {
     lock: AtomicU32,
     ready: AtomicU32,
     len: usize,
-    data: [u8; 4096], // TODO: use a dynamic size?
+    data: [u8; 1024 * 1024], // TODO: use a dynamic size?
 }
 
 impl SharedMemory {

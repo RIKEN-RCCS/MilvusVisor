@@ -34,7 +34,7 @@ pub fn init_pci(ecam_address: usize, start_bus_number: u8, end_bus_number: u8) {
             {
                 #[cfg(feature = "mt27800")]
                 drivers::mt27800::setup_device(ecam_address, bus, device, 0);
-            } else if vendor_id == 0x1af4 && device_id == 0x1110 {
+            } else if cfg!(feature = "shared_memory") && vendor_id == 0x1af4 && device_id == 0x1110 {
                 // ivshmemによる共有メモリ
                 let bar2 = get_configuration_space_data(ecam_address, bus, device, 0, 0x18, 4);
                 println!("BAR2: {:#X}", bar2);

@@ -25,6 +25,9 @@ advanced_memory_manager = ["common/advanced_memory_manager"]
 virtio = []
 virtio_net = ["virtio"]
 embed_kernel = []
+shared_memory = []
+migration_sender = ["shared_memory"]
+migration_receiver = ["shared_memory"]
 
 [dependencies]
 common = { path = "../common" }
