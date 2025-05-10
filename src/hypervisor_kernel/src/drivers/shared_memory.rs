@@ -55,3 +55,35 @@ impl SharedMemory {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shared_memory_write_read() {
+        let mut shared_mem = SharedMemory {
+            lock: AtomicU32::new(0),
+            ready: AtomicU32::new(0),
+            len: 0,
+            data: [0; 1024 * 1024],
+        };
+
+        // Test writing and reading data
+        let test_data = b"Hello, MilvusVisor!";
+        shared_mem.write(test_data);
+
+        // Verify data was written correctly
+        assert!(shared_mem.is_ready());
+
+        if let Some(read_data) = shared_mem.read() {
+            assert_eq!(read_data, test_data);
+        } else {
+            panic!("Failed to read data from shared memory");
+        }
+
+        // Test clearing the shared memory
+        shared_mem.clear();
+        assert!(!shared_mem.is_ready());
+    }
+}
