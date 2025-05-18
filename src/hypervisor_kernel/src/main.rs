@@ -36,8 +36,11 @@ mod panic;
 mod pci;
 mod psci;
 mod smmu;
+#[cfg(feature = "shared_memory")]
+mod migration;
 
-const EC_HVC: u8 = 0b010110;
+// Hypervisor call
+const EC_HVC: u8 = 0b010110; // 0x16
 const EC_SMC_AA64: u8 = 0b010111;
 const EC_DATA_ABORT: u8 = 0b100100;
 #[cfg(feature = "mrs_msr_emulation")]
@@ -259,6 +262,11 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             #[cfg(feature = "fast_restore")]
             fast_restore::HVC_AFTER_EXIT_BOOT_SERVICE_TRAP => {
                 fast_restore::after_exit_boot_service_trap_main(regs, elr_el2);
+            }
+            #[cfg(feature = "shared_memory")]
+            migration::HVC_MIGRATION_START => {
+                println!("Migration Start");
+
             }
             hvc_number => {
                 println!("Hypervisor Call: {:#X}", hvc_number);

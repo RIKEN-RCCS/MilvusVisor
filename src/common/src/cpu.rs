@@ -228,6 +228,13 @@ pub fn get_ttbr0_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_ttbr1_el1() -> u64 {
+    let ttbr1_el1: u64;
+    unsafe { asm!("mrs {:x}, ttbr1_el1", out(reg) ttbr1_el1) };
+    ttbr1_el1
+}
+
+#[inline(always)]
 pub fn set_ttbr0_el1(ttbr0_el1: u64) {
     unsafe { asm!("msr ttbr0_el1, {:x}", in(reg) ttbr0_el1) };
 }
