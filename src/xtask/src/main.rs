@@ -24,7 +24,7 @@ struct TaskArgs {
     /// Specify the path of package manager like cargo
     #[arg(short = 'm', long)]
     manager: Option<String>,
-    
+
     #[command(subcommand)]
     command: TaskCommand,
 }
@@ -36,57 +36,57 @@ enum TaskCommand {
         /// Build the bootloader and kernel in parallel
         #[arg(short, long)]
         parallel: bool,
-        
+
         /// Specify build features (comma separated)
         #[arg(short, long)]
         features: Option<String>,
-        
+
         /// Release Build
         #[arg(short, long)]
         release: bool,
-        
+
         /// Modify the output directory of built binaries
         #[arg(short, long)]
         output_dir: Option<String>,
     },
-    
+
     /// Run the hypervisor on the emulator
     Run {
         /// Modify qemu path
         #[arg(short = 'e', long)]
         emulator: Option<String>,
-        
+
         /// Modify the number of virtual processors
         #[arg(short, long)]
         smp: Option<String>,
-        
+
         /// Modify the memory size
         #[arg(short, long)]
         memory: Option<String>,
-        
+
         /// Modify the directory path to mount as virtual FAT device
         #[arg(short = 'd', long)]
         mount_directory: Option<String>,
-        
+
         /// Enable debug system
         #[arg(long)]
         debug: bool,
-        
+
         /// Specify the OVMF image
         #[arg(long)]
         bios: Option<String>,
     },
-    
+
     /// Write the hypervisor binaries into USB memory
     Write {
         /// Specify the device to write (Required)
         #[arg(short = 'd', long, required = true)]
         device: String,
-        
+
         /// Modify the path to mount
         #[arg(short = 'p', long)]
         mount_point: Option<String>,
-        
+
         /// Modify the output directory of built binaries
         #[arg(short, long)]
         output_dir: Option<String>,
@@ -95,20 +95,30 @@ enum TaskCommand {
 
 fn main() {
     let args = TaskArgs::parse();
-    
+
     // Set default cargo path or use the one provided
     let cargo_path = args.manager.unwrap_or_else(|| "cargo".to_string());
-    
+
     match args.command {
-        TaskCommand::Build { parallel, features, release, output_dir } => {
-            build(parallel, features, release, output_dir, &cargo_path)
-        },
-        TaskCommand::Run { emulator, smp, memory, mount_directory, debug, bios } => {
-            run(emulator, smp, memory, mount_directory, debug, bios)
-        },
-        TaskCommand::Write { device, mount_point, output_dir } => {
-            write_bin(device, mount_point, output_dir)
-        },
+        TaskCommand::Build {
+            parallel,
+            features,
+            release,
+            output_dir,
+        } => build(parallel, features, release, output_dir, &cargo_path),
+        TaskCommand::Run {
+            emulator,
+            smp,
+            memory,
+            mount_directory,
+            debug,
+            bios,
+        } => run(emulator, smp, memory, mount_directory, debug, bios),
+        TaskCommand::Write {
+            device,
+            mount_point,
+            output_dir,
+        } => write_bin(device, mount_point, output_dir),
     }
 }
 
@@ -124,7 +134,13 @@ fn get_features(cargo_toml_path: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-fn build(parallel: bool, features: Option<String>, is_release: bool, output_dir: Option<String>, cargo_path: &String) {
+fn build(
+    parallel: bool,
+    features: Option<String>,
+    is_release: bool,
+    output_dir: Option<String>,
+    cargo_path: &String,
+) {
     // Default settings
     let mut is_kernel_embedded = false;
     let mut is_parallel = parallel; // Create a mutable copy of the parallel parameter
@@ -315,12 +331,12 @@ fn build(parallel: bool, features: Option<String>, is_release: bool, output_dir:
 }
 
 fn run(
-    emulator: Option<String>, 
-    smp: Option<String>, 
-    memory: Option<String>, 
-    mount_directory: Option<String>, 
-    is_debug: bool, 
-    bios: Option<String>
+    emulator: Option<String>,
+    smp: Option<String>,
+    memory: Option<String>,
+    mount_directory: Option<String>,
+    is_debug: bool,
+    bios: Option<String>,
 ) {
     // default settings
     let qemu = emulator.unwrap_or_else(|| "qemu-system-aarch64".to_string());

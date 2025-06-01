@@ -9,18 +9,19 @@
 #![no_main]
 #![feature(naked_functions)]
 
-use core::arch::global_asm;
-use core::mem::MaybeUninit;
-use core::num::NonZeroUsize;
-use core::ptr;
+#[cfg(feature = "shared_memory")]
+use crate::drivers::shared_memory::SharedMemory;
+use crate::migration::start_migration;
 use common::cpu::*;
 use common::spin_flag::SpinLockFlag;
 use common::{
     COMPILER_INFO, GeneralPurposeRegisters, HYPERVISOR_HASH_INFO, HYPERVISOR_NAME,
     MemoryAllocationError, MemoryAllocator, PAGE_SHIFT, SystemInformation, acpi, bitmask,
 };
-#[cfg(feature = "shared_memory")]
-use crate::drivers::shared_memory::SharedMemory;
+use core::arch::global_asm;
+use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
+use core::ptr;
 
 #[macro_use]
 mod drivers;
@@ -30,14 +31,14 @@ mod emulation;
 mod fast_restore;
 mod gic;
 mod memory_hook;
+#[cfg(feature = "shared_memory")]
+mod migration;
 mod multi_core;
 mod paging;
 mod panic;
 mod pci;
 mod psci;
 mod smmu;
-#[cfg(feature = "shared_memory")]
-mod migration;
 
 // Hypervisor call
 const EC_HVC: u8 = 0b010110; // 0x16
@@ -50,6 +51,8 @@ static mut MEMORY_ALLOCATOR: (SpinLockFlag, MaybeUninit<MemoryAllocator>) =
     (SpinLockFlag::new(), MaybeUninit::uninit());
 static mut ACPI_RSDP: Option<NonZeroUsize> = None;
 static mut BSP_MPIDR: u64 = 0;
+static mut EL2_MEMORY_START: usize = 0x0;
+static mut EL2_MEMORY_END: usize = 0x0;
 
 #[macro_export]
 macro_rules! handler_panic {
@@ -123,25 +126,25 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
 
     #[cfg(feature = "shared_memory")]
     {
-        let shared_memory: &mut SharedMemory = unsafe { ptr::with_exposed_provenance_mut::<SharedMemory>(0x8000000000).as_mut().unwrap()  };
+        let shared_memory: &mut SharedMemory = unsafe {
+            ptr::with_exposed_provenance_mut::<SharedMemory>(0x8000000000)
+                .as_mut()
+                .unwrap()
+        };
 
         if cfg!(feature = "migration_receiver") {
-            if let Some(data)  = shared_memory.read() {
-                println!("Shared Memory: {:#X?}", data);
-            } else {
-                println!("Shared Memory: Not Ready");
-            }
-            loop {
-                println!("Wait for next data...");
-                while !shared_memory.is_ready() {}
-                if let Some(data) = shared_memory.read() {
-                    println!("Shared Memory: {:#X?}", data);
-                }
-                shared_memory.clear();
-            }
-        } else if cfg!(feature = "migration_sender") {
-            println!("Waiting for Shared Memory...");
-            shared_memory.write(&[0xbe, 0xef, 0xde, 0xad]);
+            println!("Waiting for migration...");
+            migration::receive_migration();
+        }
+    }
+
+    #[cfg(feature = "shared_memory")]
+    {
+        unsafe {
+            EL2_MEMORY_START = system_information.el2_memory_info.0;
+            EL2_MEMORY_END = system_information.el2_memory_info.0
+                + system_information.el2_memory_info.1
+                << PAGE_SHIFT;
         }
     }
 
@@ -254,6 +257,7 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
     }
 
     match ec {
+        // HVCのときはesrの下位16bitにhvc呼び出し時の即値が入る
         EC_HVC => match (esr_el2 & bitmask!(15, 0)) as u16 {
             #[cfg(feature = "fast_restore")]
             fast_restore::HVC_EXIT_BOOT_SERVICE_TRAP => {
@@ -266,7 +270,7 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             #[cfg(feature = "shared_memory")]
             migration::HVC_MIGRATION_START => {
                 println!("Migration Start");
-
+                start_migration(unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END });
             }
             hvc_number => {
                 println!("Hypervisor Call: {:#X}", hvc_number);

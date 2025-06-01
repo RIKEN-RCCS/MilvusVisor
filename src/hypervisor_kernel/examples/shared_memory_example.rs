@@ -14,8 +14,8 @@
 extern crate hypervisor_kernel;
 
 use core::panic::PanicInfo;
-use hypervisor_kernel::drivers::shared_memory::SharedMemory;
 use core::sync::atomic::AtomicU32;
+use hypervisor_kernel::drivers::shared_memory::SharedMemory;
 
 // Required for no_std crates
 #[panic_handler]
@@ -36,13 +36,13 @@ pub extern "C" fn _start() -> ! {
 
     // Test data to write to shared memory
     let test_data = b"Hello, MilvusVisor!";
-    
+
     // Write data to shared memory
     shared_mem.write(test_data);
-    
+
     // Verify data was written correctly
     let is_ready = shared_mem.is_ready();
-    
+
     // Read data from shared memory
     if let Some(read_data) = shared_mem.read() {
         // Verify read data matches written data
@@ -53,13 +53,13 @@ pub extern "C" fn _start() -> ! {
                 break;
             }
         }
-        
+
         // If data matches, clear the shared memory
         if matches {
             shared_mem.clear();
         }
     }
-    
+
     // Loop forever (since we can't return from _start in no_std)
     loop {}
 }

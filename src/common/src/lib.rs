@@ -103,6 +103,11 @@ pub struct SystemInformation {
         usize, /* base_address */
         usize, /* number of pages */
     ),
+    // memory information used by el2
+    pub el2_memory_info: (
+        usize, /* base_address */
+        usize, /* number of pages */
+    ),
     pub spin_table_info: Option<(
         usize,        /* base_address(may be zero, not NULL) */
         NonZeroUsize, /* length */

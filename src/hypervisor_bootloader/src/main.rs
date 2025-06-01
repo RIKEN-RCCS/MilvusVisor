@@ -73,7 +73,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     assert_eq!(get_current_el() >> 2, 2, "Expected CurrentEL is EL2");
 
-    let allocated_memory_address = init_memory_pool(b_s);
+    let (allocated_memory_address, allocated_pages) = init_memory_pool(b_s);
 
     #[cfg(debug_assertions)]
     dump_memory_map(b_s);
@@ -183,6 +183,7 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
                 .assume_init_mut()
         }
         .get_all_memory(),
+        el2_memory_info: (allocated_memory_address, allocated_pages),
         spin_table_info,
         memory_save_list,
         serial_port: serial,
@@ -250,8 +251,8 @@ fn detect_acpi_and_dtb(system_table: &EfiSystemTable) {
 /// If the allocation is failed, this function will panic.
 ///
 /// # Result
-/// Returns the start_address allocated
-fn init_memory_pool(b_s: &EfiBootServices) -> usize {
+/// Returns the start_address allocated and the number of allocated page
+fn init_memory_pool(b_s: &EfiBootServices) -> (usize, usize) {
     let allocate_pages = ALLOC_SIZE >> PAGE_SHIFT;
     let allocated_address = b_s
         .alloc_highest_memory(allocate_pages, MAX_PHYSICAL_ADDRESS)
@@ -268,7 +269,7 @@ fn init_memory_pool(b_s: &EfiBootServices) -> usize {
             .assume_init_mut()
             .init(allocated_address, ALLOC_SIZE)
     };
-    allocated_address
+    (allocated_address, allocate_pages)
 }
 
 /// Map allocated memory area into TTBR0_EL2 and set up not to be accessible from EL1/EL0

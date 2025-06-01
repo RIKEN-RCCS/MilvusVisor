@@ -5,12 +5,16 @@ pub struct SharedMemory {
     lock: AtomicU32,
     ready: AtomicU32,
     len: usize,
-    data: [u8; 1024 * 1024], // TODO: use a dynamic size?
+    data: [u8; 8 * 1024 * 1024], // TODO: use a dynamic size?
 }
 
 impl SharedMemory {
     fn lock(&self) {
-        while self.lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed) != Ok(0) {}
+        while self
+            .lock
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            != Ok(0)
+        {}
     }
 
     fn unlock(&self) {
@@ -53,6 +57,14 @@ impl SharedMemory {
         };
         self.unlock();
         result
+    }
+
+    pub fn modify(&mut self, f: impl FnOnce(&mut [u8]), len: usize) {
+        self.lock();
+        f(&mut self.data[0..len]);
+        self.len = len;
+        self.ready.store(1, Ordering::Release);
+        self.unlock();
     }
 }
 

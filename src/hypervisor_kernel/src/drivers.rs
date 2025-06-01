@@ -13,9 +13,9 @@
 pub mod serial_port;
 pub mod i210;
 pub mod mt27800;
+#[cfg(feature = "shared_memory")]
+pub mod shared_memory;
 #[cfg(feature = "virtio")]
 pub mod virtio;
 #[cfg(feature = "virtio_net")]
 pub mod virtio_net;
-#[cfg(feature = "shared_memory")]
-pub mod shared_memory;
