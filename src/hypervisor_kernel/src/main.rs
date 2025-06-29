@@ -11,6 +11,7 @@
 
 #[cfg(feature = "shared_memory")]
 use crate::drivers::shared_memory::SharedMemory;
+#[cfg(feature = "shared_memory")]
 use crate::migration::start_migration;
 use common::cpu::*;
 use common::spin_flag::SpinLockFlag;

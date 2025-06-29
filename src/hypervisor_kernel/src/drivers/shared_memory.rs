@@ -20,6 +20,12 @@ impl SharedMemory {
     fn unlock(&self) {
         self.lock.store(0, Ordering::Release);
     }
+    
+    pub unsafe fn force_reset(&mut self) {
+        self.lock.store(0, Ordering::Release);
+        self.ready.store(0, Ordering::Release);
+        self.len = 0;
+    }
 
     pub fn clear(&mut self) {
         self.lock();

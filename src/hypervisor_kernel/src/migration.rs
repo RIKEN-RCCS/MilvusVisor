@@ -62,7 +62,7 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) {
         hypervisor_mem_end: el2_memory_end,
     };
     println!("Sending base information");
-    shared_memory.clear();
+    unsafe { shared_memory.force_reset(); }
     shared_memory.write(unsafe { any_as_u8_slice(&migration_data) });
     println!("Sending memory");
     //　メモリ領域をまるごとコピーする
@@ -110,6 +110,7 @@ pub fn receive_migration() {
     }
     println!("Received base information");
     let migration_data = unsafe { migration_data.assume_init() };
+    println!("Got migration data");
     let SystemRegisters {
         cpacr_el1,
         ttbr0_el1,
@@ -132,6 +133,9 @@ pub fn receive_migration() {
     cpu::set_spsr_el2(spsr_el2);
     cpu::set_elr_el2(elr_el2);
     cpu::set_sp_el1(sp_el1);
+    println!("Done");
+    println!("hyp_mem_start: {:x}", migration_data.hypervisor_mem_start);
+    println!("hyp_mem_end: {:x}", migration_data.hypervisor_mem_end);
     // 次はメモリ情報を読み込んでいく
     let mut addr = MEM_START;
 
@@ -139,6 +143,7 @@ pub fn receive_migration() {
     while addr < MEM_END {
         if addr < migration_data.hypervisor_mem_start || addr >= migration_data.hypervisor_mem_end {
             let target_addr = addr as *mut u8;
+            //println!("target_addr: {:x}", addr);
             loop {
                 if let Some(data) = shared_memory.read() {
                     unsafe {
@@ -147,6 +152,8 @@ pub fn receive_migration() {
                     break;
                 }
             }
+        } else {
+            println!("address is for hypervisor. Skipping: {:x}", addr);
         }
         addr += PAGE_SIZE;
     }
