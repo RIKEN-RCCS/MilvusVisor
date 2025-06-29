@@ -40,6 +40,7 @@ mod panic;
 mod pci;
 mod psci;
 mod smmu;
+mod temporary_mapping;
 
 // Hypervisor call
 const EC_HVC: u8 = 0b010110; // 0x16
@@ -135,7 +136,7 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
 
         if cfg!(feature = "migration_receiver") {
             println!("Waiting for migration...");
-            migration::receive_migration();
+            migration::receive_migration().expect("Failed to receive migration");
         }
     }
 
@@ -271,7 +272,7 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             #[cfg(feature = "shared_memory")]
             migration::HVC_MIGRATION_START => {
                 println!("Migration Start");
-                start_migration(unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END });
+                start_migration(unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END }).expect("Failed to start migration");
             }
             hvc_number => {
                 println!("Hypervisor Call: {:#X}", hvc_number);

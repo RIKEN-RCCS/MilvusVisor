@@ -2,6 +2,7 @@ use crate::drivers::shared_memory::SharedMemory;
 use common::{PAGE_SIZE, cpu};
 use core::mem::MaybeUninit;
 use core::ptr;
+use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
 
 pub const HVC_MIGRATION_START: u16 = 0xFFF2;
 
@@ -34,7 +35,7 @@ const MEM_START: usize = 0x4000_0000;
 const MEM_END: usize = MEM_START + 0x4000_0000;
 
 // 共有メモリにプログラムの状態を保存することでmigrationを開始する
-pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) {
+pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result<(), ()> {
     println!("Starting migration...");
 
     // TODO: 今はアドレスを決め打ちしている
@@ -70,22 +71,32 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) {
     while addr < MEM_END {
         // el2領域はPAGE_SIZEでアラインされていることを仮定
         if addr < el2_memory_start || addr >= el2_memory_end {
-            let target_addr = addr as *const u8;
+            let target_phys_addr = addr;
+            // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
+            let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
+            if target_phys_addr >= 0x47600000 {
+                println!("target_phys_addr: {:x}", target_phys_addr);
+                println!("target_virt_addr: {:x}", target_virt_addr);
+                println!("data[0]: {:x}", unsafe { *(target_virt_addr as *const u8) });
+            }
             // 読み込まれるのを待つ
             while shared_memory.is_ready() {}
             shared_memory.modify(
                 |dst| unsafe {
-                    core::ptr::copy_nonoverlapping(target_addr, dst.as_mut_ptr(), PAGE_SIZE);
+                    core::ptr::copy_nonoverlapping(target_virt_addr as *const u8, dst.as_mut_ptr(), PAGE_SIZE);
                 },
                 PAGE_SIZE,
             );
+            // 一時テーブルを削除
+            remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
         }
         addr += PAGE_SIZE;
     }
     println!("End migration");
+    Ok(())
 }
 
-pub fn receive_migration() {
+pub fn receive_migration() -> Result<(), ()> {
     println!("Receiving migration...");
     // TODO: 今はアドレスを決め打ちしている
     let shared_memory: &mut SharedMemory = unsafe {
@@ -142,20 +153,31 @@ pub fn receive_migration() {
     println!("Receiving memory");
     while addr < MEM_END {
         if addr < migration_data.hypervisor_mem_start || addr >= migration_data.hypervisor_mem_end {
-            let target_addr = addr as *mut u8;
-            //println!("target_addr: {:x}", addr);
+            let target_phys_addr = addr;
+            // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
+            let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
+            if target_phys_addr >= 0x47600000 {
+                println!("target_phys_addr: {:x}", target_phys_addr);
+                println!("target_virt_addr: {:x}", target_virt_addr);
+            }
             loop {
                 if let Some(data) = shared_memory.read() {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(data.as_ptr(), target_addr, PAGE_SIZE);
+                    if target_phys_addr >= 0x4760f000 {
+                        println!("data[0]: {:x}", data[0]);
                     }
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(data.as_ptr(), target_virt_addr as *mut u8, PAGE_SIZE);
+                    }
+                    shared_memory.clear();
                     break;
                 }
             }
+            remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
         } else {
             println!("address is for hypervisor. Skipping: {:x}", addr);
         }
         addr += PAGE_SIZE;
     }
     println!("End migration");
+    Ok(())
 }
