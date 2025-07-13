@@ -23,6 +23,7 @@ use core::arch::global_asm;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
 use core::ptr;
+use crate::migration::receive_migration;
 
 #[macro_use]
 mod drivers;
@@ -124,20 +125,6 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
     unsafe extern "C" {
         fn vector_table_el2();
 
-    }
-
-    #[cfg(feature = "shared_memory")]
-    {
-        let shared_memory: &mut SharedMemory = unsafe {
-            ptr::with_exposed_provenance_mut::<SharedMemory>(0x8000000000)
-                .as_mut()
-                .unwrap()
-        };
-
-        if cfg!(feature = "migration_receiver") {
-            println!("Waiting for migration...");
-            migration::receive_migration().expect("Failed to receive migration");
-        }
     }
 
     #[cfg(feature = "shared_memory")]
@@ -273,6 +260,11 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             migration::HVC_MIGRATION_START => {
                 println!("Migration Start");
                 start_migration(unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END }).expect("Failed to start migration");
+            }
+            #[cfg(feature = "migration_receiver")]
+            migration::HVC_MIGRATION_RECEIVE => {
+                println!("Migration Receive");
+                receive_migration().expect("Failed to receive migration");
             }
             hvc_number => {
                 println!("Hypervisor Call: {:#X}", hvc_number);

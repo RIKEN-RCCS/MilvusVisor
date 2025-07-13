@@ -5,6 +5,7 @@ use core::ptr;
 use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
 
 pub const HVC_MIGRATION_START: u16 = 0xFFF2;
+pub const HVC_MIGRATION_RECEIVE: u16 = 0xFFF3;
 
 #[derive(Clone)]
 struct SystemRegisters {

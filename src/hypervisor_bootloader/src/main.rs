@@ -209,8 +209,14 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     set_up_el1();
 
-    /* Jump to EL1(el1_main) */
-    el2_to_el1(el1_main as *const fn() as usize, stack_address);
+    #[cfg(not(feature = "migration_receiver"))] {
+        /* Jump to EL1(el1_main) */
+        el2_to_el1(el1_main as *const fn() as usize, stack_address);
+    }
+    #[cfg(feature = "migration_receiver")] {
+        /* start migration */
+        unsafe { asm!("hvc 0xfff3"); }
+    }
 
     /* Never come here */
     local_irq_fiq_restore(unsafe { (&raw const INTERRUPT_FLAG).read() });
