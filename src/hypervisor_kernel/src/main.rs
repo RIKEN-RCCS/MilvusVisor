@@ -359,7 +359,14 @@ s_error_current_sp0:
 
 .balign 0x080
 synchronous_current_spx:
-    nop
+    b   synchronous_current_aa64_save_registers
+synchronous_current_aa64_1:
+    mov x29, sp
+    mov x0, sp
+    bl  synchronous_exception_handler
+    mov sp, x29
+    b current_aa64_restore_registers_and_eret
+
 
 .balign 0x080
 irq_current_spx:
@@ -452,6 +459,31 @@ synchronous_lower_aa64_save_registers:
 
 .size   synchronous_lower_aa64_save_registers, . - synchronous_lower_aa64_save_registers
 
+.type   synchronous_current_aa64_save_registers, %function
+synchronous_current_aa64_save_registers:
+    sub sp,   sp, {SR_SIZE}
+    stp x30, xzr, [sp, #( 15 * 16)]
+    stp x28, x29, [sp, #( 14 * 16)]
+    stp x26, x27, [sp, #( 13 * 16)]
+    stp x24, x25, [sp, #( 12 * 16)]
+    stp x22, x23, [sp, #( 11 * 16)]
+    stp x20, x21, [sp, #( 10 * 16)]
+    stp x18, x19, [sp, #(  9 * 16)]
+    stp x16, x17, [sp, #(  8 * 16)]
+    stp x14, x15, [sp, #(  7 * 16)]
+    stp x12, x13, [sp, #(  6 * 16)]
+    stp x10, x11, [sp, #(  5 * 16)]
+    stp  x8,  x9, [sp, #(  4 * 16)]
+    stp  x6,  x7, [sp, #(  3 * 16)]
+    stp  x4,  x5, [sp, #(  2 * 16)]
+    stp  x2,  x3, [sp, #(  1 * 16)]
+    stp  x0,  x1, [sp, #(  0 * 16)]
+    mov  x0, sp
+    str  x0, [sp, #( 15 * 16 + 8)]
+    b    synchronous_current_aa64_1
+
+.size   synchronous_current_aa64_save_registers, . - synchronous_current_aa64_save_registers
+
 .type   s_error_lower_aa64_save_registers, %function
 s_error_lower_aa64_save_registers:
     sub sp,   sp, {SR_SIZE}
@@ -518,4 +550,27 @@ lower_aa64_restore_registers_and_eret:
     isb
     eret
 .size   lower_aa64_restore_registers_and_eret, . - lower_aa64_restore_registers_and_eret
+
+.type   current_aa64_restore_registers_and_eret, %function
+current_aa64_restore_registers_and_eret:
+    ldp x30, xzr, [sp, #( 15 * 16)]
+    ldp x28, x29, [sp, #( 14 * 16)]
+    ldp x26, x27, [sp, #( 13 * 16)]
+    ldp x24, x25, [sp, #( 12 * 16)]
+    ldp x22, x23, [sp, #( 11 * 16)]
+    ldp x20, x21, [sp, #( 10 * 16)]
+    ldp x18, x19, [sp, #(  9 * 16)]
+    ldp x16, x17, [sp, #(  8 * 16)]
+    ldp x14, x15, [sp, #(  7 * 16)]
+    ldp x12, x13, [sp, #(  6 * 16)]
+    ldp x10, x11, [sp, #(  5 * 16)]
+    ldp  x8,  x9, [sp, #(  4 * 16)]
+    ldp  x6,  x7, [sp, #(  3 * 16)]
+    ldp  x4,  x5, [sp, #(  2 * 16)]
+    ldp  x2,  x3, [sp, #(  1 * 16)]
+    ldp  x0,  x1, [sp, #(  0 * 16)]
+    add  sp,  sp, {SR_SIZE}
+    isb
+    eret
+.size   current_aa64_restore_registers_and_eret, . - current_aa64_restore_registers_and_eret
 ", SR_SIZE = const size_of::<GeneralPurposeRegisters>());
