@@ -132,8 +132,8 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         unsafe {
             EL2_MEMORY_START = system_information.el2_memory_info.0;
             EL2_MEMORY_END = system_information.el2_memory_info.0
-                + system_information.el2_memory_info.1
-                << PAGE_SHIFT;
+                + (system_information.el2_memory_info.1
+                << PAGE_SHIFT);
         }
     }
 

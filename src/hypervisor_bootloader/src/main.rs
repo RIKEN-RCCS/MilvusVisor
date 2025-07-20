@@ -209,11 +209,6 @@ extern "C" fn efi_main(image_handle: EfiHandle, system_table: *mut EfiSystemTabl
 
     set_up_el1();
 
-    #[cfg(feature = "migration_receiver")] {
-        /* start migration */
-        unsafe { asm!("hvc 0xfff3"); }
-    }
-
     /* Jump to EL1(el1_main) */
     el2_to_el1(el1_main as *const fn() as usize, stack_address);
 
