@@ -75,12 +75,6 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
             let target_phys_addr = addr;
             // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
             let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
-            //if target_phys_addr >= 0x47600000 && target_phys_addr < 0x47610000 {
-            if target_phys_addr >= 0x47600000 {
-                println!("target_phys_addr: {:x}", target_phys_addr);
-                println!("target_virt_addr: {:x}", target_virt_addr);
-                println!("data[0]: {:x}", unsafe { *(target_virt_addr as *const u8) });
-            }
             // 読み込まれるのを待つ
             while shared_memory.is_ready() {}
             shared_memory.modify(
@@ -158,10 +152,6 @@ pub fn receive_migration() -> Result<(), ()> {
             let target_phys_addr = addr;
             // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
             let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
-            if target_phys_addr >= 0x4760e000 && target_phys_addr <= 0x47610000{
-                println!("target_phys_addr: {:x}", target_phys_addr);
-                println!("target_virt_addr: {:x}", target_virt_addr);
-            }
             loop {
                 if let Some(data) = shared_memory.read() {
                     if target_phys_addr >= 0x4760f000 && target_phys_addr <= 0x47610000 {
@@ -175,8 +165,6 @@ pub fn receive_migration() -> Result<(), ()> {
                 }
             }
             remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
-        } else {
-            //println!("address is for hypervisor. Skipping: {:x}", addr);
         }
         addr += PAGE_SIZE;
     }
