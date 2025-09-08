@@ -16,6 +16,8 @@ use crate::memory_hook::{
 };
 use crate::paging::add_memory_access_trap;
 
+use core::ptr::read_unaligned;
+
 const EXCEPT_TABLE: [&[u8; 4]; 0] = [];
 
 pub fn init_table_protection(rsdp_address: usize) {
@@ -30,7 +32,9 @@ pub fn init_table_protection(rsdp_address: usize) {
 
     'table_loop: for table_index in 0..((xsdt.length as usize - XSDT_STRUCT_SIZE) >> 3) {
         let table_address = unsafe {
-            *((xsdt as *const _ as usize + XSDT_STRUCT_SIZE + (table_index << 3)) as *const u64)
+            read_unaligned(
+                (xsdt as *const _ as usize + XSDT_STRUCT_SIZE + (table_index << 3)) as *const u64,
+            )
         } as usize;
         let signature = unsafe { &*(table_address as *const [u8; 4]) };
 
@@ -47,12 +51,12 @@ pub fn init_table_protection(rsdp_address: usize) {
             }
         } else if *signature == *b"FACP" && !is_dsdt_processed {
             register_acpi_table(table_address, None);
-            let x_dsdt_address = unsafe { *((table_address + 140) as *const u64) };
+            let x_dsdt_address = unsafe { read_unaligned((table_address + 140) as *const u64) };
             if x_dsdt_address != 0 {
                 register_acpi_table(x_dsdt_address as usize, None);
                 is_dsdt_processed = true;
             } else {
-                let dsdt_address = unsafe { *((table_address + 40) as *const u32) };
+                let dsdt_address = unsafe { read_unaligned((table_address + 40) as *const u32) };
                 if dsdt_address != 0 {
                     register_acpi_table(dsdt_address as usize, None);
                     is_dsdt_processed = true;
@@ -65,8 +69,8 @@ pub fn init_table_protection(rsdp_address: usize) {
 }
 
 fn register_acpi_table(table_address: usize, table_length: Option<u32>) {
-    let table_length =
-        table_length.unwrap_or_else(|| unsafe { *((table_address + 4) as *const u32) });
+    let table_length = table_length
+        .unwrap_or_else(|| unsafe { read_unaligned((table_address + 4) as *const u32) });
     let aligned_table_address = table_address & STAGE_2_PAGE_MASK;
     let aligned_table_length =
         (((table_length as usize) + (table_address - aligned_table_address) - 1)
