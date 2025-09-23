@@ -75,16 +75,22 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
             let target_phys_addr = addr;
             // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
             let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
+            //println!("addr: {:x} {:x}", target_phys_addr, target_virt_addr);
             // 読み込まれるのを待つ
             while shared_memory.is_ready() {}
+            //println!("addr: {:x} is ready", target_phys_addr);
             shared_memory.modify(
                 |dst| unsafe {
                     core::ptr::copy_nonoverlapping(target_virt_addr as *const u8, dst.as_mut_ptr(), PAGE_SIZE);
                 },
                 PAGE_SIZE,
             );
+            //println!("addr: {:x} modified", target_phys_addr);
             // 一時テーブルを削除
             remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
+            if target_phys_addr & 0xffffff == 0 {
+                println!("addr: {:x} remove temp table", target_phys_addr);
+            }
         }
         addr += PAGE_SIZE;
     }
@@ -154,13 +160,15 @@ pub fn receive_migration() -> Result<(), ()> {
             let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
             loop {
                 if let Some(data) = shared_memory.read() {
-                    if target_phys_addr >= 0x4760f000 && target_phys_addr <= 0x47610000 {
-                        println!("data[0]: {:x}", data[0]);
-                    }
+                    //println!("addr: {:x} data[0]: {:x}", target_phys_addr, data[0]);
                     unsafe {
                         core::ptr::copy_nonoverlapping(data.as_ptr(), target_virt_addr as *mut u8, PAGE_SIZE);
                     }
+                    //println!("addr: {:x} copied", target_phys_addr);
                     shared_memory.clear();
+                    if target_phys_addr & 0xffffff == 0 {
+                        println!("addr: {:x} cleared", target_phys_addr);
+                    }
                     break;
                 }
             }

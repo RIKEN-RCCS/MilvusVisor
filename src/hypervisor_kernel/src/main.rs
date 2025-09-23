@@ -274,8 +274,8 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             /* Adjust return address */
             advance_elr_el2();
             let smc_number = esr_el2 & bitmask!(15, 0);
-            pr_debug!("SecureMonitor Call: {:#X}", smc_number);
-            pr_debug!("Registers: {:#X?}", regs);
+            println!("SecureMonitor Call: {:#X}", smc_number);
+            println!("Registers: {:#X?}", regs);
             if smc_number == 0 {
                 if let Ok(psci_function_id) = psci::PsciFunctionId::try_from(regs[0]) {
                     psci::handle_psci_call(psci_function_id, regs);
