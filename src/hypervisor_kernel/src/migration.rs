@@ -64,7 +64,7 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
         hypervisor_mem_end: el2_memory_end,
     };
     println!("Sending base information");
-    unsafe { shared_memory.force_reset(); }
+    shared_memory.clear();
     shared_memory.write(unsafe { any_as_u8_slice(&migration_data) });
     println!("Sending memory");
     //　メモリ領域をまるごとコピーする
@@ -75,17 +75,17 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
             let target_phys_addr = addr;
             // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
             let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
-            //println!("addr: {:x} {:x}", target_phys_addr, target_virt_addr);
+            println!("addr: {:x} {:x}", target_phys_addr, target_virt_addr);
             // 読み込まれるのを待つ
-            while shared_memory.is_ready() {}
-            //println!("addr: {:x} is ready", target_phys_addr);
+            while !shared_memory.is_ready_to_write() {}
+            println!("addr: {:x} is ready", target_phys_addr);
             shared_memory.modify(
                 |dst| unsafe {
                     core::ptr::copy_nonoverlapping(target_virt_addr as *const u8, dst.as_mut_ptr(), PAGE_SIZE);
                 },
                 PAGE_SIZE,
             );
-            //println!("addr: {:x} modified", target_phys_addr);
+            println!("addr: {:x} modified", target_phys_addr);
             // 一時テーブルを削除
             remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
             if target_phys_addr & 0xffffff == 0 {
