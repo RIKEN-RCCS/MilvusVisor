@@ -503,10 +503,35 @@ pub fn get_esr_el2() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_esr_el1() -> u64 {
+    let esr_el1: u64;
+    unsafe { asm!("mrs {:x}, esr_el1", out(reg) esr_el1) };
+    esr_el1
+}
+
+#[inline(always)]
+pub fn set_esr_el1(esr_el1: u64) {
+    unsafe { asm!("msr esr_el1, {:x}", in(reg) esr_el1) };
+}
+
+
+#[inline(always)]
 pub fn get_far_el2() -> u64 {
     let far_el2: u64;
     unsafe { asm!("mrs {:x}, far_el2", out(reg) far_el2) };
     far_el2
+}
+
+#[inline(always)]
+pub fn get_far_el1() -> u64 {
+    let far_el1: u64;
+    unsafe { asm!("mrs {:x}, far_el2", out(reg) far_el1) };
+    far_el1
+}
+
+#[inline(always)]
+pub fn set_far_el1(far_el1: u64) {
+    unsafe { asm!("msr far_el1, {:x}", in(reg) far_el1) };
 }
 
 #[inline(always)]
@@ -529,6 +554,18 @@ pub fn set_spsr_el2(spsr_el2: u64) {
 }
 
 #[inline(always)]
+pub fn get_spsr_el1() -> u64 {
+    let spsr_el1: u64;
+    unsafe { asm!("mrs {:x}, spsr_el1", out(reg) spsr_el1) };
+    spsr_el1
+}
+
+#[inline(always)]
+pub fn set_spsr_el1(spsr_el1: u64) {
+    unsafe { asm!("msr spsr_el1, {:x}", in(reg) spsr_el1) };
+}
+
+#[inline(always)]
 pub fn get_elr_el2() -> u64 {
     let elr_el2: u64;
     unsafe { asm!("mrs {:x}, elr_el2", out(reg) elr_el2) };
@@ -538,6 +575,18 @@ pub fn get_elr_el2() -> u64 {
 #[inline(always)]
 pub fn set_elr_el2(elr_el2: u64) {
     unsafe { asm!("msr elr_el2, {:x}", in(reg) elr_el2) };
+}
+
+#[inline(always)]
+pub fn get_elr_el1() -> u64 {
+    let elr_el1: u64;
+    unsafe { asm!("mrs {:x}, elr_el1", out(reg) elr_el1) };
+    elr_el1
+}
+
+#[inline(always)]
+pub fn set_elr_el1(elr_el1: u64) {
+    unsafe { asm!("msr elr_el1, {:x}", in(reg) elr_el1) };
 }
 
 #[inline(always)]
@@ -555,9 +604,82 @@ pub fn get_sp_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_sp_el0() -> u64 {
+    let sp_el1: u64;
+    unsafe { asm!("mrs {:x}, sp_el0", out(reg) sp_el1) };
+    sp_el1
+}
+
+#[inline(always)]
 pub fn set_sp_el1(sp_el1: u64) {
     unsafe { asm!("msr sp_el1, {:x}", in(reg) sp_el1) };
 }
+
+#[inline(always)]
+pub fn set_sp_el0(sp_el0: u64) {
+    unsafe { asm!("msr sp_el0, {:x}", in(reg) sp_el0) };
+}
+
+#[inline(always)]
+pub fn get_contextidr_el1() -> u64 {
+    let contextidr_el1: u64;
+    unsafe { asm!("mrs {:x}, contextidr_el1", out(reg) contextidr_el1) };
+    contextidr_el1
+}
+
+#[inline(always)]
+pub fn set_contextidr_el1(contextidr_el1: u64) {
+    unsafe { asm!("msr contextidr_el1, {:x}", in(reg) contextidr_el1) };
+}
+
+#[inline(always)]
+pub fn get_tpidr_el0() -> u64 {
+    let tpidr_el0: u64;
+    unsafe { asm!("mrs {:x}, tpidr_el0", out(reg) tpidr_el0) };
+    tpidr_el0
+}
+
+#[inline(always)]
+pub fn set_tpidr_el0(tpidr_el0: u64) {
+    unsafe { asm!("msr tpidr_el0, {:x}", in(reg) tpidr_el0) };
+}
+
+#[inline(always)]
+pub fn get_tpidr_el1() -> u64 {
+    let tpidr_el1: u64;
+    unsafe { asm!("mrs {:x}, tpidr_el1", out(reg) tpidr_el1) };
+    tpidr_el1
+}
+
+#[inline(always)]
+pub fn set_tpidr_el1(tpidr_el1: u64) {
+    unsafe { asm!("msr tpidr_el1, {:x}", in(reg) tpidr_el1) };
+}
+
+#[inline(always)]
+pub fn get_afsr0_el1() -> u64 {
+    let afsr0_el1: u64;
+    unsafe { asm!("mrs {:x}, afsr0_el1", out(reg) afsr0_el1) };
+    afsr0_el1
+}
+
+#[inline(always)]
+pub fn set_afsr0_el1(afsr0_el1: u64) {
+    unsafe { asm!("msr afsr0_el1, {:x}", in(reg) afsr0_el1) };
+}
+
+#[inline(always)]
+pub fn get_afsr1_el1() -> u64 {
+    let afsr1_el1: u64;
+    unsafe { asm!("mrs {:x}, afsr1_el1", out(reg) afsr1_el1) };
+    afsr1_el1
+}
+
+#[inline(always)]
+pub fn set_afsr1_el1(afsr1_el1: u64) {
+    unsafe { asm!("msr afsr1_el1, {:x}", in(reg) afsr1_el1) };
+}
+
 
 #[inline(always)]
 pub fn get_id_aa64mmfr0_el1() -> u64 {

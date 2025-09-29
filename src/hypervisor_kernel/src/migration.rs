@@ -1,5 +1,5 @@
 use crate::drivers::shared_memory::SharedMemory;
-use common::{PAGE_SIZE, cpu};
+use common::{PAGE_SIZE, cpu, GeneralPurposeRegisters};
 use core::mem::MaybeUninit;
 use core::ptr;
 use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
@@ -16,12 +16,23 @@ struct SystemRegisters {
     mair_el1: u64,
     sctlr_el1: u64,
     vbar_el1: u64,
+    elr_el1: u64,
+    contextidr_el1: u64,
+    tpidr_el0: u64,
+    tpidr_el1: u64,
+    afsr0_el1: u64,
+    afsr1_el1: u64,
     spsr_el2: u64,
+    spsr_el1: u64,
     elr_el2: u64,
     sp_el1: u64,
+    sp_el0: u64,
+    esr_el1: u64,
+    far_el1: u64,
 }
 
 struct MigrationData {
+    general_purpose_registers: GeneralPurposeRegisters,
     system_registers: SystemRegisters,
     hypervisor_mem_start: usize,
     hypervisor_mem_end: usize,
@@ -36,7 +47,7 @@ const MEM_START: usize = 0x4000_0000;
 const MEM_END: usize = MEM_START + 0x4000_0000;
 
 // 共有メモリにプログラムの状態を保存することでmigrationを開始する
-pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result<(), ()> {
+pub fn start_migration(regs: &GeneralPurposeRegisters, el2_memory_start: usize, el2_memory_end: usize) -> Result<(), ()> {
     println!("Starting migration...");
 
     // TODO: 今はアドレスを決め打ちしている
@@ -54,11 +65,22 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
         mair_el1: cpu::get_mair_el1(),
         sctlr_el1: cpu::get_sctlr_el1(),
         vbar_el1: cpu::get_vbar_el1(),
+        elr_el1: cpu::get_elr_el1(),
+        contextidr_el1: cpu::get_contextidr_el1(),
+        tpidr_el0: cpu::get_tpidr_el0(),
+        tpidr_el1: cpu::get_tpidr_el1(),
+        afsr0_el1: cpu::get_afsr0_el1(),
+        afsr1_el1: cpu::get_afsr1_el1(),
         spsr_el2: cpu::get_spsr_el2(),
+        spsr_el1: cpu::get_spsr_el1(),
         elr_el2: cpu::get_elr_el2(),
         sp_el1: cpu::get_sp_el1(),
+        sp_el0: cpu::get_sp_el0(),
+        esr_el1: cpu::get_esr_el1(),
+        far_el1: cpu::get_far_el1(),
     };
     let migration_data = MigrationData {
+        general_purpose_registers: regs.clone(),
         system_registers: r,
         hypervisor_mem_start: el2_memory_start,
         hypervisor_mem_end: el2_memory_end,
@@ -75,17 +97,17 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
             let target_phys_addr = addr;
             // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
             let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
-            println!("addr: {:x} {:x}", target_phys_addr, target_virt_addr);
+            //println!("addr: {:x} {:x}", target_phys_addr, target_virt_addr);
             // 読み込まれるのを待つ
             while !shared_memory.is_ready_to_write() {}
-            println!("addr: {:x} is ready", target_phys_addr);
+            //println!("addr: {:x} is ready", target_phys_addr);
             shared_memory.modify(
                 |dst| unsafe {
                     core::ptr::copy_nonoverlapping(target_virt_addr as *const u8, dst.as_mut_ptr(), PAGE_SIZE);
                 },
                 PAGE_SIZE,
             );
-            println!("addr: {:x} modified", target_phys_addr);
+            //println!("addr: {:x} modified", target_phys_addr);
             // 一時テーブルを削除
             remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
             if target_phys_addr & 0xffffff == 0 {
@@ -98,7 +120,7 @@ pub fn start_migration(el2_memory_start: usize, el2_memory_end: usize) -> Result
     Ok(())
 }
 
-pub fn receive_migration() -> Result<(), ()> {
+pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
     println!("Receiving migration...");
     // TODO: 今はアドレスを決め打ちしている
     let shared_memory: &mut SharedMemory = unsafe {
@@ -132,21 +154,55 @@ pub fn receive_migration() -> Result<(), ()> {
         mair_el1,
         sctlr_el1,
         vbar_el1,
+        elr_el1,
+        contextidr_el1,
+        tpidr_el0,
+        tpidr_el1,
+        afsr0_el1,
+        afsr1_el1,
         spsr_el2,
+        spsr_el1,
         elr_el2,
         sp_el1,
+        sp_el0,
+        esr_el1,
+        far_el1,
     } = migration_data.system_registers;
     cpu::set_cpacr_el1(cpacr_el1);
     cpu::set_ttbr0_el1(ttbr0_el1);
     cpu::set_ttbr1_el1(ttbr1_el1);
     cpu::set_tcr_el1(tcr_el1);
     cpu::set_mair_el1(mair_el1);
+    // Restore SCTLR_EL1 after TTBR/TCR/MAIR with barriers
+    // Ensure ordering before changing EL1 control state
+    cpu::dsb();
+    cpu::isb();
     cpu::set_sctlr_el1(sctlr_el1);
+    // Ensure the new control settings take effect
+    cpu::isb();
+    // Be conservative: refresh TLB and I-Cache for EL1 context
+    cpu::flush_tlb_el1();
+    cpu::clear_instruction_cache_all();
     cpu::set_vbar_el1(vbar_el1);
+    // Restore EL1 context registers
+    cpu::set_contextidr_el1(contextidr_el1);
+    cpu::set_tpidr_el0(tpidr_el0);
+    cpu::set_tpidr_el1(tpidr_el1);
+    cpu::set_afsr0_el1(afsr0_el1);
+    cpu::set_afsr1_el1(afsr1_el1);
     cpu::set_spsr_el2(spsr_el2);
+    cpu::set_spsr_el1(spsr_el1);
+    cpu::set_elr_el1(elr_el1);
     cpu::set_elr_el2(elr_el2);
     cpu::set_sp_el1(sp_el1);
+    cpu::set_sp_el0(sp_el0);
+    cpu::set_esr_el1(esr_el1);
+    cpu::set_far_el1(far_el1);
     println!("Done");
+
+    let src_regs = migration_data.general_purpose_registers;
+    regs.copy_from_slice(src_regs.as_slice());
+
     println!("hyp_mem_start: {:x}", migration_data.hypervisor_mem_start);
     println!("hyp_mem_end: {:x}", migration_data.hypervisor_mem_end);
     // 次はメモリ情報を読み込んでいく
