@@ -11,6 +11,7 @@
 
 #[cfg(feature = "shared_memory")]
 use crate::drivers::shared_memory::SharedMemory;
+use crate::migration::receive_migration;
 #[cfg(feature = "shared_memory")]
 use crate::migration::start_migration;
 use common::cpu::*;
@@ -23,7 +24,6 @@ use core::arch::global_asm;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
 use core::ptr;
-use crate::migration::receive_migration;
 
 #[macro_use]
 mod drivers;
@@ -132,8 +132,7 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
         unsafe {
             EL2_MEMORY_START = system_information.el2_memory_info.0;
             EL2_MEMORY_END = system_information.el2_memory_info.0
-                + (system_information.el2_memory_info.1
-                << PAGE_SHIFT);
+                + (system_information.el2_memory_info.1 << PAGE_SHIFT);
         }
     }
 
@@ -259,7 +258,8 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             #[cfg(feature = "shared_memory")]
             migration::HVC_MIGRATION_START => {
                 println!("Migration Start");
-                start_migration(regs, unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END }).expect("Failed to start migration");
+                start_migration(regs, unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END })
+                    .expect("Failed to start migration");
             }
             #[cfg(feature = "shared_memory")]
             migration::HVC_MIGRATION_RECEIVE => {

@@ -11,9 +11,7 @@ pub struct VolatileCell<T> {
 
 impl<T> VolatileCell<T> {
     pub fn read(&self) -> T {
-        unsafe {
-            read_volatile(self.inner.get())
-        }
+        unsafe { read_volatile(self.inner.get()) }
     }
 
     pub fn write(&self, val: T) {
@@ -83,11 +81,7 @@ impl SharedMemory {
     pub fn read(&self) -> Option<&[u8]> {
         let result: Option<&[u8]> = if self.write_done.read() {
             let len = self.len;
-            if len > 0 {
-                Some(self.data.get())
-            } else {
-                None
-            }
+            if len > 0 { Some(self.data.get()) } else { None }
         } else {
             None
         };

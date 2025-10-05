@@ -8,7 +8,7 @@
 //! Serial Port
 //!
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SerialPortType {
     ArmPl011,
     ArmSbsaGenericUart,

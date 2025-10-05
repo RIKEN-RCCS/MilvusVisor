@@ -1,8 +1,8 @@
 use crate::drivers::shared_memory::SharedMemory;
-use common::{PAGE_SIZE, cpu, GeneralPurposeRegisters};
+use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
+use common::{GeneralPurposeRegisters, HYPERVISOR_SERIAL_BASE_ADDRESS, PAGE_SIZE, cpu};
 use core::mem::MaybeUninit;
 use core::ptr;
-use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
 
 pub const HVC_MIGRATION_START: u16 = 0xFFF2;
 pub const HVC_MIGRATION_RECEIVE: u16 = 0xFFF3;
@@ -31,11 +31,42 @@ struct SystemRegisters {
     far_el1: u64,
 }
 
+// Only for arm_pl011
+#[derive(Clone)]
+struct SerialState {
+    rsr: u8,
+    ibrd: u16,
+    fbrd: u8,
+    lcr_h: u8,
+    cr: u16,
+    ifls: u8,
+    imsc: u16,
+    ris: u16,
+    dmacr: u8,
+    ilpr: u8,
+}
+
+const UART_RSR_OFFSET: usize = 0x004;
+const UART_ILPR_OFFSET: usize = 0x020;
+const UART_IBRD_OFFSET: usize = 0x024;
+const UART_FBRD_OFFSET: usize = 0x028;
+const UART_LCRH_OFFSET: usize = 0x02C;
+const UART_CR_OFFSET: usize = 0x030;
+const UART_IFLS_OFFSET: usize = 0x034;
+const UART_IMSC_OFFSET: usize = 0x038;
+const UART_RIS_OFFSET: usize = 0x03C;
+const UART_DMACR_OFFSET: usize = 0x048;
+
 struct MigrationData {
     general_purpose_registers: GeneralPurposeRegisters,
     system_registers: SystemRegisters,
     hypervisor_mem_start: usize,
     hypervisor_mem_end: usize,
+    serial_state: SerialState,
+}
+
+unsafe fn write_serial_u32(offset: usize, value: u32) {
+    ptr::write_volatile((HYPERVISOR_SERIAL_BASE_ADDRESS + offset) as *mut u32, value);
 }
 
 // Ref: https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8
@@ -46,8 +77,17 @@ unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
 const MEM_START: usize = 0x4000_0000;
 const MEM_END: usize = MEM_START + 0x4000_0000;
 
+unsafe fn read_serial_register<T>(offset: usize) -> T {
+    let base = HYPERVISOR_SERIAL_BASE_ADDRESS as *const u8;
+    unsafe { ptr::read_volatile(base.add(offset).cast::<T>()) }
+}
+
 // 共有メモリにプログラムの状態を保存することでmigrationを開始する
-pub fn start_migration(regs: &GeneralPurposeRegisters, el2_memory_start: usize, el2_memory_end: usize) -> Result<(), ()> {
+pub fn start_migration(
+    regs: &GeneralPurposeRegisters,
+    el2_memory_start: usize,
+    el2_memory_end: usize,
+) -> Result<(), ()> {
     println!("Starting migration...");
 
     // TODO: 今はアドレスを決め打ちしている
@@ -79,16 +119,35 @@ pub fn start_migration(regs: &GeneralPurposeRegisters, el2_memory_start: usize, 
         esr_el1: cpu::get_esr_el1(),
         far_el1: cpu::get_far_el1(),
     };
+
+    // シリアルの状態を保存する
+    let serial_state = unsafe {
+        SerialState {
+            rsr: read_serial_register(UART_RSR_OFFSET),
+            ibrd: read_serial_register(UART_IBRD_OFFSET),
+            fbrd: read_serial_register(UART_FBRD_OFFSET),
+            lcr_h: read_serial_register(UART_LCRH_OFFSET),
+            cr: read_serial_register(UART_CR_OFFSET),
+            ifls: read_serial_register(UART_IFLS_OFFSET),
+            imsc: read_serial_register(UART_IMSC_OFFSET),
+            ris: read_serial_register(UART_RIS_OFFSET),
+            dmacr: read_serial_register(UART_DMACR_OFFSET),
+            ilpr: read_serial_register(UART_ILPR_OFFSET),
+        }
+    };
+
     let migration_data = MigrationData {
         general_purpose_registers: regs.clone(),
         system_registers: r,
         hypervisor_mem_start: el2_memory_start,
         hypervisor_mem_end: el2_memory_end,
+        serial_state,
     };
     println!("Sending base information");
     shared_memory.clear();
     shared_memory.write(unsafe { any_as_u8_slice(&migration_data) });
     println!("Sending memory");
+
     //　メモリ領域をまるごとコピーする
     let mut addr = MEM_START;
     while addr < MEM_END {
@@ -103,7 +162,11 @@ pub fn start_migration(regs: &GeneralPurposeRegisters, el2_memory_start: usize, 
             //println!("addr: {:x} is ready", target_phys_addr);
             shared_memory.modify(
                 |dst| unsafe {
-                    core::ptr::copy_nonoverlapping(target_virt_addr as *const u8, dst.as_mut_ptr(), PAGE_SIZE);
+                    core::ptr::copy_nonoverlapping(
+                        target_virt_addr as *const u8,
+                        dst.as_mut_ptr(),
+                        PAGE_SIZE,
+                    );
                 },
                 PAGE_SIZE,
             );
@@ -200,6 +263,38 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
     cpu::set_far_el1(far_el1);
     println!("Done");
 
+    // restore serial state
+    let serial_state = migration_data.serial_state;
+    unsafe {
+        let SerialState {
+            rsr,
+            ibrd,
+            fbrd,
+            lcr_h,
+            cr,
+            ifls,
+            imsc,
+            ris: _,
+            dmacr,
+            ilpr,
+        } = serial_state;
+
+        // Disable while programming configuration
+        write_serial_u32(UART_CR_OFFSET, 0);
+        write_serial_u32(UART_ILPR_OFFSET, ilpr as u32);
+        write_serial_u32(UART_IBRD_OFFSET, ibrd as u32);
+        write_serial_u32(UART_FBRD_OFFSET, fbrd as u32);
+        write_serial_u32(UART_LCRH_OFFSET, lcr_h as u32);
+        write_serial_u32(UART_IFLS_OFFSET, ifls as u32);
+        write_serial_u32(UART_IMSC_OFFSET, imsc as u32);
+        write_serial_u32(UART_DMACR_OFFSET, dmacr as u32);
+        if rsr != 0 {
+            // Writing to RSR clears latched errors
+            write_serial_u32(UART_RSR_OFFSET, rsr as u32);
+        }
+        write_serial_u32(UART_CR_OFFSET, cr as u32);
+    }
+
     let src_regs = migration_data.general_purpose_registers;
     regs.copy_from_slice(src_regs.as_slice());
 
@@ -218,7 +313,11 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
                 if let Some(data) = shared_memory.read() {
                     //println!("addr: {:x} data[0]: {:x}", target_phys_addr, data[0]);
                     unsafe {
-                        core::ptr::copy_nonoverlapping(data.as_ptr(), target_virt_addr as *mut u8, PAGE_SIZE);
+                        core::ptr::copy_nonoverlapping(
+                            data.as_ptr(),
+                            target_virt_addr as *mut u8,
+                            PAGE_SIZE,
+                        );
                     }
                     //println!("addr: {:x} copied", target_phys_addr);
                     shared_memory.clear();

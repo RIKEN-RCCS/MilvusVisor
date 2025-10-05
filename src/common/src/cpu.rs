@@ -514,7 +514,6 @@ pub fn set_esr_el1(esr_el1: u64) {
     unsafe { asm!("msr esr_el1, {:x}", in(reg) esr_el1) };
 }
 
-
 #[inline(always)]
 pub fn get_far_el2() -> u64 {
     let far_el2: u64;
@@ -679,7 +678,6 @@ pub fn get_afsr1_el1() -> u64 {
 pub fn set_afsr1_el1(afsr1_el1: u64) {
     unsafe { asm!("msr afsr1_el1, {:x}", in(reg) afsr1_el1) };
 }
-
 
 #[inline(always)]
 pub fn get_id_aa64mmfr0_el1() -> u64 {

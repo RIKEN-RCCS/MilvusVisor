@@ -14,7 +14,7 @@
 
 use crate::paging::map_address;
 use common::cpu::flush_tlb_el2;
-use common::{PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, HYPERVISOR_VIRTUAL_BASE_ADDRESS};
+use common::{HYPERVISOR_VIRTUAL_BASE_ADDRESS, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 
 /// Base virtual address for temporary mappings
 /// This is located above the hypervisor base address to avoid conflicts
@@ -49,7 +49,11 @@ pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usi
     }
 
     if size == 0 || size > MAX_TEMPORARY_MAPPING_SIZE {
-        pr_debug!("Invalid size: {} (max: {})", size, MAX_TEMPORARY_MAPPING_SIZE);
+        pr_debug!(
+            "Invalid size: {} (max: {})",
+            size,
+            MAX_TEMPORARY_MAPPING_SIZE
+        );
         return Err(());
     }
 
@@ -70,7 +74,7 @@ pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usi
         virtual_addr,
         aligned_size,
         true,  // readable
-        true, // writable
+        true,  // writable
         false, // not executable
         false, // not device memory
     ) {
@@ -112,7 +116,10 @@ pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usi
 pub fn remove_temporary_mapping(virtual_addr: usize, size: usize) -> Result<(), ()> {
     // Validate input parameters
     if virtual_addr != TEMPORARY_MAPPING_BASE {
-        pr_debug!("Invalid virtual address for temporary mapping: {:#X}", virtual_addr);
+        pr_debug!(
+            "Invalid virtual address for temporary mapping: {:#X}",
+            virtual_addr
+        );
         return Err(());
     }
 

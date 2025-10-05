@@ -64,7 +64,7 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
                 }
 
                 let address = node.get_offset();
-                return Some(SerialPortInfo {
+                let port_info = SerialPortInfo {
                     physical_address: address,
                     virtual_address: address,
                     port_type: match index {
@@ -73,7 +73,12 @@ fn try_to_get_serial_info_from_dtb(dtb_address: usize) -> Option<SerialPortInfo>
                         2 => SerialPortType::XilinxUart,
                         _ => unreachable!(),
                     },
-                });
+                };
+                println!(
+                    "SerialPort: {:#X?}(Type: {:?})",
+                    address, port_info.port_type
+                );
+                return Some(port_info);
             }
             Ok(None) => break,
             Err(_) => {
