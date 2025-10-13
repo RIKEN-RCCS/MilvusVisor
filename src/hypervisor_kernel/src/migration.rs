@@ -1,12 +1,19 @@
 use crate::drivers::shared_memory::SharedMemory;
+use crate::gic;
 use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
-use common::{GeneralPurposeRegisters, HYPERVISOR_SERIAL_BASE_ADDRESS, PAGE_SIZE, cpu};
+use common::gic::{
+    MAX_AP_REGISTERS, MAX_LIST_REGISTERS, apr_count_from_vtr, disable_delivery, lr_count_from_vtr,
+    read_apr, read_eisr, read_elrsr, read_lr, read_misr, read_vmcr, read_vtr, restore_delivery,
+    write_apr, write_lr, write_vmcr,
+};
+use common::{GeneralPurposeRegisters, HYPERVISOR_SERIAL_BASE_ADDRESS, PAGE_MASK, PAGE_SIZE, cpu};
 use core::mem::MaybeUninit;
 use core::ptr;
 
 pub const HVC_MIGRATION_START: u16 = 0xFFF2;
 pub const HVC_MIGRATION_RECEIVE: u16 = 0xFFF3;
 
+#[repr(C)]
 #[derive(Clone)]
 struct SystemRegisters {
     cpacr_el1: u64,
@@ -29,9 +36,11 @@ struct SystemRegisters {
     sp_el0: u64,
     esr_el1: u64,
     far_el1: u64,
+    zcr_el1: u64,
 }
 
 // Only for arm_pl011
+#[repr(C)]
 #[derive(Clone)]
 struct SerialState {
     rsr: u8,
@@ -57,12 +66,50 @@ const UART_IMSC_OFFSET: usize = 0x038;
 const UART_RIS_OFFSET: usize = 0x03C;
 const UART_DMACR_OFFSET: usize = 0x048;
 
+#[repr(C)]
 struct MigrationData {
     general_purpose_registers: GeneralPurposeRegisters,
     system_registers: SystemRegisters,
     hypervisor_mem_start: usize,
     hypervisor_mem_end: usize,
     serial_state: SerialState,
+    gic_state: Gicv2State,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Gicv2State {
+    present: u8,
+    lr_count: u8,
+    apr_count: u8,
+    _reserved: u8,
+    hcr: u32,
+    vtr: u32,
+    vmcr: u32,
+    misr: u32,
+    eisr: [u32; 2],
+    elrsr: [u32; 2],
+    apr: [u32; MAX_AP_REGISTERS],
+    lrs: [u64; MAX_LIST_REGISTERS],
+}
+
+impl Default for Gicv2State {
+    fn default() -> Self {
+        Self {
+            present: 0,
+            lr_count: 0,
+            apr_count: 0,
+            _reserved: 0,
+            hcr: 0,
+            vtr: 0,
+            vmcr: 0,
+            misr: 0,
+            eisr: [0; 2],
+            elrsr: [0; 2],
+            apr: [0; MAX_AP_REGISTERS],
+            lrs: [0; MAX_LIST_REGISTERS],
+        }
+    }
 }
 
 unsafe fn write_serial_u32(offset: usize, value: u32) {
@@ -76,6 +123,7 @@ unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
 
 const MEM_START: usize = 0x4000_0000;
 const MEM_END: usize = MEM_START + 0x4000_0000;
+const GICH_MAPPING_SIZE: usize = PAGE_SIZE;
 
 unsafe fn read_serial_register<T>(offset: usize) -> T {
     let base = HYPERVISOR_SERIAL_BASE_ADDRESS as *const u8;
@@ -136,12 +184,61 @@ pub fn start_migration(
         }
     };
 
+    let mut gic_state = Gicv2State::default();
+    let mpidr = cpu::get_mpidr_el1();
+    if let Some((_gicv_base, gich_base)) = gic::find_vgic_base(mpidr) {
+        let gich_page = gich_base & PAGE_MASK;
+        let gich_offset = gich_base - gich_page;
+        match create_temporary_mapping(gich_page, GICH_MAPPING_SIZE) {
+            Ok(temp_base) => {
+                let gich_virt = temp_base + gich_offset;
+                let original_hcr = disable_delivery(gich_virt);
+                let vtr = read_vtr(gich_virt);
+                gic_state.present = 1;
+                gic_state.hcr = original_hcr;
+                gic_state.vtr = vtr;
+                gic_state.vmcr = read_vmcr(gich_virt);
+                gic_state.misr = read_misr(gich_virt);
+                for idx in 0..2 {
+                    gic_state.eisr[idx] = read_eisr(gich_virt, idx);
+                    gic_state.elrsr[idx] = read_elrsr(gich_virt, idx);
+                }
+
+                let lr_count = lr_count_from_vtr(vtr);
+                gic_state.lr_count = lr_count as u8;
+                for idx in 0..lr_count {
+                    gic_state.lrs[idx] = read_lr(gich_virt, idx);
+                }
+
+                let apr_count = apr_count_from_vtr(vtr);
+                gic_state.apr_count = apr_count as u8;
+                for idx in 0..apr_count {
+                    gic_state.apr[idx] = read_apr(gich_virt, idx);
+                }
+
+                restore_delivery(gich_virt, original_hcr);
+                if let Err(()) = remove_temporary_mapping(temp_base, GICH_MAPPING_SIZE) {
+                    println!(
+                        "Failed to remove temporary mapping for GICH base {:x}",
+                        gich_base
+                    );
+                }
+            }
+            Err(()) => {
+                println!("Failed to map GICH base for MPIDR {:x}", mpidr);
+            }
+        }
+    } else {
+        println!("GICH base not found for MPIDR {:x}", mpidr);
+    }
+
     let migration_data = MigrationData {
         general_purpose_registers: regs.clone(),
         system_registers: r,
         hypervisor_mem_start: el2_memory_start,
         hypervisor_mem_end: el2_memory_end,
         serial_state,
+        gic_state,
     };
     println!("Sending base information");
     shared_memory.clear();
@@ -261,6 +358,68 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
     cpu::set_sp_el0(sp_el0);
     cpu::set_esr_el1(esr_el1);
     cpu::set_far_el1(far_el1);
+
+    let gic_state = migration_data.gic_state;
+    if gic_state.present != 0 {
+        let mpidr = cpu::get_mpidr_el1();
+        match gic::find_vgic_base(mpidr) {
+            Some((_gicv_base, gich_base)) => {
+                let gich_page = gich_base & PAGE_MASK;
+                let gich_offset = gich_base - gich_page;
+                match create_temporary_mapping(gich_page, GICH_MAPPING_SIZE) {
+                    Ok(temp_base) => {
+                        let gich_virt = temp_base + gich_offset;
+                        let previous_hcr = disable_delivery(gich_virt);
+                        let local_vtr = read_vtr(gich_virt);
+                        let local_lr_capacity = lr_count_from_vtr(local_vtr);
+                        let local_apr_capacity = apr_count_from_vtr(local_vtr);
+                        let required_lr = usize::from(gic_state.lr_count);
+                        let required_apr = usize::from(gic_state.apr_count);
+
+                        if required_lr <= local_lr_capacity && required_apr <= local_apr_capacity {
+                            write_vmcr(gich_virt, gic_state.vmcr);
+
+                            for idx in 0..local_apr_capacity {
+                                let value = if idx < required_apr {
+                                    gic_state.apr[idx]
+                                } else {
+                                    0
+                                };
+                                write_apr(gich_virt, idx, value);
+                            }
+
+                            for idx in 0..local_lr_capacity {
+                                let value = if idx < required_lr {
+                                    gic_state.lrs[idx]
+                                } else {
+                                    0
+                                };
+                                write_lr(gich_virt, idx, value);
+                            }
+
+                            restore_delivery(gich_virt, gic_state.hcr);
+                        } else {
+                            println!(
+                                "VGIC resources insufficient: need LR {} APR {}, have LR {} APR {}",
+                                required_lr, required_apr, local_lr_capacity, local_apr_capacity
+                            );
+                            restore_delivery(gich_virt, previous_hcr);
+                        }
+
+                        if let Err(()) = remove_temporary_mapping(temp_base, GICH_MAPPING_SIZE) {
+                            println!(
+                                "Failed to remove temporary mapping for GICH base {:x}",
+                                gich_base
+                            );
+                        }
+                    }
+                    Err(()) => println!("Failed to map GICH base for MPIDR {:x}", mpidr),
+                }
+            }
+            None => println!("GICH base not found for MPIDR {:x}", mpidr),
+        }
+    }
+
     println!("Done");
 
     // restore serial state

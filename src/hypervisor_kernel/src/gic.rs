@@ -57,6 +57,24 @@ pub fn init_gic(acpi_address: usize) {
     }
 }
 
+pub fn find_vgic_base(mpidr: u64) -> Option<(usize, usize)> {
+    let rsdp = unsafe { crate::ACPI_RSDP? };
+    let madt_ptr = match get_acpi_table(rsdp.get(), &MADT::SIGNATURE) {
+        Ok(ptr) => ptr,
+        Err(_) => return None,
+    };
+    let madt = unsafe { &*(madt_ptr as *const MADT) };
+    madt.get_gic_list().find_map(|cpu_interface| {
+        if cpu_interface.mpidr() == mpidr {
+            cpu_interface
+                .gicv_base_address()
+                .and_then(|gicv| cpu_interface.gich_base_address().map(|gich| (gicv, gich)))
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(feature = "virtio")]
 pub fn set_interrupt_pending(int_id: u32) {
     let distributor = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };

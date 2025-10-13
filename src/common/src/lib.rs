@@ -10,6 +10,7 @@
 
 pub mod acpi;
 pub mod cpu;
+pub mod gic;
 mod memory_allocator;
 pub mod paging;
 pub mod serial_port;

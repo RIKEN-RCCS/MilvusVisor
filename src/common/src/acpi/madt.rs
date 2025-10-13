@@ -142,6 +142,22 @@ impl GicCpuInterfaceStructure {
     pub const fn get_gic_redistributor_base_address(&self) -> usize {
         self.gicr_base_address as usize
     }
+
+    pub fn gicv_base_address(&self) -> Option<usize> {
+        (self.gicv != 0).then_some(self.gicv as usize)
+    }
+
+    pub fn gich_base_address(&self) -> Option<usize> {
+        (self.gich != 0).then_some(self.gich as usize)
+    }
+
+    pub const fn cpu_interface_number(&self) -> u32 {
+        self.cpu_interface_number
+    }
+
+    pub const fn mpidr(&self) -> u64 {
+        self.mpidr
+    }
 }
 
 impl Iterator for GicInterruptTranslationServiceStructureList {
