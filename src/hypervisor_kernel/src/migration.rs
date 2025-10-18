@@ -145,6 +145,13 @@ pub fn start_migration(
             .unwrap()
     };
 
+    let id_aa64pfr0_el1 = cpu::get_id_aa64pfr0_el1();
+    let mut zcr_el1 = 0;
+    if (id_aa64pfr0_el1 & cpu::ID_AA64PFR0_EL1_SVE) != 0 {
+        println!("SVE is enabled");
+        zcr_el1 = cpu::get_zcr_el1();
+    }
+
     let r = SystemRegisters {
         cpacr_el1: cpu::get_cpacr_el1(),
         ttbr0_el1: cpu::get_ttbr0_el1(),
@@ -166,6 +173,7 @@ pub fn start_migration(
         sp_el0: cpu::get_sp_el0(),
         esr_el1: cpu::get_esr_el1(),
         far_el1: cpu::get_far_el1(),
+        zcr_el1,
     };
 
     // シリアルの状態を保存する
@@ -327,6 +335,7 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
         sp_el0,
         esr_el1,
         far_el1,
+        zcr_el1,
     } = migration_data.system_registers;
     cpu::set_cpacr_el1(cpacr_el1);
     cpu::set_ttbr0_el1(ttbr0_el1);
@@ -358,6 +367,12 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
     cpu::set_sp_el0(sp_el0);
     cpu::set_esr_el1(esr_el1);
     cpu::set_far_el1(far_el1);
+
+    let id_aa64pfr0_el1 = cpu::get_id_aa64pfr0_el1();
+    if (id_aa64pfr0_el1 & cpu::ID_AA64PFR0_EL1_SVE) != 0 {
+        cpu::set_zcr_el1(zcr_el1);
+        cpu::isb();
+    }
 
     let gic_state = migration_data.gic_state;
     if gic_state.present != 0 {

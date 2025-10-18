@@ -1,4 +1,4 @@
 [build]
 target = "aarch64-unknown-none-softfloat"
-rustflags = ["-C", "link-arg=-Thypervisor_kernel/config/linkerscript.ld"]
+rustflags = ["-C", "link-arg=-Thypervisor_kernel/config/linkerscript.ld", "-C", "target-feature=+sve"]
 target-dir = "../target/"

@@ -729,6 +729,30 @@ pub fn set_ich_hcr_el2(ich_hcr_el2: u64) {
     unsafe { asm!("msr ich_hcr_el2, {:x}", in(reg) ich_hcr_el2) };
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub fn get_zcr_el1() -> u64 {
+    let zcr_el1: u64;
+    unsafe { asm!("mrs {:x}, zcr_el1", out(reg) zcr_el1) };
+    zcr_el1
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+pub fn get_zcr_el1() -> u64 {
+    0
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub fn set_zcr_el1(zcr_el1: u64) {
+    unsafe { asm!("msr zcr_el1, {:x}", in(reg) zcr_el1) };
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline(always)]
+pub fn set_zcr_el1(_zcr_el1: u64) {}
+
 #[inline(always)]
 pub fn flush_tlb_el2() {
     unsafe {
