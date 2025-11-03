@@ -57,6 +57,16 @@ pub fn init_gic(acpi_address: usize) {
     }
 }
 
+pub fn distributor_base_address() -> Option<usize> {
+    let base = unsafe { GIC_DISTRIBUTOR_BASE_ADDRESS };
+    (base != 0).then_some(base)
+}
+
+pub fn distributor_version() -> Option<u8> {
+    let version = unsafe { GIC_VERSION };
+    (version != 0).then_some(version)
+}
+
 pub fn find_vgic_base(mpidr: u64) -> Option<(usize, usize)> {
     let rsdp = unsafe { crate::ACPI_RSDP? };
     let madt_ptr = match get_acpi_table(rsdp.get(), &MADT::SIGNATURE) {

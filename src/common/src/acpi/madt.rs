@@ -18,6 +18,7 @@ const STRUCT_TYPE_ITS: u8 = 0x0F;
 
 const GICC_FLAGS_ENABLED: u32 = 1;
 
+// Multiple APIC Description Table
 #[repr(C, packed)]
 pub struct MADT {
     signature: [u8; 4],

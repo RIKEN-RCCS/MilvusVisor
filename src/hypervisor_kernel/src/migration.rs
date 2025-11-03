@@ -1,13 +1,14 @@
 use crate::drivers::shared_memory::SharedMemory;
 use crate::gic;
 use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
+use common::acpi::{get_acpi_table, madt::MADT};
 use common::gic::{
     MAX_AP_REGISTERS, MAX_LIST_REGISTERS, apr_count_from_vtr, disable_delivery, lr_count_from_vtr,
     read_apr, read_eisr, read_elrsr, read_lr, read_misr, read_vmcr, read_vtr, restore_delivery,
     write_apr, write_lr, write_vmcr,
 };
 use common::{GeneralPurposeRegisters, HYPERVISOR_SERIAL_BASE_ADDRESS, PAGE_MASK, PAGE_SIZE, cpu};
-use core::mem::MaybeUninit;
+use core::mem::{MaybeUninit, size_of};
 use core::ptr;
 
 pub const HVC_MIGRATION_START: u16 = 0xFFF2;
@@ -74,6 +75,7 @@ struct MigrationData {
     hypervisor_mem_end: usize,
     serial_state: SerialState,
     gic_state: Gicv2State,
+    gic_distributor_state: GicDistributorState,
 }
 
 #[repr(C)]
@@ -91,6 +93,23 @@ struct Gicv2State {
     elrsr: [u32; 2],
     apr: [u32; MAX_AP_REGISTERS],
     lrs: [u64; MAX_LIST_REGISTERS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GicDistributorState {
+    ctlr: u32,
+    statusr: u32,
+    igroupr: [u32; 32],
+    isenabler: [u32; 32],
+    ispendr: [u32; 32],
+    isactiver: [u32; 32],
+    ipriorityr: [u32; 255],
+    itargetsr: [u32; 254], // itargetsr[0]はROなので省略している
+    icfgr: [u32; 64],
+    nsacr: [u32; 64],
+    cpendsgir: [u32; 4],
+    inmir: [u32; 32],
 }
 
 impl Default for Gicv2State {
@@ -124,6 +143,81 @@ unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
 const MEM_START: usize = 0x4000_0000;
 const MEM_END: usize = MEM_START + 0x4000_0000;
 const GICH_MAPPING_SIZE: usize = PAGE_SIZE;
+const GICD_MAPPING_SIZE: usize = PAGE_SIZE;
+const GICD_CTLR_OFFSET: usize = 0x000;
+const GICD_TYPER_OFFSET: usize = 0x004;
+const GICD_IIDR_OFFSET: usize = 0x008;
+
+fn locate_gic_distributor() -> Option<(u8, usize)> {
+    if let Some(base) = gic::distributor_base_address() {
+        let version = gic::distributor_version().unwrap_or(0);
+        return Some((version, base));
+    }
+
+    let rsdp = unsafe { crate::ACPI_RSDP? };
+    let madt_ptr = get_acpi_table(rsdp.get(), &MADT::SIGNATURE).ok()?;
+    let madt = unsafe { &*(madt_ptr as *const MADT) };
+    madt.get_gic_distributor_address()
+}
+
+fn snapshot_gic_distributor_state() -> GicDistributorState {
+    let mut state = GicDistributorState::default();
+
+    let Some((version, base)) = locate_gic_distributor() else {
+        println!("GIC distributor base not found");
+        return state;
+    };
+
+    let gicd_page = base & PAGE_MASK;
+    let gicd_offset = base - gicd_page;
+
+    match create_temporary_mapping(gicd_page, GICD_MAPPING_SIZE) {
+        Ok(temp_base) => {
+            let gicd_virt = temp_base + gicd_offset;
+            unsafe {
+                state.ctlr = ptr::read_volatile((gicd_virt + GICD_CTLR_OFFSET) as *const u32);
+            }
+
+            if let Err(()) = remove_temporary_mapping(temp_base, GICD_MAPPING_SIZE) {
+                println!(
+                    "Failed to remove temporary mapping for GICD base {:x}",
+                    base
+                );
+            }
+        }
+        Err(()) => println!("Failed to map GICD base {:x}", base),
+    }
+
+    state
+}
+
+fn restore_gic_distributor_state(state: &GicDistributorState) {
+    let Some((_version, base)) = locate_gic_distributor() else {
+        println!("Local GIC distributor base not found");
+        return;
+    };
+
+    let gicd_page = base & PAGE_MASK;
+    let gicd_offset = base - gicd_page;
+
+    match create_temporary_mapping(gicd_page, GICD_MAPPING_SIZE) {
+        Ok(temp_base) => {
+            let gicd_virt = temp_base + gicd_offset;
+            unsafe {
+                // Only CTLR is writable; remaining fields are read-only discovery registers.
+                ptr::write_volatile((gicd_virt + GICD_CTLR_OFFSET) as *mut u32, state.ctlr);
+            }
+
+            if let Err(()) = remove_temporary_mapping(temp_base, GICD_MAPPING_SIZE) {
+                println!(
+                    "Failed to remove temporary mapping for GICD base {:x}",
+                    base
+                );
+            }
+        }
+        Err(()) => println!("Failed to map GICD base {:x} for restore", base),
+    }
+}
 
 unsafe fn read_serial_register<T>(offset: usize) -> T {
     let base = HYPERVISOR_SERIAL_BASE_ADDRESS as *const u8;
@@ -191,6 +285,8 @@ pub fn start_migration(
             ilpr: read_serial_register(UART_ILPR_OFFSET),
         }
     };
+    println!("uartcr: {:b}", serial_state.cr);
+    println!("uartimsc: {:b}", serial_state.imsc);
 
     let mut gic_state = Gicv2State::default();
     let mpidr = cpu::get_mpidr_el1();
@@ -240,6 +336,12 @@ pub fn start_migration(
         println!("GICH base not found for MPIDR {:x}", mpidr);
     }
 
+    let gic_distributor_state = snapshot_gic_distributor_state();
+    println!(
+        "GIC distributor: ctlr {:#x}",
+        gic_distributor_state.ctlr,
+    );
+
     let migration_data = MigrationData {
         general_purpose_registers: regs.clone(),
         system_registers: r,
@@ -247,6 +349,7 @@ pub fn start_migration(
         hypervisor_mem_end: el2_memory_end,
         serial_state,
         gic_state,
+        gic_distributor_state,
     };
     println!("Sending base information");
     shared_memory.clear();
