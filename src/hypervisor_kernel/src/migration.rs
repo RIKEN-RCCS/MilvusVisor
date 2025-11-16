@@ -1,6 +1,8 @@
 use crate::drivers::shared_memory::SharedMemory;
 use crate::gic;
-use crate::temporary_mapping::{create_temporary_mapping, remove_temporary_mapping};
+use crate::temporary_mapping::{
+    create_device_temporary_mapping, create_temporary_mapping, remove_temporary_mapping,
+};
 use common::acpi::{get_acpi_table, madt::MADT};
 use common::gic::{
     MAX_AP_REGISTERS, MAX_LIST_REGISTERS, apr_count_from_vtr, disable_delivery, lr_count_from_vtr,
@@ -8,6 +10,7 @@ use common::gic::{
     write_apr, write_lr, write_vmcr,
 };
 use common::{GeneralPurposeRegisters, HYPERVISOR_SERIAL_BASE_ADDRESS, PAGE_MASK, PAGE_SIZE, cpu};
+use core::hint::spin_loop;
 use core::mem::{MaybeUninit, size_of};
 use core::ptr;
 
@@ -112,6 +115,25 @@ struct GicDistributorState {
     inmir: [u32; 32],
 }
 
+impl Default for GicDistributorState {
+    fn default() -> Self {
+        Self {
+            ctlr: 0,
+            statusr: 0,
+            igroupr: [0; 32],
+            isenabler: [0; 32],
+            ispendr: [0; 32],
+            isactiver: [0; 32],
+            ipriorityr: [0; 255],
+            itargetsr: [0; 254],
+            icfgr: [0; 64],
+            nsacr: [0; 64],
+            cpendsgir: [0; 4],
+            inmir: [0; 32],
+        }
+    }
+}
+
 impl Default for Gicv2State {
     fn default() -> Self {
         Self {
@@ -146,7 +168,33 @@ const GICH_MAPPING_SIZE: usize = PAGE_SIZE;
 const GICD_MAPPING_SIZE: usize = PAGE_SIZE;
 const GICD_CTLR_OFFSET: usize = 0x000;
 const GICD_TYPER_OFFSET: usize = 0x004;
-const GICD_IIDR_OFFSET: usize = 0x008;
+const GICD_STATUSR_OFFSET: usize = 0x010;
+const GICD_IGROUPR_OFFSET: usize = 0x080;
+const GICD_ISENABLER_OFFSET: usize = 0x100;
+const GICD_ICENABLER_OFFSET: usize = 0x180;
+const GICD_ISPENDR_OFFSET: usize = 0x200;
+const GICD_ICPENDR_OFFSET: usize = 0x280;
+const GICD_ISACTIVER_OFFSET: usize = 0x300;
+const GICD_ICACTIVER_OFFSET: usize = 0x380;
+const GICD_IPRIORITYR_OFFSET: usize = 0x400;
+const GICD_ITARGETSR_OFFSET: usize = 0x800;
+const GICD_ICFGR_OFFSET: usize = 0xC00;
+const GICD_NSACR_OFFSET: usize = 0xE00;
+const GICD_CPENDSGIR_OFFSET: usize = 0xF10;
+const GICD_SPENDSGIR_OFFSET: usize = 0xF20;
+const GICD_INMIR_OFFSET: usize = 0xF80;
+
+/// Wait until the distributor reports that all pending register writes are complete.
+fn wait_for_gicd_rwp(gicd_virt: usize, version: u8) {
+    if version >= 3 {
+        while unsafe {
+            ptr::read_volatile((gicd_virt + GICD_CTLR_OFFSET) as *const u32) & (1 << 31)
+        } != 0
+        {
+            spin_loop();
+        }
+    }
+}
 
 fn locate_gic_distributor() -> Option<(u8, usize)> {
     if let Some(base) = gic::distributor_base_address() {
@@ -171,11 +219,77 @@ fn snapshot_gic_distributor_state() -> GicDistributorState {
     let gicd_page = base & PAGE_MASK;
     let gicd_offset = base - gicd_page;
 
-    match create_temporary_mapping(gicd_page, GICD_MAPPING_SIZE) {
+    match create_device_temporary_mapping(gicd_page, GICD_MAPPING_SIZE) {
         Ok(temp_base) => {
             let gicd_virt = temp_base + gicd_offset;
+            cpu::dsb();
+            cpu::isb();
             unsafe {
                 state.ctlr = ptr::read_volatile((gicd_virt + GICD_CTLR_OFFSET) as *const u32);
+                if version >= 3 {
+                    state.statusr =
+                        ptr::read_volatile((gicd_virt + GICD_STATUSR_OFFSET) as *const u32);
+                }
+
+                let typer = ptr::read_volatile((gicd_virt + GICD_TYPER_OFFSET) as *const u32);
+                let max_interrupts = state.ipriorityr.len() * 4;
+                let num_interrupts =
+                    core::cmp::min((((typer & 0x1F) + 1) * 32) as usize, max_interrupts);
+                let igroup_regs = ((num_interrupts + 31) / 32).min(state.igroupr.len());
+                let priority_regs = ((num_interrupts + 3) / 4).min(state.ipriorityr.len());
+                let config_regs = ((num_interrupts + 15) / 16).min(state.icfgr.len());
+                let inmir_regs = ((num_interrupts + 31) / 32).min(state.inmir.len());
+                let itarget_regs = priority_regs.saturating_sub(1).min(state.itargetsr.len());
+                let stride = size_of::<u32>();
+
+                for idx in 0..igroup_regs {
+                    state.igroupr[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_IGROUPR_OFFSET + idx * stride) as *const u32,
+                    );
+                    state.isenabler[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_ISENABLER_OFFSET + idx * stride) as *const u32,
+                    );
+                    state.ispendr[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_ISPENDR_OFFSET + idx * stride) as *const u32,
+                    );
+                    state.isactiver[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_ISACTIVER_OFFSET + idx * stride) as *const u32,
+                    );
+                }
+
+                for idx in 0..priority_regs {
+                    state.ipriorityr[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_IPRIORITYR_OFFSET + idx * stride) as *const u32,
+                    );
+                }
+
+                for offset_idx in 0..itarget_regs {
+                    let reg_index = offset_idx + 1; // itargetsr0はROなのでスキップ
+                    state.itargetsr[offset_idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_ITARGETSR_OFFSET + reg_index * stride) as *const u32,
+                    );
+                }
+
+                for idx in 0..config_regs {
+                    state.icfgr[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_ICFGR_OFFSET + idx * stride) as *const u32,
+                    );
+                    state.nsacr[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_NSACR_OFFSET + idx * stride) as *const u32,
+                    );
+                }
+
+                for idx in 0..state.cpendsgir.len() {
+                    state.cpendsgir[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_CPENDSGIR_OFFSET + idx * stride) as *const u32,
+                    );
+                }
+
+                for idx in 0..inmir_regs {
+                    state.inmir[idx] = ptr::read_volatile(
+                        (gicd_virt + GICD_INMIR_OFFSET + idx * stride) as *const u32,
+                    );
+                }
             }
 
             if let Err(()) = remove_temporary_mapping(temp_base, GICD_MAPPING_SIZE) {
@@ -192,7 +306,7 @@ fn snapshot_gic_distributor_state() -> GicDistributorState {
 }
 
 fn restore_gic_distributor_state(state: &GicDistributorState) {
-    let Some((_version, base)) = locate_gic_distributor() else {
+    let Some((version, base)) = locate_gic_distributor() else {
         println!("Local GIC distributor base not found");
         return;
     };
@@ -200,12 +314,167 @@ fn restore_gic_distributor_state(state: &GicDistributorState) {
     let gicd_page = base & PAGE_MASK;
     let gicd_offset = base - gicd_page;
 
-    match create_temporary_mapping(gicd_page, GICD_MAPPING_SIZE) {
+    match create_device_temporary_mapping(gicd_page, GICD_MAPPING_SIZE) {
         Ok(temp_base) => {
             let gicd_virt = temp_base + gicd_offset;
             unsafe {
-                // Only CTLR is writable; remaining fields are read-only discovery registers.
+                let typer = ptr::read_volatile((gicd_virt + GICD_TYPER_OFFSET) as *const u32);
+                let max_interrupts = state.ipriorityr.len() * 4;
+                let num_interrupts =
+                    core::cmp::min((((typer & 0x1F) + 1) * 32) as usize, max_interrupts);
+                let igroup_regs = ((num_interrupts + 31) / 32).min(state.igroupr.len());
+                let priority_regs = ((num_interrupts + 3) / 4).min(state.ipriorityr.len());
+                let config_regs = ((num_interrupts + 15) / 16).min(state.icfgr.len());
+                let inmir_regs = ((num_interrupts + 31) / 32).min(state.inmir.len());
+                let itarget_regs = priority_regs.saturating_sub(1).min(state.itargetsr.len());
+                let stride = size_of::<u32>();
+
+                let mask_for_register = |idx: usize| -> u32 {
+                    let base = idx * 32;
+                    if num_interrupts <= base {
+                        0
+                    } else {
+                        let remaining = num_interrupts - base;
+                        if remaining >= 32 {
+                            u32::MAX
+                        } else {
+                            (1u32 << remaining) - 1
+                        }
+                    }
+                };
+
+                ptr::write_volatile((gicd_virt + GICD_CTLR_OFFSET) as *mut u32, 0);
+                cpu::dsb();
+                wait_for_gicd_rwp(gicd_virt, version);
+                cpu::isb();
+
+                if version >= 3 {
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_STATUSR_OFFSET) as *mut u32,
+                        state.statusr,
+                    );
+                }
+
+                for idx in 0..igroup_regs {
+                    let mask = mask_for_register(idx);
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_IGROUPR_OFFSET + idx * stride) as *mut u32,
+                        state.igroupr[idx] & mask,
+                    );
+                }
+
+                for idx in 0..igroup_regs {
+                    let mask = mask_for_register(idx);
+                    if mask == 0 {
+                        continue;
+                    }
+
+                    let enable_bits = state.isenabler[idx] & mask;
+                    let disable_bits = mask & !enable_bits;
+
+                    if disable_bits != 0 {
+                        ptr::write_volatile(
+                            (gicd_virt + GICD_ICENABLER_OFFSET + idx * stride) as *mut u32,
+                            disable_bits,
+                        );
+                    }
+                    if enable_bits != 0 {
+                        ptr::write_volatile(
+                            (gicd_virt + GICD_ISENABLER_OFFSET + idx * stride) as *mut u32,
+                            enable_bits,
+                        );
+                    }
+                }
+
+                for idx in 0..igroup_regs {
+                    let mask = mask_for_register(idx);
+                    if mask == 0 {
+                        continue;
+                    }
+
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_ICPENDR_OFFSET + idx * stride) as *mut u32,
+                        mask,
+                    );
+
+                    let pending = state.ispendr[idx] & mask;
+                    if pending != 0 {
+                        ptr::write_volatile(
+                            (gicd_virt + GICD_ISPENDR_OFFSET + idx * stride) as *mut u32,
+                            pending,
+                        );
+                    }
+                }
+
+                for idx in 0..igroup_regs {
+                    let mask = mask_for_register(idx);
+                    if mask == 0 {
+                        continue;
+                    }
+
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_ICACTIVER_OFFSET + idx * stride) as *mut u32,
+                        mask,
+                    );
+
+                    let active = state.isactiver[idx] & mask;
+                    if active != 0 {
+                        ptr::write_volatile(
+                            (gicd_virt + GICD_ISACTIVER_OFFSET + idx * stride) as *mut u32,
+                            active,
+                        );
+                    }
+                }
+
+                for idx in 0..priority_regs {
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_IPRIORITYR_OFFSET + idx * stride) as *mut u32,
+                        state.ipriorityr[idx],
+                    );
+                }
+
+                for offset_idx in 0..itarget_regs {
+                    let reg_index = offset_idx + 1; // itargetsr0はROなのでスキップ
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_ITARGETSR_OFFSET + reg_index * stride) as *mut u32,
+                        state.itargetsr[offset_idx],
+                    );
+                }
+
+                for idx in 0..config_regs {
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_ICFGR_OFFSET + idx * stride) as *mut u32,
+                        state.icfgr[idx],
+                    );
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_NSACR_OFFSET + idx * stride) as *mut u32,
+                        state.nsacr[idx],
+                    );
+                }
+
+                for idx in 0..state.cpendsgir.len() {
+                    let value = state.cpendsgir[idx];
+                    if value != 0 {
+                        ptr::write_volatile(
+                            (gicd_virt + GICD_SPENDSGIR_OFFSET + idx * stride) as *mut u32,
+                            value,
+                        );
+                    }
+                }
+
+                for idx in 0..inmir_regs {
+                    ptr::write_volatile(
+                        (gicd_virt + GICD_INMIR_OFFSET + idx * stride) as *mut u32,
+                        state.inmir[idx],
+                    );
+                }
+
+                cpu::dsb();
+                wait_for_gicd_rwp(gicd_virt, version);
                 ptr::write_volatile((gicd_virt + GICD_CTLR_OFFSET) as *mut u32, state.ctlr);
+                cpu::dsb();
+                cpu::isb();
+                wait_for_gicd_rwp(gicd_virt, version);
             }
 
             if let Err(()) = remove_temporary_mapping(temp_base, GICD_MAPPING_SIZE) {
@@ -337,10 +606,7 @@ pub fn start_migration(
     }
 
     let gic_distributor_state = snapshot_gic_distributor_state();
-    println!(
-        "GIC distributor: ctlr {:#x}",
-        gic_distributor_state.ctlr,
-    );
+    println!("GIC distributor: ctlr {:#x}", gic_distributor_state.ctlr,);
 
     let migration_data = MigrationData {
         general_purpose_registers: regs.clone(),

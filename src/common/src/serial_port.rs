@@ -16,7 +16,7 @@ pub enum SerialPortType {
     XilinxUart,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SerialPortInfo {
     pub physical_address: usize,
     pub virtual_address: usize,

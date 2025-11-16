@@ -41,7 +41,11 @@ const MAX_TEMPORARY_MAPPING_SIZE: usize = 16 * 1024 * 1024;
 /// - The physical address range is valid and accessible
 /// - The returned virtual address is only used for reading
 /// - `remove_temporary_mapping` is called when done to clean up
-pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usize, ()> {
+pub fn create_temporary_mapping_with_attrs(
+    physical_addr: usize,
+    size: usize,
+    is_device: bool,
+) -> Result<usize, ()> {
     // Validate input parameters
     if (physical_addr & !PAGE_MASK) != 0 {
         pr_debug!("Physical address {:#X} is not page-aligned", physical_addr);
@@ -76,7 +80,7 @@ pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usi
         true,  // readable
         true,  // writable
         false, // not executable
-        false, // not device memory
+        is_device,
     ) {
         Ok(()) => {
             // Flush TLB to ensure the old mapping is removed
@@ -98,6 +102,14 @@ pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usi
             Err(())
         }
     }
+}
+
+pub fn create_temporary_mapping(physical_addr: usize, size: usize) -> Result<usize, ()> {
+    create_temporary_mapping_with_attrs(physical_addr, size, false)
+}
+
+pub fn create_device_temporary_mapping(physical_addr: usize, size: usize) -> Result<usize, ()> {
+    create_temporary_mapping_with_attrs(physical_addr, size, true)
 }
 
 /// Remove a temporary mapping

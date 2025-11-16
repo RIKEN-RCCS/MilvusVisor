@@ -67,6 +67,7 @@ macro_rules! handler_panic {
 #[unsafe(no_mangle)]
 fn hypervisor_main(system_information: &mut SystemInformation) {
     if let Some(s_info) = &system_information.serial_port {
+        println!("Serial Port Info: {:#?}", s_info);
         drivers::serial_port::init_default_serial_port(s_info.clone());
     }
 
