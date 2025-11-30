@@ -85,6 +85,42 @@ impl SmmuV3Node {
         self.base_address as usize
     }
 
+    pub const fn get_flags(&self) -> u32 {
+        self.flag
+    }
+
+    pub const fn get_model(&self) -> u32 {
+        self.model
+    }
+
+    pub const fn get_vatos_address(&self) -> u64 {
+        self.vatos_address
+    }
+
+    pub const fn get_event_gsiv(&self) -> u32 {
+        self.event
+    }
+
+    pub const fn get_pri_gsiv(&self) -> u32 {
+        self.pri
+    }
+
+    pub const fn get_gerr_gsiv(&self) -> u32 {
+        self.gerr
+    }
+
+    pub const fn get_sync_gsiv(&self) -> u32 {
+        self.sync
+    }
+
+    pub const fn get_proximity_domain(&self) -> u32 {
+        self.proximity_domain
+    }
+
+    pub const fn get_device_id_mapping_index(&self) -> u32 {
+        self.device_id_mapping_index
+    }
+
     pub const fn get_number_of_mappings(&self) -> usize {
         self.number_of_id_mappings as usize
     }

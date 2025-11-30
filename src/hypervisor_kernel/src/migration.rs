@@ -1,5 +1,10 @@
 use crate::drivers::shared_memory::SharedMemory;
 use crate::gic;
+use crate::serial::{
+    self, SerialState, UART_CR_OFFSET, UART_DMACR_OFFSET, UART_FBRD_OFFSET, UART_FR_OFFSET,
+    UART_IBRD_OFFSET, UART_IFLS_OFFSET, UART_ILPR_OFFSET, UART_IMSC_OFFSET, UART_LCRH_OFFSET,
+    UART_RIS_OFFSET, UART_RSR_OFFSET,
+};
 use crate::temporary_mapping::{
     create_device_temporary_mapping, create_temporary_mapping, remove_temporary_mapping,
 };
@@ -9,7 +14,7 @@ use common::gic::{
     read_apr, read_eisr, read_elrsr, read_lr, read_misr, read_vmcr, read_vtr, restore_delivery,
     write_apr, write_lr, write_vmcr,
 };
-use common::{GeneralPurposeRegisters, HYPERVISOR_SERIAL_BASE_ADDRESS, PAGE_MASK, PAGE_SIZE, cpu};
+use common::{GeneralPurposeRegisters, PAGE_MASK, PAGE_SIZE, cpu};
 use core::hint::spin_loop;
 use core::mem::{MaybeUninit, size_of};
 use core::ptr;
@@ -42,33 +47,6 @@ struct SystemRegisters {
     far_el1: u64,
     zcr_el1: u64,
 }
-
-// Only for arm_pl011
-#[repr(C)]
-#[derive(Clone)]
-struct SerialState {
-    rsr: u8,
-    ibrd: u16,
-    fbrd: u8,
-    lcr_h: u8,
-    cr: u16,
-    ifls: u8,
-    imsc: u16,
-    ris: u16,
-    dmacr: u8,
-    ilpr: u8,
-}
-
-const UART_RSR_OFFSET: usize = 0x004;
-const UART_ILPR_OFFSET: usize = 0x020;
-const UART_IBRD_OFFSET: usize = 0x024;
-const UART_FBRD_OFFSET: usize = 0x028;
-const UART_LCRH_OFFSET: usize = 0x02C;
-const UART_CR_OFFSET: usize = 0x030;
-const UART_IFLS_OFFSET: usize = 0x034;
-const UART_IMSC_OFFSET: usize = 0x038;
-const UART_RIS_OFFSET: usize = 0x03C;
-const UART_DMACR_OFFSET: usize = 0x048;
 
 #[repr(C)]
 struct MigrationData {
@@ -151,10 +129,6 @@ impl Default for Gicv2State {
             lrs: [0; MAX_LIST_REGISTERS],
         }
     }
-}
-
-unsafe fn write_serial_u32(offset: usize, value: u32) {
-    ptr::write_volatile((HYPERVISOR_SERIAL_BASE_ADDRESS + offset) as *mut u32, value);
 }
 
 // Ref: https://stackoverflow.com/questions/28127165/how-to-convert-struct-to-u8
@@ -475,6 +449,11 @@ fn restore_gic_distributor_state(state: &GicDistributorState) {
                 cpu::dsb();
                 cpu::isb();
                 wait_for_gicd_rwp(gicd_virt, version);
+
+                println!("==== GICD Restore Complete ====");
+                println!("GICD CTLR: {:#x}", state.ctlr);
+                println!("GICD STATUSR: {:#x}", state.statusr);
+                println!("===============================");
             }
 
             if let Err(()) = remove_temporary_mapping(temp_base, GICD_MAPPING_SIZE) {
@@ -486,11 +465,6 @@ fn restore_gic_distributor_state(state: &GicDistributorState) {
         }
         Err(()) => println!("Failed to map GICD base {:x} for restore", base),
     }
-}
-
-unsafe fn read_serial_register<T>(offset: usize) -> T {
-    let base = HYPERVISOR_SERIAL_BASE_ADDRESS as *const u8;
-    unsafe { ptr::read_volatile(base.add(offset).cast::<T>()) }
 }
 
 // 共有メモリにプログラムの状態を保存することでmigrationを開始する
@@ -540,22 +514,10 @@ pub fn start_migration(
     };
 
     // シリアルの状態を保存する
-    let serial_state = unsafe {
-        SerialState {
-            rsr: read_serial_register(UART_RSR_OFFSET),
-            ibrd: read_serial_register(UART_IBRD_OFFSET),
-            fbrd: read_serial_register(UART_FBRD_OFFSET),
-            lcr_h: read_serial_register(UART_LCRH_OFFSET),
-            cr: read_serial_register(UART_CR_OFFSET),
-            ifls: read_serial_register(UART_IFLS_OFFSET),
-            imsc: read_serial_register(UART_IMSC_OFFSET),
-            ris: read_serial_register(UART_RIS_OFFSET),
-            dmacr: read_serial_register(UART_DMACR_OFFSET),
-            ilpr: read_serial_register(UART_ILPR_OFFSET),
-        }
-    };
-    println!("uartcr: {:b}", serial_state.cr);
-    println!("uartimsc: {:b}", serial_state.imsc);
+    let serial_state = unsafe { SerialState::read_from_hardware() };
+    serial_state.dump("Migration capture");
+    let uart_fr: u16 = unsafe { serial::read_serial_register(UART_FR_OFFSET) };
+    println!("UART FR (Flag Register): {:#x} ({:#b})", uart_fr, uart_fr);
 
     let mut gic_state = Gicv2State::default();
     let mpidr = cpu::get_mpidr_el1();
@@ -606,7 +568,34 @@ pub fn start_migration(
     }
 
     let gic_distributor_state = snapshot_gic_distributor_state();
-    println!("GIC distributor: ctlr {:#x}", gic_distributor_state.ctlr,);
+    println!("==== GICD Migration State ====");
+    println!("GICD CTLR: {:#x}", gic_distributor_state.ctlr);
+    println!("GICD STATUSR: {:#x}", gic_distributor_state.statusr);
+    for idx in 0..gic_distributor_state.igroupr.len() {
+        println!(
+            "GICD IGROUPR[{}]: {:#x}",
+            idx, gic_distributor_state.igroupr[0]
+        );
+    }
+    for idx in 0..gic_distributor_state.ipriorityr.len() {
+        println!(
+            "GICD ISENABLER[{}]: {:#x}",
+            idx, gic_distributor_state.isenabler[0]
+        );
+    }
+    for idx in 0..gic_distributor_state.icfgr.len() {
+        println!(
+            "GICD ISPENDR[{}]: {:#x}",
+            idx, gic_distributor_state.ispendr[0]
+        );
+    }
+    for idx in 0..gic_distributor_state.isactiver.len() {
+        println!(
+            "GICD ISACTIVER[{}]: {:#x}",
+            idx, gic_distributor_state.isactiver[0]
+        );
+    }
+    println!("============================");
 
     let migration_data = MigrationData {
         general_purpose_registers: regs.clone(),
@@ -806,8 +795,38 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
 
     println!("Done");
 
+    // Restore GIC distributor state
+    println!("==== GICD Received State ====");
+    println!(
+        "GICD CTLR: {:#x}",
+        migration_data.gic_distributor_state.ctlr
+    );
+    println!(
+        "GICD STATUSR: {:#x}",
+        migration_data.gic_distributor_state.statusr
+    );
+    println!(
+        "GICD IGROUPR[0]: {:#x}",
+        migration_data.gic_distributor_state.igroupr[0]
+    );
+    println!(
+        "GICD ISENABLER[0]: {:#x}",
+        migration_data.gic_distributor_state.isenabler[0]
+    );
+    println!(
+        "GICD ISPENDR[0]: {:#x}",
+        migration_data.gic_distributor_state.ispendr[0]
+    );
+    println!(
+        "GICD ISACTIVER[0]: {:#x}",
+        migration_data.gic_distributor_state.isactiver[0]
+    );
+    println!("============================");
+    restore_gic_distributor_state(&migration_data.gic_distributor_state);
+
     // restore serial state
     let serial_state = migration_data.serial_state;
+    serial_state.dump("Migration restore input");
     unsafe {
         let SerialState {
             rsr,
@@ -823,20 +842,21 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
         } = serial_state;
 
         // Disable while programming configuration
-        write_serial_u32(UART_CR_OFFSET, 0);
-        write_serial_u32(UART_ILPR_OFFSET, ilpr as u32);
-        write_serial_u32(UART_IBRD_OFFSET, ibrd as u32);
-        write_serial_u32(UART_FBRD_OFFSET, fbrd as u32);
-        write_serial_u32(UART_LCRH_OFFSET, lcr_h as u32);
-        write_serial_u32(UART_IFLS_OFFSET, ifls as u32);
-        write_serial_u32(UART_IMSC_OFFSET, imsc as u32);
-        write_serial_u32(UART_DMACR_OFFSET, dmacr as u32);
+        serial::write_serial_u32(UART_CR_OFFSET, 0);
+        serial::write_serial_u32(UART_ILPR_OFFSET, ilpr as u32);
+        serial::write_serial_u32(UART_IBRD_OFFSET, ibrd as u32);
+        serial::write_serial_u32(UART_FBRD_OFFSET, fbrd as u32);
+        serial::write_serial_u32(UART_LCRH_OFFSET, lcr_h as u32);
+        serial::write_serial_u32(UART_IFLS_OFFSET, ifls as u32);
+        serial::write_serial_u32(UART_IMSC_OFFSET, imsc as u32);
+        serial::write_serial_u32(UART_DMACR_OFFSET, dmacr as u32);
         if rsr != 0 {
             // Writing to RSR clears latched errors
-            write_serial_u32(UART_RSR_OFFSET, rsr as u32);
+            serial::write_serial_u32(UART_RSR_OFFSET, rsr as u32);
         }
-        write_serial_u32(UART_CR_OFFSET, cr as u32);
+        serial::write_serial_u32(UART_CR_OFFSET, cr as u32);
     }
+    serial::dump_live_serial_state("Migration restore result");
 
     let src_regs = migration_data.general_purpose_registers;
     regs.copy_from_slice(src_regs.as_slice());

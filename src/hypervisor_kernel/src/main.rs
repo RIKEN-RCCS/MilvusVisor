@@ -28,6 +28,7 @@ use core::ptr;
 #[macro_use]
 mod drivers;
 mod acpi_protect;
+mod dma_controller;
 mod emulation;
 #[cfg(feature = "fast_restore")]
 mod fast_restore;
@@ -40,6 +41,7 @@ mod paging;
 mod panic;
 mod pci;
 mod psci;
+mod serial;
 mod smmu;
 mod temporary_mapping;
 
@@ -91,7 +93,10 @@ fn hypervisor_main(system_information: &mut SystemInformation) {
 
     if let Some(rsdp_address) = system_information.acpi_rsdp_address {
         gic::init_gic(rsdp_address.get());
+        dma_controller::dump_acpi_dma_controller_info(rsdp_address.get());
     }
+
+    serial::dump_live_serial_state("Boot");
 
     #[cfg(feature = "smmu")]
     if let Some(smmu_base_address) = system_information.smmu_v3_base_address {
