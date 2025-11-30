@@ -574,25 +574,25 @@ pub fn start_migration(
     for idx in 0..gic_distributor_state.igroupr.len() {
         println!(
             "GICD IGROUPR[{}]: {:#x}",
-            idx, gic_distributor_state.igroupr[0]
+            idx, gic_distributor_state.igroupr[idx]
         );
     }
-    for idx in 0..gic_distributor_state.ipriorityr.len() {
+    for idx in 0..gic_distributor_state.isenabler.len() {
         println!(
             "GICD ISENABLER[{}]: {:#x}",
-            idx, gic_distributor_state.isenabler[0]
+            idx, gic_distributor_state.isenabler[idx]
         );
     }
-    for idx in 0..gic_distributor_state.icfgr.len() {
+    for idx in 0..gic_distributor_state.ispendr.len() {
         println!(
             "GICD ISPENDR[{}]: {:#x}",
-            idx, gic_distributor_state.ispendr[0]
+            idx, gic_distributor_state.ispendr[idx]
         );
     }
     for idx in 0..gic_distributor_state.isactiver.len() {
         println!(
             "GICD ISACTIVER[{}]: {:#x}",
-            idx, gic_distributor_state.isactiver[0]
+            idx, gic_distributor_state.isactiver[idx]
         );
     }
     println!("============================");
@@ -806,20 +806,20 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
         migration_data.gic_distributor_state.statusr
     );
     println!(
-        "GICD IGROUPR[0]: {:#x}",
-        migration_data.gic_distributor_state.igroupr[0]
+        "GICD IGROUPR[1]: {:#x}",
+        migration_data.gic_distributor_state.igroupr[1]
     );
     println!(
-        "GICD ISENABLER[0]: {:#x}",
-        migration_data.gic_distributor_state.isenabler[0]
+        "GICD ISENABLER[1]: {:#x}",
+        migration_data.gic_distributor_state.isenabler[1]
     );
     println!(
-        "GICD ISPENDR[0]: {:#x}",
-        migration_data.gic_distributor_state.ispendr[0]
+        "GICD ISPENDR[1]: {:#x}",
+        migration_data.gic_distributor_state.ispendr[1]
     );
     println!(
-        "GICD ISACTIVER[0]: {:#x}",
-        migration_data.gic_distributor_state.isactiver[0]
+        "GICD ISACTIVER[1]: {:#x}",
+        migration_data.gic_distributor_state.isactiver[1]
     );
     println!("============================");
     restore_gic_distributor_state(&migration_data.gic_distributor_state);
