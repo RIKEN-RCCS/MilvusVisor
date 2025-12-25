@@ -1,3 +1,49 @@
+## ⚠️ Caution about this branch ⚠️
+
+The code in this branch is **not intended to be used or executed directly by users**.
+We do not provide documentation or maintenance for this branch.
+
+If you are interested in this branch for research purposes, please contact the maintainer(@fukai-t) by email.
+(You can find the email address on the GitHub profile linked from the username @fukai-t.)
+
+# A modified version of MilvusVisor providing lightweight isolation on NVIDIA BlueField-2 SmartNIC
+
+This branch includes a research version of MilvusVisor that provides **multiple lightweight isolated environments** on the ARM processor of the NVIDIA BlueField-2 SmartNIC.
+
+This version of MilvusVisor uses **static partitioning** to create multiple isolated guest environments, and we have confirmed that Linux can run in each environment.
+
+This branch also includes code that provides a **virtio-net interface** for guest environments.
+Using the virtio-net interfaces, a guest OS can communicate with another guest OS that has access to a physical network interface.
+
+
+## Research
+This branch was developed as part of the following research work.
+
+```bibtex
+@inproceedings{10.1145/3721888.3722090,
+author = {Fukai, Takaaki and Mori, Manami and Sakamoto, Ryuichi and Hirofuchi, Takahiro and Asaka, Takuya},
+title = {A Thin Hypervisor Approach to Multi-Tenant SmartNICs in Edge Data Centers},
+year = {2025},
+isbn = {9798400715594},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3721888.3722090},
+doi = {10.1145/3721888.3722090},
+booktitle = {Proceedings of the 8th International Workshop on Edge Systems, Analytics and Networking},
+pages = {1–6},
+numpages = {6},
+keywords = {SmartNIC, edge datacenter, thin hypervisor},
+location = {World Trade Center, Rotterdam, Netherlands},
+series = {EdgeSys '25}
+}
+```
+
+## Acknowledgments
+This work was supported by JST CREST, Japan, Grant Number JPMJCR22M3.
+
+
+### ----- Below is the original README.md of MilvusVisor -----
+
 # MilvusVisor
 
 MilvusVisor is a thin hypervisor that runs on aarch64 CPUs.
