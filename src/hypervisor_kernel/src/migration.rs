@@ -20,6 +20,7 @@ use core::mem::{MaybeUninit, size_of};
 use core::ptr;
 
 pub const HVC_MIGRATION_START: u16 = 0xFFF2;
+pub const HVC_MIGRATION_CONTINUE: u16 = 0xFFF4;
 pub const HVC_MIGRATION_RECEIVE: u16 = 0xFFF3;
 
 #[repr(C)]
@@ -54,6 +55,21 @@ struct MigrationData {
     system_registers: SystemRegisters,
     hypervisor_mem_start: usize,
     hypervisor_mem_end: usize,
+    serial_state: SerialState,
+    gic_state: Gicv2State,
+    gic_distributor_state: GicDistributorState,
+}
+
+#[repr(C)]
+struct MigrationStartData {
+    hypervisor_mem_start: usize,
+    hypervisor_mem_end: usize,
+}
+
+#[repr(C)]
+struct MigrationEndData {
+    general_purpose_registers: GeneralPurposeRegisters,
+    system_registers: SystemRegisters,
     serial_state: SerialState,
     gic_state: Gicv2State,
     gic_distributor_state: GicDistributorState,
@@ -467,6 +483,9 @@ fn restore_gic_distributor_state(state: &GicDistributorState) {
     }
 }
 
+// 次にmigrationすべきmemoryのアドレス
+static mut MIGRATION_TARGET_MEMORY_ADDR: usize  = 0x0;
+
 // 共有メモリにプログラムの状態を保存することでmigrationを開始する
 pub fn start_migration(
     regs: &GeneralPurposeRegisters,
@@ -482,138 +501,37 @@ pub fn start_migration(
             .unwrap()
     };
 
-    let id_aa64pfr0_el1 = cpu::get_id_aa64pfr0_el1();
-    let mut zcr_el1 = 0;
-    if (id_aa64pfr0_el1 & cpu::ID_AA64PFR0_EL1_SVE) != 0 {
-        println!("SVE is enabled");
-        zcr_el1 = cpu::get_zcr_el1();
-    }
-
-    let r = SystemRegisters {
-        cpacr_el1: cpu::get_cpacr_el1(),
-        ttbr0_el1: cpu::get_ttbr0_el1(),
-        ttbr1_el1: cpu::get_ttbr1_el1(),
-        tcr_el1: cpu::get_tcr_el1(),
-        mair_el1: cpu::get_mair_el1(),
-        sctlr_el1: cpu::get_sctlr_el1(),
-        vbar_el1: cpu::get_vbar_el1(),
-        elr_el1: cpu::get_elr_el1(),
-        contextidr_el1: cpu::get_contextidr_el1(),
-        tpidr_el0: cpu::get_tpidr_el0(),
-        tpidr_el1: cpu::get_tpidr_el1(),
-        afsr0_el1: cpu::get_afsr0_el1(),
-        afsr1_el1: cpu::get_afsr1_el1(),
-        spsr_el2: cpu::get_spsr_el2(),
-        spsr_el1: cpu::get_spsr_el1(),
-        elr_el2: cpu::get_elr_el2(),
-        sp_el1: cpu::get_sp_el1(),
-        sp_el0: cpu::get_sp_el0(),
-        esr_el1: cpu::get_esr_el1(),
-        far_el1: cpu::get_far_el1(),
-        zcr_el1,
-    };
-
-    // シリアルの状態を保存する
-    let serial_state = unsafe { SerialState::read_from_hardware() };
-    serial_state.dump("Migration capture");
-    let uart_fr: u16 = unsafe { serial::read_serial_register(UART_FR_OFFSET) };
-    println!("UART FR (Flag Register): {:#x} ({:#b})", uart_fr, uart_fr);
-
-    let mut gic_state = Gicv2State::default();
-    let mpidr = cpu::get_mpidr_el1();
-    if let Some((_gicv_base, gich_base)) = gic::find_vgic_base(mpidr) {
-        let gich_page = gich_base & PAGE_MASK;
-        let gich_offset = gich_base - gich_page;
-        match create_temporary_mapping(gich_page, GICH_MAPPING_SIZE) {
-            Ok(temp_base) => {
-                let gich_virt = temp_base + gich_offset;
-                let original_hcr = disable_delivery(gich_virt);
-                let vtr = read_vtr(gich_virt);
-                gic_state.present = 1;
-                gic_state.hcr = original_hcr;
-                gic_state.vtr = vtr;
-                gic_state.vmcr = read_vmcr(gich_virt);
-                gic_state.misr = read_misr(gich_virt);
-                for idx in 0..2 {
-                    gic_state.eisr[idx] = read_eisr(gich_virt, idx);
-                    gic_state.elrsr[idx] = read_elrsr(gich_virt, idx);
-                }
-
-                let lr_count = lr_count_from_vtr(vtr);
-                gic_state.lr_count = lr_count as u8;
-                for idx in 0..lr_count {
-                    gic_state.lrs[idx] = read_lr(gich_virt, idx);
-                }
-
-                let apr_count = apr_count_from_vtr(vtr);
-                gic_state.apr_count = apr_count as u8;
-                for idx in 0..apr_count {
-                    gic_state.apr[idx] = read_apr(gich_virt, idx);
-                }
-
-                restore_delivery(gich_virt, original_hcr);
-                if let Err(()) = remove_temporary_mapping(temp_base, GICH_MAPPING_SIZE) {
-                    println!(
-                        "Failed to remove temporary mapping for GICH base {:x}",
-                        gich_base
-                    );
-                }
-            }
-            Err(()) => {
-                println!("Failed to map GICH base for MPIDR {:x}", mpidr);
-            }
-        }
-    } else {
-        println!("GICH base not found for MPIDR {:x}", mpidr);
-    }
-
-    let gic_distributor_state = snapshot_gic_distributor_state();
-    println!("==== GICD Migration State ====");
-    println!("GICD CTLR: {:#x}", gic_distributor_state.ctlr);
-    println!("GICD STATUSR: {:#x}", gic_distributor_state.statusr);
-    for idx in 0..gic_distributor_state.igroupr.len() {
-        println!(
-            "GICD IGROUPR[{}]: {:#x}",
-            idx, gic_distributor_state.igroupr[idx]
-        );
-    }
-    for idx in 0..gic_distributor_state.isenabler.len() {
-        println!(
-            "GICD ISENABLER[{}]: {:#x}",
-            idx, gic_distributor_state.isenabler[idx]
-        );
-    }
-    for idx in 0..gic_distributor_state.ispendr.len() {
-        println!(
-            "GICD ISPENDR[{}]: {:#x}",
-            idx, gic_distributor_state.ispendr[idx]
-        );
-    }
-    for idx in 0..gic_distributor_state.isactiver.len() {
-        println!(
-            "GICD ISACTIVER[{}]: {:#x}",
-            idx, gic_distributor_state.isactiver[idx]
-        );
-    }
-    println!("============================");
-
-    let migration_data = MigrationData {
-        general_purpose_registers: regs.clone(),
-        system_registers: r,
+    let migration_data = MigrationStartData{
         hypervisor_mem_start: el2_memory_start,
         hypervisor_mem_end: el2_memory_end,
-        serial_state,
-        gic_state,
-        gic_distributor_state,
     };
     println!("Sending base information");
     shared_memory.clear();
     shared_memory.write(unsafe { any_as_u8_slice(&migration_data) });
-    println!("Sending memory");
 
-    //　メモリ領域をまるごとコピーする
-    let mut addr = MEM_START;
-    while addr < MEM_END {
+    unsafe { MIGRATION_TARGET_MEMORY_ADDR = MEM_START };
+
+    println!("Prepared migration start");
+    Ok(())
+}
+
+// migration作業を継続する
+pub fn continue_migration(
+    regs: &mut GeneralPurposeRegisters,
+    el2_memory_start: usize,
+    el2_memory_end: usize,
+) -> Result<(), ()> {
+    println!("Continue migration...");
+    let mut addr = unsafe { MIGRATION_TARGET_MEMORY_ADDR };
+    // TODO: 今はアドレスを決め打ちしている
+    let shared_memory: &mut SharedMemory = unsafe {
+        ptr::with_exposed_provenance_mut::<SharedMemory>(0x80_0000_0000)
+            .as_mut()
+            .unwrap()
+    };
+
+    let mut count = 0;
+    while addr < MEM_END && count < 32 {
         // el2領域はPAGE_SIZEでアラインされていることを仮定
         if addr < el2_memory_start || addr >= el2_memory_end {
             let target_phys_addr = addr;
@@ -639,10 +557,142 @@ pub fn start_migration(
             if target_phys_addr & 0xffffff == 0 {
                 println!("addr: {:x} remove temp table", target_phys_addr);
             }
+            count += 1;
         }
         addr += PAGE_SIZE;
     }
-    println!("End migration");
+
+    // メモリを送り終わった後はregister系を送る
+    if addr >= MEM_END {
+        let id_aa64pfr0_el1 = cpu::get_id_aa64pfr0_el1();
+        let mut zcr_el1 = 0;
+        if (id_aa64pfr0_el1 & cpu::ID_AA64PFR0_EL1_SVE) != 0 {
+            println!("SVE is enabled");
+            zcr_el1 = cpu::get_zcr_el1();
+        }
+
+        let r = SystemRegisters {
+            cpacr_el1: cpu::get_cpacr_el1(),
+            ttbr0_el1: cpu::get_ttbr0_el1(),
+            ttbr1_el1: cpu::get_ttbr1_el1(),
+            tcr_el1: cpu::get_tcr_el1(),
+            mair_el1: cpu::get_mair_el1(),
+            sctlr_el1: cpu::get_sctlr_el1(),
+            vbar_el1: cpu::get_vbar_el1(),
+            elr_el1: cpu::get_elr_el1(),
+            contextidr_el1: cpu::get_contextidr_el1(),
+            tpidr_el0: cpu::get_tpidr_el0(),
+            tpidr_el1: cpu::get_tpidr_el1(),
+            afsr0_el1: cpu::get_afsr0_el1(),
+            afsr1_el1: cpu::get_afsr1_el1(),
+            spsr_el2: cpu::get_spsr_el2(),
+            spsr_el1: cpu::get_spsr_el1(),
+            elr_el2: cpu::get_elr_el2(),
+            sp_el1: cpu::get_sp_el1(),
+            sp_el0: cpu::get_sp_el0(),
+            esr_el1: cpu::get_esr_el1(),
+            far_el1: cpu::get_far_el1(),
+            zcr_el1,
+        };
+
+        // シリアルの状態を保存する
+        let serial_state = unsafe { SerialState::read_from_hardware() };
+        serial_state.dump("Migration capture");
+        let uart_fr: u16 = unsafe { serial::read_serial_register(UART_FR_OFFSET) };
+        println!("UART FR (Flag Register): {:#x} ({:#b})", uart_fr, uart_fr);
+
+        let mut gic_state = Gicv2State::default();
+        let mpidr = cpu::get_mpidr_el1();
+        if let Some((_gicv_base, gich_base)) = gic::find_vgic_base(mpidr) {
+            let gich_page = gich_base & PAGE_MASK;
+            let gich_offset = gich_base - gich_page;
+            match create_temporary_mapping(gich_page, GICH_MAPPING_SIZE) {
+                Ok(temp_base) => {
+                    let gich_virt = temp_base + gich_offset;
+                    let original_hcr = disable_delivery(gich_virt);
+                    let vtr = read_vtr(gich_virt);
+                    gic_state.present = 1;
+                    gic_state.hcr = original_hcr;
+                    gic_state.vtr = vtr;
+                    gic_state.vmcr = read_vmcr(gich_virt);
+                    gic_state.misr = read_misr(gich_virt);
+                    for idx in 0..2 {
+                        gic_state.eisr[idx] = read_eisr(gich_virt, idx);
+                        gic_state.elrsr[idx] = read_elrsr(gich_virt, idx);
+                    }
+
+                    let lr_count = lr_count_from_vtr(vtr);
+                    gic_state.lr_count = lr_count as u8;
+                    for idx in 0..lr_count {
+                        gic_state.lrs[idx] = read_lr(gich_virt, idx);
+                    }
+
+                    let apr_count = apr_count_from_vtr(vtr);
+                    gic_state.apr_count = apr_count as u8;
+                    for idx in 0..apr_count {
+                        gic_state.apr[idx] = read_apr(gich_virt, idx);
+                    }
+
+                    restore_delivery(gich_virt, original_hcr);
+                    if let Err(()) = remove_temporary_mapping(temp_base, GICH_MAPPING_SIZE) {
+                        println!(
+                            "Failed to remove temporary mapping for GICH base {:x}",
+                            gich_base
+                        );
+                    }
+                }
+                Err(()) => {
+                    println!("Failed to map GICH base for MPIDR {:x}", mpidr);
+                }
+            }
+        } else {
+            println!("GICH base not found for MPIDR {:x}", mpidr);
+        }
+
+        let gic_distributor_state = snapshot_gic_distributor_state();
+        println!("==== GICD Migration State ====");
+        println!("GICD CTLR: {:#x}", gic_distributor_state.ctlr);
+        println!("GICD STATUSR: {:#x}", gic_distributor_state.statusr);
+        for idx in 0..gic_distributor_state.igroupr.len() {
+            println!(
+                "GICD IGROUPR[{}]: {:#x}",
+                idx, gic_distributor_state.igroupr[idx]
+            );
+        }
+        for idx in 0..gic_distributor_state.isenabler.len() {
+            println!(
+                "GICD ISENABLER[{}]: {:#x}",
+                idx, gic_distributor_state.isenabler[idx]
+            );
+        }
+        for idx in 0..gic_distributor_state.ispendr.len() {
+            println!(
+                "GICD ISPENDR[{}]: {:#x}",
+                idx, gic_distributor_state.ispendr[idx]
+            );
+        }
+        for idx in 0..gic_distributor_state.isactiver.len() {
+            println!(
+                "GICD ISACTIVER[{}]: {:#x}",
+                idx, gic_distributor_state.isactiver[idx]
+            );
+        }
+        println!("============================");
+
+        let migration_data = MigrationEndData {
+            general_purpose_registers: regs.clone(),
+            system_registers: r,
+            serial_state,
+            gic_state,
+            gic_distributor_state,
+        };
+        println!("Sending base information");
+        shared_memory.write(unsafe { any_as_u8_slice(&migration_data) });
+        println!("migration end");
+        return Ok(());
+    }
+    unsafe { MIGRATION_TARGET_MEMORY_ADDR = addr };
+
     Ok(())
 }
 
@@ -655,14 +705,14 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
             .unwrap()
     };
     // まずはレジスタ情報がやってくるはず
-    let mut migration_data = MaybeUninit::<MigrationData>::uninit();
+    let mut migration_data = MaybeUninit::<MigrationStartData>::uninit();
     loop {
         if let Some(data) = shared_memory.read() {
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     data.as_ptr(),
                     migration_data.as_mut_ptr() as *mut u8,
-                    size_of::<MigrationData>(),
+                    size_of::<MigrationStartData>(),
                 );
             }
             shared_memory.clear();
@@ -671,7 +721,58 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
     }
     println!("Received base information");
     let migration_data = unsafe { migration_data.assume_init() };
-    println!("Got migration data");
+
+    // 次はメモリ情報を読み込んでいく
+    let mut addr = MEM_START;
+
+    println!("Receiving memory");
+    while addr < MEM_END {
+        if addr < migration_data.hypervisor_mem_start || addr >= migration_data.hypervisor_mem_end {
+            let target_phys_addr = addr;
+            // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
+            let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
+            loop {
+                if let Some(data) = shared_memory.read() {
+                    //println!("addr: {:x} data[0]: {:x}", target_phys_addr, data[0]);
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            data.as_ptr(),
+                            target_virt_addr as *mut u8,
+                            PAGE_SIZE,
+                        );
+                    }
+                    //println!("addr: {:x} copied", target_phys_addr);
+                    shared_memory.clear();
+                    if target_phys_addr & 0xffffff == 0 {
+                        println!("addr: {:x} cleared", target_phys_addr);
+                    }
+                    break;
+                }
+            }
+            remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
+        }
+        addr += PAGE_SIZE;
+    }
+    println!("End memory migration");
+
+    // 次はシステムレジスタ関連
+    let mut migration_data = MaybeUninit::<MigrationEndData>::uninit();
+    loop {
+        if let Some(data) = shared_memory.read() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr(),
+                    migration_data.as_mut_ptr() as *mut u8,
+                    size_of::<MigrationEndData>(),
+                );
+            }
+            shared_memory.clear();
+            break;
+        }
+    }
+    println!("Received system registers");
+    let migration_data = unsafe { migration_data.assume_init() };
+
     let SystemRegisters {
         cpacr_el1,
         ttbr0_el1,
@@ -861,39 +962,6 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
     let src_regs = migration_data.general_purpose_registers;
     regs.copy_from_slice(src_regs.as_slice());
 
-    println!("hyp_mem_start: {:x}", migration_data.hypervisor_mem_start);
-    println!("hyp_mem_end: {:x}", migration_data.hypervisor_mem_end);
-    // 次はメモリ情報を読み込んでいく
-    let mut addr = MEM_START;
-
-    println!("Receiving memory");
-    while addr < MEM_END {
-        if addr < migration_data.hypervisor_mem_start || addr >= migration_data.hypervisor_mem_end {
-            let target_phys_addr = addr;
-            // 読み込み対象の物理アドレスに対して一時ページテーブルをつくる
-            let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
-            loop {
-                if let Some(data) = shared_memory.read() {
-                    //println!("addr: {:x} data[0]: {:x}", target_phys_addr, data[0]);
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            data.as_ptr(),
-                            target_virt_addr as *mut u8,
-                            PAGE_SIZE,
-                        );
-                    }
-                    //println!("addr: {:x} copied", target_phys_addr);
-                    shared_memory.clear();
-                    if target_phys_addr & 0xffffff == 0 {
-                        println!("addr: {:x} cleared", target_phys_addr);
-                    }
-                    break;
-                }
-            }
-            remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
-        }
-        addr += PAGE_SIZE;
-    }
-    println!("End migration");
+    println!("Done");
     Ok(())
 }

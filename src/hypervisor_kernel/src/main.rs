@@ -11,7 +11,7 @@
 
 #[cfg(feature = "shared_memory")]
 use crate::drivers::shared_memory::SharedMemory;
-use crate::migration::receive_migration;
+use crate::migration::{continue_migration, receive_migration};
 #[cfg(feature = "shared_memory")]
 use crate::migration::start_migration;
 use common::cpu::*;
@@ -265,6 +265,12 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             migration::HVC_MIGRATION_START => {
                 println!("Migration Start");
                 start_migration(regs, unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END })
+                    .expect("Failed to start migration");
+            }
+            #[cfg(feature = "shared_memory")]
+            migration::HVC_MIGRATION_CONTINUE => {
+                println!("Migration Start");
+                continue_migration(regs, unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END })
                     .expect("Failed to start migration");
             }
             #[cfg(feature = "shared_memory")]
