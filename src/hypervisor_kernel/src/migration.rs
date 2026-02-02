@@ -1,5 +1,6 @@
 use crate::drivers::shared_memory::SharedMemory;
 use crate::gic;
+use crate::paging::clear_stage2_entry_dirty_state;
 use crate::serial::{
     self, SerialState, UART_CR_OFFSET, UART_DMACR_OFFSET, UART_FBRD_OFFSET, UART_FR_OFFSET,
     UART_IBRD_OFFSET, UART_IFLS_OFFSET, UART_ILPR_OFFSET, UART_IMSC_OFFSET, UART_LCRH_OFFSET,
@@ -173,6 +174,8 @@ const GICD_NSACR_OFFSET: usize = 0xE00;
 const GICD_CPENDSGIR_OFFSET: usize = 0xF10;
 const GICD_SPENDSGIR_OFFSET: usize = 0xF20;
 const GICD_INMIR_OFFSET: usize = 0xF80;
+pub const MIGRATION_MEMORY_START_ADDR: usize = MEM_START;
+pub const MIGRATION_MEMORY_END_ADDR: usize = MEM_END;
 
 /// Wait until the distributor reports that all pending register writes are complete.
 fn wait_for_gicd_rwp(gicd_virt: usize, version: u8) {
@@ -484,7 +487,8 @@ fn restore_gic_distributor_state(state: &GicDistributorState) {
 }
 
 // 次にmigrationすべきmemoryのアドレス
-static mut MIGRATION_TARGET_MEMORY_ADDR: usize  = 0x0;
+static mut MIGRATION_TARGET_MEMORY_ADDR: usize = 0x0;
+const MIGRATION_TARGET_MEMORY_ADDR_START: usize = 0x0;
 
 // 共有メモリにプログラムの状態を保存することでmigrationを開始する
 pub fn start_migration(
@@ -501,7 +505,7 @@ pub fn start_migration(
             .unwrap()
     };
 
-    let migration_data = MigrationStartData{
+    let migration_data = MigrationStartData {
         hypervisor_mem_start: el2_memory_start,
         hypervisor_mem_end: el2_memory_end,
     };
@@ -557,10 +561,15 @@ pub fn continue_migration(
             if target_phys_addr & 0xffffff == 0 {
                 println!("addr: {:x} remove temp table", target_phys_addr);
             }
+            // コピーの終わったページのdirty stateをクリアする
+            clear_stage2_entry_dirty_state(target_phys_addr)?;
+            println!("addr: {:x} clear dirty state", target_phys_addr);
             count += 1;
         }
         addr += PAGE_SIZE;
     }
+
+    // TODO: dirty listに入ったメモリの転送
 
     // メモリを送り終わった後はregister系を送る
     if addr >= MEM_END {

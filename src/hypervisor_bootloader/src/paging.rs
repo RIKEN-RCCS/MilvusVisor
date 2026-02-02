@@ -634,6 +634,7 @@ pub fn setup_stage_2_translation() -> Result<(), ()> {
         (0b11 << VTCR_EL2_SH0_BITS_OFFSET) /* Inner Sharable */ |
         (0b01 << VTCR_EL2_ORG0_BITS_OFFSET) /* Outer Write-Back Read-Allocate Write-Allocate Cacheable */ |
         (0b01 << VTCR_EL2_IRG0_BITS_OFFSET) /* Inner Write-Back Read-Allocate Write-Allocate Cacheable */ |
+        (0b01 << VTCR_EL2_HD_BIT_OFFSET) /* Hardware management of dirty state in stage 2 translations */ |
         ((sl0 as u64) << VTCR_EL2_SL0_BITS_OFFSET) |
         ((t0sz as u64) << VTCR_EL2_T0SZ_BITS_OFFSET);
 

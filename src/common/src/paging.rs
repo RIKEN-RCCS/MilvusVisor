@@ -20,6 +20,7 @@ pub const PAGE_TABLE_SIZE: usize = 0x1000;
 
 pub const PAGE_DESCRIPTORS_UPPER_ATTRIBUTES_OFFSET: u64 = 50;
 pub const PAGE_DESCRIPTORS_CONTIGUOUS: u64 = 1 << 52;
+pub const PAGE_DESCRIPTORS_DBM: u64 = 1 << 51; // Dirty Bit Modifier (Stage 2 dirty state)
 pub const PAGE_DESCRIPTORS_NX_BIT_OFFSET: u64 = 54;
 
 pub const PAGE_DESCRIPTORS_NT: u64 = 1 << 16;

@@ -514,6 +514,161 @@ fn map_address_recursive_stage2(
     Ok(())
 }
 
+fn convert_stage2_block_descriptor_to_table(
+    descriptor: &mut u64,
+    table_level: i8,
+    t0sz: u8,
+) -> Result<usize, ()> {
+    let next_table_address = allocate_page_table_for_stage_2(table_level, t0sz, false, 1)?;
+    let shift_level = table_level_to_table_shift(STAGE_2_PAGE_SHIFT, table_level);
+    let mut block_physical_address = extract_output_address(*descriptor, STAGE_2_PAGE_SHIFT);
+    let mut descriptor_attribute = *descriptor ^ (block_physical_address as u64);
+    if table_level + 1 == 3 {
+        descriptor_attribute |= 0b11;
+        descriptor_attribute &= !PAGE_DESCRIPTORS_NT;
+    }
+    descriptor_attribute &= !PAGE_DESCRIPTORS_CONTIGUOUS;
+
+    let next_level_entries = unsafe {
+        core::slice::from_raw_parts_mut(
+            next_table_address as *mut u64,
+            PAGE_TABLE_SIZE / size_of::<u64>(),
+        )
+    };
+    for entry in next_level_entries {
+        *entry = (block_physical_address as u64) | descriptor_attribute;
+        block_physical_address += 1 << (shift_level - 9);
+    }
+
+    *descriptor = (next_table_address as u64) | 0b11;
+    Ok(next_table_address)
+}
+
+pub fn make_stage2_entry_read_only(address: usize) -> Result<(), ()> {
+    let vtcr_el2 = get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
+        0b00 => 2,
+        0b01 => 1,
+        0b10 => 0,
+        0b11 => 3,
+        _ => unreachable!(),
+    };
+
+    let concatenated_tables =
+        calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level);
+    let mut current_concatenated_tables = concatenated_tables;
+    let mut table_level = initial_look_up_level;
+    let mut table_address = TTBR::new(get_vttbr_el2()).get_base_address();
+    let ipa = address & STAGE_2_PAGE_MASK;
+
+    assert!(ipa < (1 << (64 - vtcr_el2_t0sz)));
+
+    loop {
+        let shift_level = table_level_to_table_shift(STAGE_2_PAGE_SHIFT, table_level);
+        let table_len = (PAGE_TABLE_SIZE * current_concatenated_tables as usize) / size_of::<u64>();
+        let table_entries =
+            unsafe { core::slice::from_raw_parts_mut(table_address as *mut u64, table_len) };
+        let mask = (0x200 * current_concatenated_tables as usize) - 1;
+        let table_index = (ipa >> shift_level) & mask;
+        let descriptor = &mut table_entries[table_index];
+
+        if table_level == 3 {
+            if *descriptor & 0b11 != 0b11 {
+                return Err(());
+            }
+            const STAGE2_PERMISSION_SHIFT: u64 = 6;
+            let readable_bit =
+                1u64 << (STAGE2_PERMISSION_SHIFT + MEMORY_PERMISSION_READABLE_BIT as u64);
+            let writable_bit =
+                1u64 << (STAGE2_PERMISSION_SHIFT + MEMORY_PERMISSION_WRITABLE_BIT as u64);
+            *descriptor |= readable_bit;
+            *descriptor &= !writable_bit;
+            flush_tlb_el1();
+            return Ok(());
+        }
+
+        if is_block_descriptor(*descriptor) {
+            table_address =
+                convert_stage2_block_descriptor_to_table(descriptor, table_level, vtcr_el2_t0sz)?;
+        } else if is_descriptor_table_or_level_3_descriptor(*descriptor) {
+            table_address = extract_output_address(*descriptor, STAGE_2_PAGE_SHIFT);
+        } else {
+            return Err(());
+        }
+
+        table_level += 1;
+        current_concatenated_tables = 1;
+    }
+}
+
+/// Clear the dirty state of a Stage 2 page table entry
+///
+/// This function clears bit 51 (DBM/dirty state) of the Stage 2 page descriptor.
+/// When VTCR_EL2.HD is enabled, hardware manages dirty state via bit 51 of the
+/// page descriptor (1=dirty, 0=clean).
+/// If the entry is a block descriptor, it will be converted to a page table first.
+///
+/// # Arguments
+/// * `address` - The intermediate physical address (IPA) of the page
+///
+/// # Returns
+/// * `Ok(())` if successful
+/// * `Err(())` if the entry is invalid or allocation fails
+pub fn clear_stage2_entry_dirty_state(address: usize) -> Result<(), ()> {
+    let vtcr_el2 = get_vtcr_el2();
+    let vtcr_el2_sl0 = ((vtcr_el2 & VTCR_EL2_SL0) >> VTCR_EL2_SL0_BITS_OFFSET) as u8;
+    let vtcr_el2_t0sz = ((vtcr_el2 & VTCR_EL2_T0SZ) >> VTCR_EL2_T0SZ_BITS_OFFSET) as u8;
+    let initial_look_up_level: i8 = match vtcr_el2_sl0 {
+        0b00 => 2,
+        0b01 => 1,
+        0b10 => 0,
+        0b11 => 3,
+        _ => unreachable!(),
+    };
+
+    let concatenated_tables =
+        calculate_number_of_concatenated_page_tables(vtcr_el2_t0sz, initial_look_up_level);
+    let mut current_concatenated_tables = concatenated_tables;
+    let mut table_level = initial_look_up_level;
+    let mut table_address = TTBR::new(get_vttbr_el2()).get_base_address();
+    let ipa = address & STAGE_2_PAGE_MASK;
+
+    assert!(ipa < (1 << (64 - vtcr_el2_t0sz)));
+
+    loop {
+        let shift_level = table_level_to_table_shift(STAGE_2_PAGE_SHIFT, table_level);
+        let table_len = (PAGE_TABLE_SIZE * current_concatenated_tables as usize) / size_of::<u64>();
+        let table_entries =
+            unsafe { core::slice::from_raw_parts_mut(table_address as *mut u64, table_len) };
+        let mask = (0x200 * current_concatenated_tables as usize) - 1;
+        let table_index = (ipa >> shift_level) & mask;
+        let descriptor = &mut table_entries[table_index];
+
+        if table_level == 3 {
+            if *descriptor & 0b11 != 0b11 {
+                return Err(());
+            }
+            *descriptor &= !PAGE_DESCRIPTORS_DBM; // Clear bit 51 (dirty state)
+            flush_tlb_el1();
+            return Ok(());
+        }
+
+        if is_block_descriptor(*descriptor) {
+            table_address =
+                convert_stage2_block_descriptor_to_table(descriptor, table_level, vtcr_el2_t0sz)?;
+        } else if is_descriptor_table_or_level_3_descriptor(*descriptor) {
+            table_address = extract_output_address(*descriptor, STAGE_2_PAGE_SHIFT);
+        } else {
+            return Err(());
+        }
+
+        table_level += 1;
+        current_concatenated_tables = 1;
+    }
+}
+
 /// Set up to trap memory access from EL1/EL0
 ///
 /// This will modify the stage2 page table to trap the access of (`address` ~ (`address` + `size`))
