@@ -1,6 +1,6 @@
 use crate::drivers::shared_memory::SharedMemory;
 use crate::gic;
-use crate::paging::clear_stage2_entry_dirty_state;
+use crate::paging::{clear_stage2_entry_dirty_state, is_stage2_entry_dirty};
 use crate::serial::{
     self, SerialState, UART_CR_OFFSET, UART_DMACR_OFFSET, UART_FBRD_OFFSET, UART_FR_OFFSET,
     UART_IBRD_OFFSET, UART_IFLS_OFFSET, UART_ILPR_OFFSET, UART_IMSC_OFFSET, UART_LCRH_OFFSET,
@@ -535,7 +535,7 @@ pub fn continue_migration(
     };
 
     let mut count = 0;
-    while addr < MEM_END && count < 32 {
+    while addr < MEM_END && count < 128 {
         // el2領域はPAGE_SIZEでアラインされていることを仮定
         if addr < el2_memory_start || addr >= el2_memory_end {
             let target_phys_addr = addr;
@@ -569,10 +569,37 @@ pub fn continue_migration(
         addr += PAGE_SIZE;
     }
 
-    // TODO: dirty listに入ったメモリの転送
-
     // メモリを送り終わった後はregister系を送る
     if addr >= MEM_END {
+        // dirty stateを読んで、dirtyなページを転送する
+        println!("Re-transferring dirty pages after initial sweep");
+        let mut dirty_addr = MEM_START;
+        let mut dirty_pages = 0usize;
+        while dirty_addr < MEM_END {
+            if dirty_addr < el2_memory_start || dirty_addr >= el2_memory_end {
+                if is_stage2_entry_dirty(dirty_addr)? {
+                    let target_phys_addr = dirty_addr;
+                    let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
+                    while !shared_memory.is_ready_to_write() {}
+                    shared_memory.modify(
+                        |dst| unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                target_virt_addr as *const u8,
+                                dst.as_mut_ptr(),
+                                PAGE_SIZE,
+                            );
+                        },
+                        PAGE_SIZE,
+                    );
+                    remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
+                    clear_stage2_entry_dirty_state(target_phys_addr)?;
+                    dirty_pages += 1;
+                }
+            }
+            dirty_addr += PAGE_SIZE;
+        }
+        println!("Dirty page re-transfer complete ({} pages)", dirty_pages);
+
         let id_aa64pfr0_el1 = cpu::get_id_aa64pfr0_el1();
         let mut zcr_el1 = 0;
         if (id_aa64pfr0_el1 & cpu::ID_AA64PFR0_EL1_SVE) != 0 {
