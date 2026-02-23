@@ -688,6 +688,13 @@ pub fn get_id_aa64mmfr0_el1() -> u64 {
 }
 
 #[inline(always)]
+pub fn get_id_aa64mmfr1_el1() -> u64 {
+    let id_aa64mmfr1_el1: u64;
+    unsafe { asm!("mrs {:x}, id_aa64mmfr1_el1", out(reg) id_aa64mmfr1_el1) };
+    id_aa64mmfr1_el1
+}
+
+#[inline(always)]
 pub fn get_id_aa64pfr0_el1() -> u64 {
     let id_aa64pfr0_el1: u64;
     unsafe { asm!("mrs {:x}, id_aa64pfr0_el1", out(reg) id_aa64pfr0_el1) };

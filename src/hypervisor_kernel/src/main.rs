@@ -188,6 +188,16 @@ fn show_kernel_info() {
     print_is_feature_enabled!("mrs_msr_emulation");
     print_is_feature_enabled!("virtio");
     print_is_feature_enabled!("virtio_net");
+
+    let hafdbs = common::cpu::get_id_aa64mmfr1_el1() & 0b1111;
+    println!(
+        "FEAT_HAFDBS: {}",
+        match hafdbs {
+            0b0001 => "Access flag only",
+            0b0010 => "Access flag + dirty state",
+            _ => "Not supported",
+        }
+    );
 }
 
 /// Allocate memory from memory pool
