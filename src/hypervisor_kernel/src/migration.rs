@@ -520,11 +520,12 @@ pub fn start_migration(
 }
 
 // migration作業を継続する
+// すべてのmigrationが終わったらtrueを返す
 pub fn continue_migration(
     regs: &mut GeneralPurposeRegisters,
     el2_memory_start: usize,
     el2_memory_end: usize,
-) -> Result<(), ()> {
+) -> Result<bool, ()> {
     println!("Continue migration...");
     let mut addr = unsafe { MIGRATION_TARGET_MEMORY_ADDR };
     // TODO: 今はアドレスを決め打ちしている
@@ -571,7 +572,7 @@ pub fn continue_migration(
 
     // メモリを送り終わった後はregister系を送る
     if addr >= MEM_END {
-        // dirty stateを読んで、dirtyなページを転送する
+        // dirty stateを読んで、dirtyなページをアドレス付きで転送する
         println!("Re-transferring dirty pages after initial sweep");
         let mut dirty_addr = MEM_START;
         let mut dirty_pages = 0usize;
@@ -579,6 +580,9 @@ pub fn continue_migration(
             if dirty_addr < el2_memory_start || dirty_addr >= el2_memory_end {
                 if is_stage2_entry_dirty(dirty_addr)? {
                     let target_phys_addr = dirty_addr;
+                    // アドレスを先に送る
+                    shared_memory.write(unsafe { any_as_u8_slice(&target_phys_addr) });
+                    // ページデータを送る
                     let target_virt_addr = create_temporary_mapping(target_phys_addr, PAGE_SIZE)?;
                     while !shared_memory.is_ready_to_write() {}
                     shared_memory.modify(
@@ -599,6 +603,9 @@ pub fn continue_migration(
             dirty_addr += PAGE_SIZE;
         }
         println!("Dirty page re-transfer complete ({} pages)", dirty_pages);
+        // sentinelとしてMEM_ENDを送り、dirtyページの転送終了を知らせる
+        let sentinel: usize = MEM_END;
+        shared_memory.write(unsafe { any_as_u8_slice(&sentinel) });
 
         let id_aa64pfr0_el1 = cpu::get_id_aa64pfr0_el1();
         let mut zcr_el1 = 0;
@@ -725,11 +732,11 @@ pub fn continue_migration(
         println!("Sending base information");
         shared_memory.write(unsafe { any_as_u8_slice(&migration_data) });
         println!("migration end");
-        return Ok(());
+        return Ok(true);
     }
     unsafe { MIGRATION_TARGET_MEMORY_ADDR = addr };
 
-    Ok(())
+    Ok(false)
 }
 
 pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
@@ -790,6 +797,45 @@ pub fn receive_migration(regs: &mut GeneralPurposeRegisters) -> Result<(), ()> {
         addr += PAGE_SIZE;
     }
     println!("End memory migration");
+
+    // dirtyページを受け取る (sentinel MEM_END が来るまでループ)
+    println!("Receiving dirty pages");
+    loop {
+        let mut addr_buf = MaybeUninit::<usize>::uninit();
+        loop {
+            if let Some(data) = shared_memory.read() {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        addr_buf.as_mut_ptr() as *mut u8,
+                        size_of::<usize>(),
+                    );
+                }
+                shared_memory.clear();
+                break;
+            }
+        }
+        let dirty_phys_addr = unsafe { addr_buf.assume_init() };
+        if dirty_phys_addr == MEM_END {
+            break; // sentinel を受け取ったので終了
+        }
+        let target_virt_addr = create_temporary_mapping(dirty_phys_addr, PAGE_SIZE)?;
+        loop {
+            if let Some(data) = shared_memory.read() {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        target_virt_addr as *mut u8,
+                        PAGE_SIZE,
+                    );
+                }
+                shared_memory.clear();
+                break;
+            }
+        }
+        remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
+    }
+    println!("End dirty page migration");
 
     // 次はシステムレジスタ関連
     let mut migration_data = MaybeUninit::<MigrationEndData>::uninit();
