@@ -125,6 +125,8 @@ pub const HCR_EL2_APK: u64 = 1 << 40;
 pub const HCR_EL2_E2H: u64 = 1 << 34;
 pub const HCR_EL2_RW: u64 = 1 << 31;
 pub const HCR_EL2_TSC: u64 = 1 << 19;
+pub const HCR_EL2_TWE: u64 = 1 << 14;
+pub const HCR_EL2_TWI: u64 = 1 << 13;
 pub const HCR_EL2_VM: u64 = 1 << 0;
 
 /* VTCR_EL2 */
@@ -133,6 +135,7 @@ pub const VTCR_EL2_SL2: u64 = 1 << VTCR_EL2_SL2_BIT_OFFSET;
 pub const VTCR_EL2_RES1: u64 = 1 << 31;
 pub const VTCR_EL2_HWU_BITS_OFFSET: u64 = 25;
 pub const VTCR_EL2_HD_BIT_OFFSET: u64 = 22;
+pub const VTCR_EL2_HA_BIT_OFFSET: u64 = 21;
 pub const VTCR_EL2_PS_BITS_OFFSET: u64 = 16;
 pub const VTCR_EL2_PS: u64 = 0b111 << VTCR_EL2_PS_BITS_OFFSET;
 pub const VTCR_EL2_TG0_BITS_OFFSET: u64 = 14;

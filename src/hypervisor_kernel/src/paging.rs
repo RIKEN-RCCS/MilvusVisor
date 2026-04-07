@@ -648,7 +648,7 @@ pub fn is_stage2_entry_dirty(address: usize) -> Result<bool, ()> {
             if *descriptor & 0b11 != 0b11 {
                 return Err(());
             }
-            return Ok((*descriptor & PAGE_DESCRIPTORS_DBM) != 0);
+            return Ok((*descriptor & PAGE_DESCRIPTORS_S2AP_1) != 0);
         }
 
         if is_block_descriptor(*descriptor) {
@@ -668,7 +668,7 @@ pub fn is_stage2_entry_dirty(address: usize) -> Result<bool, ()> {
 /// Clear the dirty state of a Stage 2 page table entry
 ///
 /// This function clears bit 51 (DBM/dirty state) of the Stage 2 page descriptor.
-/// When VTCR_EL2.HD is enabled, hardware manages dirty state via bit 51 of the
+/// When both VTCR_EL2.HD and VTCR_EL2.HA are enabled, hardware manages dirty state via bit S2AP[1] (7 bit) of the
 /// page descriptor (1=dirty, 0=clean).
 /// If the entry is a block descriptor, it will be converted to a page table first.
 ///
@@ -712,7 +712,8 @@ pub fn clear_stage2_entry_dirty_state(address: usize) -> Result<(), ()> {
             if *descriptor & 0b11 != 0b11 {
                 return Err(());
             }
-            *descriptor &= !PAGE_DESCRIPTORS_DBM; // Clear bit 51 (dirty state)
+            *descriptor |= PAGE_DESCRIPTORS_DBM; // enable dirty state management
+            *descriptor &= !PAGE_DESCRIPTORS_S2AP_1; // clear dirty state
             flush_tlb_el1();
             return Ok(());
         }

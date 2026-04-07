@@ -24,6 +24,7 @@ pub const PAGE_DESCRIPTORS_DBM: u64 = 1 << 51; // Dirty Bit Modifier (Stage 2 di
 pub const PAGE_DESCRIPTORS_NX_BIT_OFFSET: u64 = 54;
 
 pub const PAGE_DESCRIPTORS_NT: u64 = 1 << 16;
+pub const PAGE_DESCRIPTORS_S2AP_1: u64 = 1 << 7;
 pub const PAGE_DESCRIPTORS_AF_BIT_OFFSET: u64 = 10;
 pub const PAGE_DESCRIPTORS_AF: u64 = 1 << PAGE_DESCRIPTORS_AF_BIT_OFFSET;
 pub const PAGE_DESCRIPTORS_SH_BITS_OFFSET: u64 = 8;

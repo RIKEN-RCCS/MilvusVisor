@@ -45,6 +45,20 @@ pub fn data_abort_handler(
     hpfar: u64,
     spsr: u64,
 ) -> Result<(), EmulationError> {
+    let isv = ((esr >> 24) & 1) != 0;
+    let sas = (esr >> 22) & 0b11;
+    let sse = ((esr >> 21) & 1) != 0;
+    let srt = (esr >> 16) & 0b1_1111;
+    let sf = ((esr >> 15) & 1) != 0;
+    let fnv = ((esr >> 10) & 1) != 0;
+    let s1ptw = ((esr >> 7) & 1) != 0;
+    let wnr = ((esr >> 6) & 1) != 0;
+    let dfsc = esr & 0b11_1111;
+    println!(
+        "DataAbort: ESR={:#X} ELR={:#X} FAR={:#X} HPFAR={:#X} ISV={} SAS={:#b} SSE={} SRT={} SF={} FNV={} S1PTW={} WnR={} DFSC={:#X}",
+        esr, elr, far, hpfar, isv, sas, sse, srt, sf, fnv, s1ptw, wnr, dfsc
+    );
+
     #[cfg(debug_assertions)]
     if (esr & (1 << 24)) != 0 {
         let sas = (esr >> 22) & 0b11;

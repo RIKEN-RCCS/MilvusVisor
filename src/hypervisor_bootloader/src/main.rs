@@ -849,6 +849,22 @@ fn set_up_el1() {
     let is_e2h_enabled = (get_hcr_el2() & HCR_EL2_E2H) != 0;
     let id_aa64pfr0_el1 = get_id_aa64pfr0_el1();
     let id_aa64pfr1_el1 = get_id_aa64pfr1_el1();
+    let id_aa64mmfr0_el1 = get_id_aa64mmfr0_el1();
+    let id_aa64mmfr1_el1 = get_id_aa64mmfr1_el1();
+    let midr_el1 = get_midr_el1();
+    let mpidr_el1 = get_mpidr_el1();
+
+    println!("EL2->EL1 setup start");
+    println!("  MIDR_EL1: {:#X}", midr_el1);
+    println!("  MPIDR_EL1: {:#X}", mpidr_el1);
+    println!("  ID_AA64PFR0_EL1: {:#X}", id_aa64pfr0_el1);
+    println!("  ID_AA64PFR1_EL1: {:#X}", id_aa64pfr1_el1);
+    println!("  ID_AA64MMFR0_EL1: {:#X}", id_aa64mmfr0_el1);
+    println!("  ID_AA64MMFR1_EL1: {:#X}", id_aa64mmfr1_el1);
+    println!("  HCR_EL2(before): {:#X}", get_hcr_el2());
+    println!("  CPTR_EL2(before): {:#X}", get_cptr_el2());
+    println!("  SCTLR_EL2(before): {:#X}", get_sctlr_el2());
+    println!("  TCR_EL2(original): {:#X}", unsafe { ORIGINAL_TCR_EL2 });
 
     /* CNTHCTL_EL2 & CNTVOFF_EL2 */
     set_cnthctl_el2(CNTHCTL_EL2_EL1PCEN | CNTHCTL_EL2_EL1PCTEN);
@@ -1034,6 +1050,14 @@ fn set_up_el1() {
     set_tcr_el1(tcr_el1);
     set_ttbr0_el1(ttbr0_el1);
 
+    println!("  HCR_EL2(after): {:#X}", get_hcr_el2());
+    println!("  CPTR_EL2(after): {:#X}", get_cptr_el2());
+    println!("  CPACR_EL1(after): {:#X}", get_cpacr_el1());
+    println!("  SCTLR_EL1(after): {:#X}", get_sctlr_el1());
+    println!("  TCR_EL1(after): {:#X}", get_tcr_el1());
+    println!("  TTBR0_EL1(after): {:#X}", get_ttbr0_el1());
+    println!("  MAIR_EL1(after): {:#X}", get_mair_el1());
+
     #[cfg(feature = "a64fx")]
     {
         unsafe { asm!("msr S3_0_C11_C2_0, {:x}", in(reg) imp_fj_tag_address_ctrl_el1) };
@@ -1041,6 +1065,7 @@ fn set_up_el1() {
         unsafe { asm!("msr S3_0_C11_C4_0, {:x}", in(reg) imp_pf_ctrl_el1) };
         unsafe { asm!("msr S3_0_C11_C12_0, {:x}", in(reg) imp_barrier_ctrl_el1) };
     }
+    println!("EL2->EL1 setup end");
 }
 
 #[cfg(feature = "tftp")]

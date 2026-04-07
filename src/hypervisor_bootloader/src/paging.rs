@@ -578,7 +578,17 @@ fn setup_stage_2_translation_recursive(
 
 pub fn setup_stage_2_translation() -> Result<(), ()> {
     let pa_range = get_id_aa64mmfr0_el1() & ID_AA64MMFR0_EL1_PARANGE;
-    let ps = pa_range;
+    // 52-bit OA requires VTCR_EL2::DS=1 which is not yet supported.
+    // Fall back to 48-bit (0b101) if 52-bit is advertised.
+    let ps = if pa_range >= 0b110 {
+        println!(
+            "52-bit Physical Address (PARange={:#b}) is not supported, falling back to 48-bit",
+            pa_range
+        );
+        0b101u64
+    } else {
+        pa_range
+    };
     let (t0sz, first_level) = match ps {
         0b000 => (32u8, 1i8),
         0b001 => (28u8, 1i8),
@@ -586,7 +596,6 @@ pub fn setup_stage_2_translation() -> Result<(), ()> {
         0b011 => (22u8, 0i8),
         0b100 => (20u8, 0i8),
         0b101 => (16u8, 0i8),
-        0b110 => (12u8, -1i8),
         _ => {
             println!("unsupported PARange: {:#X}", pa_range);
             return Err(());
@@ -595,14 +604,8 @@ pub fn setup_stage_2_translation() -> Result<(), ()> {
     let (sl0, sl2) = match first_level {
         1 => (0b01u8, 0b0u8),
         0 => (0b10u8, 0b0u8),
-        -1 => (0b00u8, 0b1u8),
         _ => unreachable!(),
     };
-
-    if sl2 != 0 {
-        println!("VTCR_EL2::DS must be 1(TODO: support 52Bit OA)");
-        return Err(());
-    }
 
     let number_of_tables = calculate_number_of_concatenated_page_tables(t0sz, first_level) as usize;
     pr_debug!(
@@ -635,6 +638,7 @@ pub fn setup_stage_2_translation() -> Result<(), ()> {
         (0b01 << VTCR_EL2_ORG0_BITS_OFFSET) /* Outer Write-Back Read-Allocate Write-Allocate Cacheable */ |
         (0b01 << VTCR_EL2_IRG0_BITS_OFFSET) /* Inner Write-Back Read-Allocate Write-Allocate Cacheable */ |
         (0b01 << VTCR_EL2_HD_BIT_OFFSET) /* Hardware management of dirty state in stage 2 translations */ |
+        (0b01 << VTCR_EL2_HA_BIT_OFFSET) /* Hardware Access flag update in stage 2 translations */ |
         ((sl0 as u64) << VTCR_EL2_SL0_BITS_OFFSET) |
         ((t0sz as u64) << VTCR_EL2_T0SZ_BITS_OFFSET);
 

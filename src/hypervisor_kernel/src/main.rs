@@ -24,6 +24,7 @@ use core::arch::global_asm;
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
 use core::ptr;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 #[macro_use]
 mod drivers;
@@ -48,6 +49,7 @@ mod temporary_mapping;
 // Hypervisor call
 const EC_HVC: u8 = 0b010110; // 0x16
 const EC_SMC_AA64: u8 = 0b010111;
+const EC_WFX_TRAP: u8 = 0b000001;
 const EC_DATA_ABORT: u8 = 0b100100;
 #[cfg(feature = "mrs_msr_emulation")]
 const EC_MRS_MSR: u8 = 0b011000;
@@ -58,6 +60,11 @@ static mut ACPI_RSDP: Option<NonZeroUsize> = None;
 static mut BSP_MPIDR: u64 = 0;
 static mut EL2_MEMORY_START: usize = 0x0;
 static mut EL2_MEMORY_END: usize = 0x0;
+static SMC_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
+static PSCI_FEATURES_COUNT: AtomicU64 = AtomicU64::new(0);
+static WFX_TRAP_COUNT: AtomicU64 = AtomicU64::new(0);
+static IRQ_EXCEPTION_COUNT: AtomicU64 = AtomicU64::new(0);
+static FIQ_EXCEPTION_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[macro_export]
 macro_rules! handler_panic {
@@ -296,8 +303,10 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             /* Adjust return address */
             advance_elr_el2();
             let smc_number = esr_el2 & bitmask!(15, 0);
-            println!("SecureMonitor Call: {:#X}", smc_number);
-            println!("Registers: {:#X?}", regs);
+            println!(
+                "SMC: smc={:#X} x0={:#X} x1={:#X} x2={:#X} x3={:#X}",
+                smc_number, regs[0], regs[1], regs[2], regs[3]
+            );
             if smc_number == 0 {
                 if let Ok(psci_function_id) = psci::PsciFunctionId::try_from(regs[0]) {
                     psci::handle_psci_call(psci_function_id, regs);
