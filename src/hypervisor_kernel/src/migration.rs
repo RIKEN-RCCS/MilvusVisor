@@ -526,7 +526,7 @@ pub fn continue_migration(
     el2_memory_start: usize,
     el2_memory_end: usize,
 ) -> Result<bool, ()> {
-    println!("Continue migration...");
+    //println!("Continue migration...");
     let mut addr = unsafe { MIGRATION_TARGET_MEMORY_ADDR };
     // TODO: 今はアドレスを決め打ちしている
     let shared_memory: &mut SharedMemory = unsafe {
@@ -560,11 +560,11 @@ pub fn continue_migration(
             // 一時テーブルを削除
             remove_temporary_mapping(target_virt_addr, PAGE_SIZE)?;
             if target_phys_addr & 0xffffff == 0 {
-                println!("addr: {:x} remove temp table", target_phys_addr);
+                //println!("addr: {:x} remove temp table", target_phys_addr);
             }
             // コピーの終わったページのdirty stateをクリアする
             clear_stage2_entry_dirty_state(target_phys_addr)?;
-            println!("addr: {:x} clear dirty state", target_phys_addr);
+            //println!("addr: {:x} clear dirty state", target_phys_addr);
             count += 1;
         }
         addr += PAGE_SIZE;
@@ -573,7 +573,7 @@ pub fn continue_migration(
     // メモリを送り終わった後はregister系を送る
     if addr >= MEM_END {
         // dirty stateを読んで、dirtyなページをアドレス付きで転送する
-        println!("Re-transferring dirty pages after initial sweep");
+        //println!("Re-transferring dirty pages after initial sweep");
         let mut dirty_addr = MEM_START;
         let mut dirty_pages = 0usize;
         while dirty_addr < MEM_END {
@@ -602,7 +602,7 @@ pub fn continue_migration(
             }
             dirty_addr += PAGE_SIZE;
         }
-        println!("Dirty page re-transfer complete ({} pages)", dirty_pages);
+        //println!("Dirty page re-transfer complete ({} pages)", dirty_pages);
         // sentinelとしてMEM_ENDを送り、dirtyページの転送終了を知らせる
         let sentinel: usize = MEM_END;
         shared_memory.write(unsafe { any_as_u8_slice(&sentinel) });

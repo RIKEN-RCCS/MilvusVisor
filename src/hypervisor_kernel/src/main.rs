@@ -286,7 +286,6 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             }
             #[cfg(feature = "shared_memory")]
             migration::HVC_MIGRATION_CONTINUE => {
-                println!("Migration Start");
                 let result = continue_migration(regs, unsafe { EL2_MEMORY_START }, unsafe { EL2_MEMORY_END })
                     .expect("Failed to start migration");
                 if result {
@@ -300,7 +299,7 @@ extern "C" fn synchronous_exception_handler(regs: &mut GeneralPurposeRegisters) 
             migration::HVC_MIGRATION_RECEIVE => {
                 println!("Migration Receive");
                 receive_migration(regs).expect("Failed to receive migration");
-                regs[0] = 0;
+                regs[0] = 2;
             }
             hvc_number => {
                 println!("Hypervisor Call: {:#X}", hvc_number);
