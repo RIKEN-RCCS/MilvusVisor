@@ -1,3 +1,22 @@
+## ⚠️ Caution about this branch ⚠️
+
+The code in this branch is **not intended to be used or executed directly by users**.
+We do not provide documentation or maintenance for this branch.
+
+If you are interested in this branch for research purposes, please contact the maintainer(@fukai-t) by email.
+(You can find the email address on the GitHub profile linked from the username @fukai-t.)
+
+# A simple live migration implementation of MilvusVisor
+This branch provides a simple implementation of live migration for MilvusVisor.
+It can migrate an OS running on MilvusVisor between ARMv8 virtual machines emulated by QEMU.
+It support a minimal VM configuration that uses only the CPU, memory, serial device, and GIC.
+Migration data is transferred through shared memory provided by QEMU using the `ivshmem` feature.
+
+## Acknowledgments
+This work was supported by JST CREST, Japan, Grant Number JPMJCR22M3.
+
+### ----- Below is the original README.md of MilvusVisor -----
+
 # MilvusVisor
 
 MilvusVisor is a thin hypervisor that runs on aarch64 CPUs.
